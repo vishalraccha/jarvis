@@ -287,3 +287,47 @@ body {
   opacity: 0.4;
   cursor: not-allowed;
 }
+
+/* Top Toolbar Responsive Layout Protection */
+.toolbar-dropdown-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.toolbar-quick-toggles-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.toolbar-status-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+@media (max-width: 1440px) {
+  .toolbar-quick-toggles .tool-btn {
+    padding: 0 4px !important;
+    font-size: 10px !important;
+  }
+}
+
+@media (max-width: 1320px) {
+  .toolbar-zoom-group {
+    display: none !important;
+  }
+}
+
+@media (max-width: 1180px) {
+  .toolbar-quick-toggles-wrapper {
+    display: none !important;
+  }
+}
+

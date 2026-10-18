@@ -209,12 +209,15 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        padding: '0 10px',
+        padding: '0 8px 0 10px',
         userSelect: 'none',
         gap: 6,
         position: 'relative',
         zIndex: 100,
         overflow: 'visible',
+        width: '100%',
+        maxWidth: '100%',
+        boxSizing: 'border-box',
       }}
     >
       {/* ============================================================ */}
@@ -245,44 +248,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
           </span>
         </div>
 
-        {/* Exchange Selector */}
-        <select
-          value={preferences.exchange}
-          onChange={(e) => {
-            const newEx = e.target.value as ExchangeId;
-            const instruments = InstrumentRegistry.getInstrumentsByExchange(newEx);
-            if (instruments.length > 0) {
-              const first = instruments[0];
-              onUpdatePreferences({
-                exchange: newEx,
-                symbol: first.symbol,
-                timeframe: first.supportedIntervals.includes(preferences.timeframe)
-                  ? preferences.timeframe
-                  : first.defaultTimeframe,
-              });
-            } else {
-              onUpdatePreferences({ exchange: newEx });
-            }
-          }}
-          style={{
-            background: 'rgba(255, 255, 255, 0.04)',
-            border: '1px solid rgba(255, 255, 255, 0.08)',
-            borderRadius: 4,
-            color: '#94a3b8',
-            fontSize: 11,
-            fontWeight: 600,
-            padding: '3px 6px',
-            outline: 'none',
-            cursor: 'pointer',
-          }}
-          title="Exchange data feed"
-        >
-          <option value="binance" style={{ background: '#0d121c' }}>BINANCE</option>
-          <option value="bybit" style={{ background: '#0d121c' }}>BYBIT</option>
-          <option value="goldprice_dev" style={{ background: '#0d121c' }}>GOLDPRICE.DEV</option>
-        </select>
-
-        {/* Symbol Selector */}
+        {/* Pair Selection Dropdown */}
         <select
           value={preferences.symbol}
           onChange={(e) => {
@@ -307,6 +273,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
             padding: '3px 8px',
             outline: 'none',
             cursor: 'pointer',
+            maxWidth: 195,
           }}
           title="Active trading pair & instrument type"
         >
@@ -378,7 +345,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
       {/* ============================================================ */}
       {/* 2. NESTED DROPDOWN GROUPS: Chart | Liquidity | Order Flow | View */}
       {/* ============================================================ */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+      <div className="toolbar-dropdown-group" style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
         {/* --- CHART TOOLS DROPDOWN --- */}
         <div style={{ position: 'relative' }}>
           <button
@@ -1203,9 +1170,9 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
       {/* ============================================================ */}
       {/* 3. CENTER-RIGHT QUICK 1-CLICK ACTION TOGGLES                */}
       {/* ============================================================ */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+      <div className="toolbar-quick-toggles-wrapper" style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 1, minWidth: 0 }}>
         {/* Quick Toggles: Candles | Heatmap | Footprint | COB | Bubbles */}
-        <div style={{ display: 'flex', background: 'rgba(255, 255, 255, 0.03)', borderRadius: 4, padding: 1.5, gap: 1 }}>
+        <div className="toolbar-quick-toggles" style={{ display: 'flex', background: 'rgba(255, 255, 255, 0.03)', borderRadius: 4, padding: 1.5, gap: 1 }}>
           <button
             className={`tool-btn ${preferences.showCandles ? 'active' : ''}`}
             onClick={() => onUpdatePreferences({ showCandles: !preferences.showCandles })}
@@ -1379,7 +1346,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
         </div>
 
         {/* Quick Zoom, Reset, Follow & Fullscreen Buttons */}
-        <div style={{ display: 'flex', alignItems: 'center', background: 'rgba(255, 255, 255, 0.03)', borderRadius: 4, padding: 1.5, gap: 1 }}>
+        <div className="toolbar-zoom-group" style={{ display: 'flex', alignItems: 'center', background: 'rgba(255, 255, 255, 0.03)', borderRadius: 4, padding: 1.5, gap: 1 }}>
           <button className="tool-btn" title="Zoom In" onClick={onZoomIn} style={{ height: 24, width: 24, padding: 0 }}>
             <ZoomIn size={12} />
           </button>
@@ -1409,7 +1376,17 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
       {/* ============================================================ */}
       {/* 4. STATUS & CLOCK GROUP: IST Clock, Exchange Latency & Power */}
       {/* ============================================================ */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, marginLeft: 'auto' }}>
+      <div
+        className="toolbar-status-group"
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
+          flexShrink: 0,
+          marginLeft: 'auto',
+          paddingRight: 4,
+        }}
+      >
         {/* Indian Standard Time (Asia/Kolkata) */}
         <div
           style={{
