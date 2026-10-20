@@ -28,7 +28,7 @@ import { LiquidityShiftDetector } from '../../services/heatmap/LiquidityShiftDet
 import { FootprintEngine, getSymbolDefaultFootprintTick } from '../../services/footprint/FootprintEngine';
 import { colorMapEngine } from '../../services/heatmap/ColorMap';
 import { indexedDBCache } from '../../services/storage/IndexedDBCache';
-import { mergeAndDeduplicateCandles } from '../../utils/candleUtils';
+import { mergeAndDeduplicateCandles, TIMEFRAME_SECONDS } from '../../utils/candleUtils';
 
 import {
   DEFAULT_TERMINAL_PREFERENCES,
@@ -268,11 +268,24 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
       progressiveTimerRef.current = null;
     }
 
+    // Always clear previous candles when key changes so different timeframes are NEVER mixed!
+    if (currentInstrumentKeyRef.current !== cacheKey) {
+      currentInstrumentKeyRef.current = cacheKey;
+      latestCandlesRef.current = [];
+      chartRef.current?.clearChart();
+    }
+
     let hasRendered = false;
 
     // TIER 1: In-Memory RAM Cache (Instant 0ms MT5-speed)
     const ramCandles = indexedDBCache.getCachedCandlesSync(symbol, timeframe, exchange);
-    if (ramCandles && ramCandles.length > 0 && symbol === preferencesRef.current.symbol && exchange === preferencesRef.current.exchange) {
+    if (
+      ramCandles &&
+      ramCandles.length > 0 &&
+      symbol === preferencesRef.current.symbol &&
+      exchange === preferencesRef.current.exchange &&
+      timeframe === preferencesRef.current.timeframe
+    ) {
       latestCandlesRef.current = ramCandles;
       chartRef.current?.updateCandles(ramCandles);
       seedEngines(ramCandles, symbol, timeframe, exchange);
@@ -283,11 +296,19 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
     if (!hasRendered) {
       try {
         let dbCached = await indexedDBCache.loadCandles(symbol, timeframe, exchange);
+        const tfSec = TIMEFRAME_SECONDS[timeframe] || 60;
         const isGold = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase() === 'GC';
-        if (dbCached && dbCached.length > 0) {
-          // Purge any rogue cross-symbol outliers or invalid zero/negative prices
+        if (
+          dbCached &&
+          dbCached.length > 0 &&
+          symbol === preferencesRef.current.symbol &&
+          exchange === preferencesRef.current.exchange &&
+          timeframe === preferencesRef.current.timeframe
+        ) {
+          // Purge any rogue cross-symbol outliers or unaligned timeframe bars
           dbCached = dbCached.filter((c) =>
             Number.isFinite(c.time) && c.time > 0 &&
+            c.time % tfSec === 0 &&
             Number.isFinite(c.open) && c.open > 10 &&
             Number.isFinite(c.high) && c.high > 10 &&
             Number.isFinite(c.low) && c.low > 10 &&
@@ -309,7 +330,12 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
             }
           }
 
-          if (dbCached.length > 0 && symbol === preferencesRef.current.symbol && exchange === preferencesRef.current.exchange) {
+          if (
+            dbCached.length > 0 &&
+            symbol === preferencesRef.current.symbol &&
+            exchange === preferencesRef.current.exchange &&
+            timeframe === preferencesRef.current.timeframe
+          ) {
             latestCandlesRef.current = dbCached;
             chartRef.current?.updateCandles(dbCached);
             seedEngines(dbCached, symbol, timeframe, exchange);
@@ -321,12 +347,6 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
       }
     }
 
-    // Only clear if neither RAM nor DB had candles and instrument changed
-    if (!hasRendered && currentInstrumentKeyRef.current !== cacheKey) {
-      chartRef.current?.clearChart();
-    }
-    currentInstrumentKeyRef.current = cacheKey;
-
     // Deduplicate in-flight requests for same symbol/timeframe
     if (inFlightCandleLoadsRef.current.has(cacheKey)) {
       return inFlightCandleLoadsRef.current.get(cacheKey);
@@ -337,15 +357,21 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         // Step 3: Fetch latest 1000 candles asynchronously
         const freshCandles = await adapter.fetchHistoricalCandles(symbol, timeframe, undefined, undefined, 1000);
         if (freshCandles && freshCandles.length > 0) {
-          // Discard if symbol/exchange changed while request was in-flight
-          if (symbol !== preferencesRef.current.symbol || exchange !== preferencesRef.current.exchange) {
+          // Discard if symbol/exchange/timeframe changed while request was in-flight
+          if (
+            symbol !== preferencesRef.current.symbol ||
+            exchange !== preferencesRef.current.exchange ||
+            timeframe !== preferencesRef.current.timeframe
+          ) {
             return;
           }
 
-          // Filter out cross-symbol outliers and zero/negative prices
+          // Filter out cross-symbol outliers, unaligned timestamps, and zero/negative prices
           const isGold = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase() === 'GC';
+          const tfSec = TIMEFRAME_SECONDS[timeframe] || 60;
           const validBars = freshCandles.filter((c) =>
             Number.isFinite(c.time) && c.time > 0 &&
+            c.time % tfSec === 0 &&
             Number.isFinite(c.open) && c.open > 10 &&
             Number.isFinite(c.high) && c.high > 10 &&
             Number.isFinite(c.low) && c.low > 10 &&
@@ -367,8 +393,8 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
               )
             : validBars;
 
-          // Step 4: Seamlessly merge fresh candles with existing buffer (no flickering or jumping)
-          const merged = mergeAndDeduplicateCandles(latestCandlesRef.current, validFresh);
+          // Step 4: Seamlessly merge fresh candles with existing buffer (strictly aligned to timeframe)
+          const merged = mergeAndDeduplicateCandles(latestCandlesRef.current, validFresh, timeframe);
           latestCandlesRef.current = merged;
 
           // Step 5: Update the chart immediately with smooth auto-scaling
@@ -409,6 +435,14 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
     const heatmap = heatmapEngineRef.current;
     const bubbles = bubbleManagerRef.current;
     const shiftDetector = shiftDetectorRef.current;
+
+    // Reset latestCandlesRef when switching symbol, exchange, or timeframe!
+    const currentKey = `${exchange}_${symbol}_${preferences.timeframe}`;
+    if (currentInstrumentKeyRef.current !== currentKey) {
+      currentInstrumentKeyRef.current = currentKey;
+      latestCandlesRef.current = [];
+      chartRef.current?.clearChart();
+    }
 
     // Reset in-flight requests (do NOT clear chart to pitch black; loadCandles paints cached bars in 0ms)
     inFlightCandleLoadsRef.current.clear();
@@ -490,6 +524,10 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         const sSym = symbol.toUpperCase().replace(/[-_/]/g, '');
         if (sSym !== curSym) return;
 
+        // Verify candle matches current timeframe interval
+        const tfSec = TIMEFRAME_SECONDS[preferencesRef.current.timeframe] || 60;
+        if (candle.time % tfSec !== 0) return;
+
         chartRef.current?.updateLiveCandle(candle);
         if (instrument.supportsFootprint) {
           footprintEngineRef.current.updateLiveCandle(candle, orderBookRef.current);
@@ -548,13 +586,25 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
   }, [preferences.exchange, preferences.symbol, preferences.timeframe, loadCandles, getAdapter]);
 
   // Fullscreen toggle
-  const handleToggleFullscreen = () => {
+  const handleToggleFullscreen = useCallback(() => {
     if (!document.fullscreenElement) {
       document.documentElement.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
     } else {
       document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {});
     }
-  };
+  }, []);
+
+  const handleZoomIn = useCallback(() => chartRef.current?.zoomIn(), []);
+  const handleZoomOut = useCallback(() => chartRef.current?.zoomOut(), []);
+  const handleResetView = useCallback(() => chartRef.current?.resetView(), []);
+  const handleJumpToLatest = useCallback(() => chartRef.current?.jumpToLatest(), []);
+  const handleOpenHeatmapSettings = useCallback(() => setIsHeatmapSettingsOpen(true), []);
+  const handleOpenBubbleSettings = useCallback(() => setIsBubbleSettingsOpen(true), []);
+  const handleOpenVwapSettings = useCallback(() => setIsVwapSettingsOpen(true), []);
+  const handleOpenDepthProfileSettings = useCallback(() => setIsDepthProfileSettingsOpen(true), []);
+  const handleOpenFootprintSettings = useCallback(() => setIsFootprintSettingsOpen(true), []);
+  const handleOpenDiagnostics = useCallback(() => setIsDiagnosticsOpen(true), []);
+  const handleOpenCacheModal = useCallback(() => setIsCacheModalOpen(true), []);
 
   return (
     <div
@@ -574,19 +624,19 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         connectionState={connectionState}
         latencyMetrics={latencyMetrics}
         colorMapEngine={colorMapEngine}
-        onZoomIn={() => chartRef.current?.zoomIn()}
-        onZoomOut={() => chartRef.current?.zoomOut()}
-        onResetView={() => chartRef.current?.resetView()}
-        onJumpToLatest={() => chartRef.current?.jumpToLatest()}
+        onZoomIn={handleZoomIn}
+        onZoomOut={handleZoomOut}
+        onResetView={handleResetView}
+        onJumpToLatest={handleJumpToLatest}
         onToggleFullscreen={handleToggleFullscreen}
         isFullscreen={isFullscreen}
-        onOpenHeatmapSettings={() => setIsHeatmapSettingsOpen(true)}
-        onOpenBubbleSettings={() => setIsBubbleSettingsOpen(true)}
-        onOpenVwapSettings={() => setIsVwapSettingsOpen(true)}
-        onOpenDepthProfileSettings={() => setIsDepthProfileSettingsOpen(true)}
-        onOpenFootprintSettings={() => setIsFootprintSettingsOpen(true)}
-        onOpenDiagnostics={() => setIsDiagnosticsOpen(true)}
-        onOpenCacheModal={() => setIsCacheModalOpen(true)}
+        onOpenHeatmapSettings={handleOpenHeatmapSettings}
+        onOpenBubbleSettings={handleOpenBubbleSettings}
+        onOpenVwapSettings={handleOpenVwapSettings}
+        onOpenDepthProfileSettings={handleOpenDepthProfileSettings}
+        onOpenFootprintSettings={handleOpenFootprintSettings}
+        onOpenDiagnostics={handleOpenDiagnostics}
+        onOpenCacheModal={handleOpenCacheModal}
         onLockTerminal={onLockTerminal}
       />
 

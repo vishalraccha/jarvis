@@ -20,7 +20,7 @@ interface ChartHeaderOverlayProps {
   showFootprint: boolean;
 }
 
-export const ChartHeaderOverlay: React.FC<ChartHeaderOverlayProps> = ({
+const ChartHeaderOverlayComponent: React.FC<ChartHeaderOverlayProps> = ({
   symbol,
   timeframe,
   connectionState,
@@ -249,3 +249,5 @@ export const ChartHeaderOverlay: React.FC<ChartHeaderOverlayProps> = ({
     </div>
   );
 };
+
+export const ChartHeaderOverlay = React.memo(ChartHeaderOverlayComponent);

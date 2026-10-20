@@ -41,7 +41,7 @@ interface DepthProfileCanvasProps {
   candles?: Candle[];
 }
 
-export const DepthProfileCanvas: React.FC<DepthProfileCanvasProps> = ({
+const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
   chart,
   series,
   orderBook,
@@ -53,6 +53,7 @@ export const DepthProfileCanvas: React.FC<DepthProfileCanvasProps> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animFrameRef = useRef<number | null>(null);
   const isDirtyRef = useRef<boolean>(true);
+  const lastRenderTimeRef = useRef<number>(0);
 
   const profileWidth = Math.max(160, Math.min(320, settings.widthPx || 210));
 
@@ -227,7 +228,7 @@ export const DepthProfileCanvas: React.FC<DepthProfileCanvasProps> = ({
 
     for (let p = startPrice; p <= endPrice; p += rowStep) {
       if (p <= 10) continue;
-      const price = Number(p.toFixed(4));
+      const price = Math.round(p * 10000) / 10000;
       const y = priceToY(price);
       if (y >= headerH - 8 && y <= height + 8) {
         rowMap.set(price, {
@@ -246,7 +247,7 @@ export const DepthProfileCanvas: React.FC<DepthProfileCanvasProps> = ({
 
       for (const a of bookRange.asks) {
         if (a.quantity <= 0) continue;
-        const bucketPrice = Number((Math.round(a.price / rowStep) * rowStep).toFixed(4));
+        const bucketPrice = Math.round(Math.round(a.price / rowStep) * rowStep * 10000) / 10000;
         const row = rowMap.get(bucketPrice);
         if (row) {
           row.levelQty += a.quantity;
@@ -255,7 +256,7 @@ export const DepthProfileCanvas: React.FC<DepthProfileCanvasProps> = ({
 
       for (const b of bookRange.bids) {
         if (b.quantity <= 0) continue;
-        const bucketPrice = Number((Math.round(b.price / rowStep) * rowStep).toFixed(4));
+        const bucketPrice = Math.round(Math.round(b.price / rowStep) * rowStep * 10000) / 10000;
         const row = rowMap.get(bucketPrice);
         if (row) {
           row.levelQty += b.quantity;
@@ -268,7 +269,7 @@ export const DepthProfileCanvas: React.FC<DepthProfileCanvasProps> = ({
       const resting = heatmapEngine.getActiveRestingLevels();
       for (const lvl of resting) {
         if (lvl.price >= pMin && lvl.price <= pMax && lvl.qty > 0) {
-          const bucketPrice = Number((Math.round(lvl.price / rowStep) * rowStep).toFixed(4));
+          const bucketPrice = Math.round(Math.round(lvl.price / rowStep) * rowStep * 10000) / 10000;
           const row = rowMap.get(bucketPrice);
           if (row) {
             row.levelQty = Math.max(row.levelQty, lvl.qty);
@@ -463,15 +464,23 @@ export const DepthProfileCanvas: React.FC<DepthProfileCanvasProps> = ({
     ctx.restore();
   }, [chart, series, orderBook, heatmapEngine, settings, profileWidth, height, width]);
 
-  // Animation frame loop
+  // Animation frame loop with smart active hit-flash decay
   useEffect(() => {
     let active = true;
 
     const loop = () => {
       if (!active) return;
-      if (isDirtyRef.current) {
-        render();
-        isDirtyRef.current = false;
+      const now = performance.now();
+      const lastHit = orderBook.getLastTradeHit();
+      const hasActiveHit = lastHit && (Date.now() - lastHit.timestamp < 700);
+
+      if (isDirtyRef.current || hasActiveHit) {
+        // Cap rendering at 30ms (~33 FPS) to free up CPU budget for 60-120 FPS smooth chart drag/zoom
+        if (now - lastRenderTimeRef.current >= 30) {
+          lastRenderTimeRef.current = now;
+          render();
+          isDirtyRef.current = false;
+        }
       }
       animFrameRef.current = requestAnimationFrame(loop);
     };
@@ -482,15 +491,7 @@ export const DepthProfileCanvas: React.FC<DepthProfileCanvasProps> = ({
       active = false;
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };
-  }, [render]);
-
-  // High-frequency 60ms ticker ensures hit flashes fade smoothly and real-time DOM updates automatically
-  useEffect(() => {
-    const timer = setInterval(() => {
-      isDirtyRef.current = true;
-    }, 60);
-    return () => clearInterval(timer);
-  }, []);
+  }, [render, orderBook]);
 
   useEffect(() => {
     const unsub = orderBook.subscribe(() => {
@@ -550,3 +551,5 @@ export const DepthProfileCanvas: React.FC<DepthProfileCanvasProps> = ({
     </div>
   );
 };
+
+export const DepthProfileCanvas = React.memo(DepthProfileCanvasComponent);

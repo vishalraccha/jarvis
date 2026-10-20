@@ -140,7 +140,7 @@ export class VwapEngine {
       cumWeightedDeltaSq += delta * delta * volume;
 
       const vwapDelta = cumWeightedDelta / cumVolume;
-      const vwap = Number((sessionBasePrice + vwapDelta).toFixed(4));
+      const vwap = Math.round((sessionBasePrice + vwapDelta) * 10000) / 10000;
 
       // Numerically stable volume-weighted variance
       const variance = Math.max(0, cumWeightedDeltaSq / cumVolume - vwapDelta * vwapDelta);
@@ -151,15 +151,15 @@ export class VwapEngine {
       vwapData.push({ time: t, value: vwap });
 
       if (showBands1 && stdDev > 0) {
-        const u1 = Number((vwap + mult1 * stdDev).toFixed(4));
-        const l1 = Number((vwap - mult1 * stdDev).toFixed(4));
+        const u1 = Math.round((vwap + mult1 * stdDev) * 10000) / 10000;
+        const l1 = Math.round((vwap - mult1 * stdDev) * 10000) / 10000;
         upper1Data.push({ time: t, value: u1 });
         lower1Data.push({ time: t, value: l1 });
       }
 
       if (showBands2 && stdDev > 0) {
-        const u2 = Number((vwap + mult2 * stdDev).toFixed(4));
-        const l2 = Number((vwap - mult2 * stdDev).toFixed(4));
+        const u2 = Math.round((vwap + mult2 * stdDev) * 10000) / 10000;
+        const l2 = Math.round((vwap - mult2 * stdDev) * 10000) / 10000;
         upper2Data.push({ time: t, value: u2 });
         lower2Data.push({ time: t, value: l2 });
       }

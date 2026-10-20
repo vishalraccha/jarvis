@@ -20,7 +20,7 @@ interface TradeBubblesCanvasProps {
   height: number;
 }
 
-export const TradeBubblesCanvas: React.FC<TradeBubblesCanvasProps> = ({
+const TradeBubblesCanvasComponent: React.FC<TradeBubblesCanvasProps> = ({
   chart,
   series,
   bubbleManager,
@@ -33,6 +33,7 @@ export const TradeBubblesCanvas: React.FC<TradeBubblesCanvasProps> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animFrameRef = useRef<number | null>(null);
   const isDirtyRef = useRef<boolean>(true);
+  const lastRenderTimeRef = useRef<number>(0);
   const visibleBubblesWithCoordsRef = useRef<
     Array<{ bubble: TradeBubble; cx: number; cy: number; radius: number }>
   >([]);
@@ -202,13 +203,18 @@ export const TradeBubblesCanvas: React.FC<TradeBubblesCanvasProps> = ({
 
   // RequestAnimationFrame Render Loop
   useEffect(() => {
+    if (bubbleSettings.enabled === false) return;
     let active = true;
 
     const loop = () => {
       if (!active) return;
+      const now = performance.now();
       if (isDirtyRef.current) {
-        render();
-        isDirtyRef.current = false;
+        if (now - lastRenderTimeRef.current >= 30) {
+          lastRenderTimeRef.current = now;
+          render();
+          isDirtyRef.current = false;
+        }
       }
       animFrameRef.current = requestAnimationFrame(loop);
     };
@@ -219,7 +225,7 @@ export const TradeBubblesCanvas: React.FC<TradeBubblesCanvasProps> = ({
       active = false;
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
     };
-  }, [render]);
+  }, [render, bubbleSettings.enabled]);
 
   // Event Subscriptions
   useEffect(() => {
@@ -412,3 +418,5 @@ function formatBubbleAmount(
 
   return { primary, secondary };
 }
+
+export const TradeBubblesCanvas = React.memo(TradeBubblesCanvasComponent);

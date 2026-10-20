@@ -68,14 +68,33 @@ export class FootprintEngine {
     };
   }
 
-  public notifyListeners(): void {
-    for (const listener of this.listeners) {
-      try {
-        listener();
-      } catch (err) {
-        console.error('[FootprintEngine] Listener error:', err);
+  private isNotifyPending: boolean = false;
+
+  public notifyListeners(immediate: boolean = false): void {
+    if (immediate || typeof requestAnimationFrame === 'undefined') {
+      for (const listener of this.listeners) {
+        try {
+          listener();
+        } catch (err) {
+          console.error('[FootprintEngine] Listener error:', err);
+        }
       }
+      return;
     }
+
+    if (this.isNotifyPending) return;
+    this.isNotifyPending = true;
+
+    requestAnimationFrame(() => {
+      this.isNotifyPending = false;
+      for (const listener of this.listeners) {
+        try {
+          listener();
+        } catch (err) {
+          console.error('[FootprintEngine] Listener error:', err);
+        }
+      }
+    });
   }
 
   constructor(symbol: string = 'BTCUSDT', timeframe: CandleTimeframe = '5m', tickSize: number = 0.01) {

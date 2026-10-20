@@ -52,6 +52,9 @@ export class OrderBookManager {
   private isResyncing: boolean = false;
   private lastResyncAttemptTime: number = 0;
   private listeners: Set<OrderBookChangeCallback> = new Set();
+  private isNotifyPending: boolean = false;
+  private statsDirty: boolean = true;
+  private cachedStats: OrderBookStats | null = null;
 
   constructor(tickSize: number = 0.01) {
     this.setTickSize(tickSize);
@@ -69,11 +72,26 @@ export class OrderBookManager {
     };
   }
 
-  private notifyListeners(): void {
-    const stats = this.getStats();
-    for (const listener of this.listeners) {
-      listener(stats);
+  private notifyListeners(immediate: boolean = false): void {
+    this.statsDirty = true;
+    if (immediate || typeof requestAnimationFrame === 'undefined') {
+      const stats = this.getStats();
+      for (const listener of this.listeners) {
+        listener(stats);
+      }
+      return;
     }
+
+    if (this.isNotifyPending) return;
+    this.isNotifyPending = true;
+
+    requestAnimationFrame(() => {
+      this.isNotifyPending = false;
+      const stats = this.getStats();
+      for (const listener of this.listeners) {
+        listener(stats);
+      }
+    });
   }
 
   getSyncStatus(): BookSyncStatus {
@@ -466,6 +484,10 @@ export class OrderBookManager {
   }
 
   getStats(): OrderBookStats {
+    if (!this.statsDirty && this.cachedStats) {
+      return this.cachedStats;
+    }
+
     let totalBidLiquidity = 0;
     for (const q of this.bids.values()) totalBidLiquidity += q;
 
@@ -482,7 +504,7 @@ export class OrderBookManager {
         ? Math.max(0, this.cachedBestAsk - this.cachedBestBid)
         : 0;
 
-    return {
+    this.cachedStats = {
       syncStatus: this.syncStatus,
       lastUpdateId: this.lastValidUpdateId,
       bestBid: this.cachedBestBid,
@@ -497,5 +519,7 @@ export class OrderBookManager {
       resyncCount: this.resyncCount,
       lastEventTimestamp: this.lastEventTimestamp,
     };
+    this.statsDirty = false;
+    return this.cachedStats;
   }
 }

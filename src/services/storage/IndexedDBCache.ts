@@ -7,6 +7,7 @@
 import { HeatmapTimeSlice } from '../../types/heatmap';
 import { Candle, CandleTimeframe } from '../../types/market';
 import { TerminalPreferences } from '../../types/settings';
+import { TIMEFRAME_SECONDS } from '../../utils/candleUtils';
 
 interface StoredHeatmapRecord {
   id: string; // `${symbol}_${timestamp}`
@@ -248,14 +249,14 @@ export class IndexedDBCache {
   }
 
   /**
-  /**
    * Synchronously retrieve cached candles from in-memory RAM tier (< 1ms MT5-speed)
    */
   getCachedCandlesSync(symbol: string, interval: CandleTimeframe, exchange?: string): Candle[] | null {
     const scopedSymbol = exchange ? `${exchange.toUpperCase()}_${symbol.toUpperCase()}` : symbol.toUpperCase();
     const key = `${scopedSymbol}_${interval}`;
     const cached = this.memoryCache.get(key);
-    return cached && cached.length > 0 ? cached : null;
+    if (!cached || cached.length === 0) return null;
+    return cached;
   }
 
   /**
@@ -267,12 +268,16 @@ export class IndexedDBCache {
     const scopedSymbol = exchange ? `${exchange.toUpperCase()}_${symbol.toUpperCase()}` : symbol.toUpperCase();
     const key = `${scopedSymbol}_${interval}`;
 
-    // Filter out rogue cross-symbol candles before persisting
+    // Filter out rogue cross-symbol candles and validate timestamps
     const sample = candles.slice(-30).map((c) => c.close).sort((a, b) => a - b);
     const median = sample[Math.floor(sample.length / 2)];
-    const cleanCandles = median > 0
-      ? candles.filter((c) => c.close >= median * 0.3 && c.close <= median * 3.0)
-      : candles;
+    const cleanCandles = candles.filter((c) =>
+      Number.isFinite(c.time) &&
+      c.time > 0 &&
+      (median <= 0 || (c.close >= median * 0.3 && c.close <= median * 3.0))
+    );
+
+    if (cleanCandles.length === 0) return;
 
     // Immediately update Tier 1 In-Memory RAM Cache (0ms)
     this.memoryCache.set(key, cleanCandles);
@@ -328,14 +333,22 @@ export class IndexedDBCache {
         const req = index.getAll(range);
 
         req.onsuccess = () => {
-          let list: Candle[] = (req.result || []).map((r: any) => ({
-            time: r.time,
-            open: r.open,
-            high: r.high,
-            low: r.low,
-            close: r.close,
-            volume: r.volume,
-          }));
+          const rawRecords = req.result || [];
+          let list: Candle[] = [];
+
+          for (const r of rawRecords) {
+            if (Number.isFinite(r.time) && r.time > 0) {
+              list.push({
+                time: r.time,
+                open: r.open,
+                high: r.high,
+                low: r.low,
+                close: r.close,
+                volume: r.volume,
+              });
+            }
+          }
+
           list.sort((a, b) => a.time - b.time);
 
           // Purge any cross-symbol corrupted outlier candles

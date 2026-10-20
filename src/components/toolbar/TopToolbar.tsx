@@ -171,7 +171,7 @@ const ToolItem: React.FC<ToolItemProps> = ({
 
 type MenuType = 'exchange' | 'symbol' | 'timeframe' | 'tools' | 'view';
 
-export const TopToolbar: React.FC<TopToolbarProps> = ({
+const TopToolbarComponent: React.FC<TopToolbarProps> = ({
   preferences,
   onUpdatePreferences,
   connectionState,
@@ -1085,3 +1085,5 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
     </header>
   );
 };
+
+export const TopToolbar = React.memo(TopToolbarComponent);

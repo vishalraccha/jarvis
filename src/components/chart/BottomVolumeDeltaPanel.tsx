@@ -18,7 +18,7 @@ interface BottomVolumeDeltaPanelProps {
   width: number;
 }
 
-export const BottomVolumeDeltaPanel: React.FC<BottomVolumeDeltaPanelProps> = ({
+const BottomVolumeDeltaPanelComponent: React.FC<BottomVolumeDeltaPanelProps> = ({
   chart,
   footprintEngine,
   settings,
@@ -27,6 +27,7 @@ export const BottomVolumeDeltaPanel: React.FC<BottomVolumeDeltaPanelProps> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const isDirtyRef = useRef<boolean>(true);
+  const lastRenderTimeRef = useRef<number>(0);
   const [isMinimized, setIsMinimized] = useState<boolean>(settings.bottomPanelMinimized || false);
   const panelHeight = isMinimized ? 28 : (settings.bottomPanelHeight || 120);
 
@@ -227,12 +228,15 @@ export const BottomVolumeDeltaPanel: React.FC<BottomVolumeDeltaPanelProps> = ({
   }, [chart, footprintEngine, settings.showBottomPanel, isMinimized, panelHeight, width]);
 
   useEffect(() => {
+    if (!settings.showBottomPanel || isMinimized) return;
     let animId: number;
     let active = true;
 
     const tick = () => {
       if (!active) return;
-      if (isDirtyRef.current) {
+      const now = performance.now();
+      if (isDirtyRef.current && now - lastRenderTimeRef.current >= 30) {
+        lastRenderTimeRef.current = now;
         isDirtyRef.current = false;
         render();
       }
@@ -244,7 +248,7 @@ export const BottomVolumeDeltaPanel: React.FC<BottomVolumeDeltaPanelProps> = ({
       active = false;
       cancelAnimationFrame(animId);
     };
-  }, [render]);
+  }, [render, settings.showBottomPanel, isMinimized]);
 
   if (!settings.showBottomPanel) return null;
 
@@ -376,3 +380,5 @@ export const BottomVolumeDeltaPanel: React.FC<BottomVolumeDeltaPanelProps> = ({
     </div>
   );
 };
+
+export const BottomVolumeDeltaPanel = React.memo(BottomVolumeDeltaPanelComponent);

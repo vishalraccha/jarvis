@@ -46,10 +46,25 @@ export class TradeBubbleManager {
     };
   }
 
-  private notifyListeners(): void {
-    for (const listener of this.listeners) {
-      listener();
+  private isNotifyPending: boolean = false;
+
+  private notifyListeners(immediate: boolean = false): void {
+    if (immediate || typeof requestAnimationFrame === 'undefined') {
+      for (const listener of this.listeners) {
+        listener();
+      }
+      return;
     }
+
+    if (this.isNotifyPending) return;
+    this.isNotifyPending = true;
+
+    requestAnimationFrame(() => {
+      this.isNotifyPending = false;
+      for (const listener of this.listeners) {
+        listener();
+      }
+    });
   }
 
   updateSettings(settings: BubbleSettings): void {
@@ -106,7 +121,9 @@ export class TradeBubbleManager {
       existing.buyRatio = newTotal > 0 ? existing.buyQty / newTotal : 0.5;
       existing.dominantSide = existing.buyQty >= existing.sellQty ? 'buy' : 'sell';
       existing.tradeCount += 1;
-      this.updateVolumeStats();
+      if (newTotal > this.stats.maxVolume) {
+        this.stats.maxVolume = newTotal;
+      }
       this.notifyListeners();
       return existing;
     }
@@ -137,9 +154,12 @@ export class TradeBubbleManager {
           }
         }
       }
+      this.updateVolumeStats();
+    } else {
+      if (bubble.totalQty > this.stats.maxVolume) this.stats.maxVolume = bubble.totalQty;
+      if (bubble.totalQty < this.stats.minVolume) this.stats.minVolume = bubble.totalQty;
     }
 
-    this.updateVolumeStats();
     this.notifyListeners();
     return bubble;
   }

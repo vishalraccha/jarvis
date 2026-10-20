@@ -74,7 +74,7 @@ interface JarvisChartProps {
   lastQuoteTime?: number;
 }
 
-export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
+const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
   (
     {
       preferences,
@@ -338,8 +338,20 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
       if (lastSymbolTimeframeRef.current !== key) {
         lastSymbolTimeframeRef.current = key;
         hasInitializedViewRef.current = false;
+        allCandlesRef.current = [];
+        currentCandleRef.current = null;
+        if (series) {
+          try {
+            series.setData([]);
+          } catch {}
+        }
+        vwapSeriesRef.current?.setData([]);
+        upper1SeriesRef.current?.setData([]);
+        lower1SeriesRef.current?.setData([]);
+        upper2SeriesRef.current?.setData([]);
+        lower2SeriesRef.current?.setData([]);
       }
-    }, [preferences.symbol, preferences.timeframe]);
+    }, [preferences.symbol, preferences.timeframe, series]);
 
     // Dynamic bar spacing & right margin: 72px for Footprint bid x ask stack, 12px for standard candlesticks
     const prevFootprintActiveRef = useRef<boolean>(isFootprintActive);
@@ -379,6 +391,33 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
     }, [chart, isFootprintActive, preferences.showDepthProfile, preferences.depthProfile?.widthPx, preferences.depthProfile?.enabled, preferences.autoScrollToLatest]);
 
     const lastPriceLineColorRef = useRef<string>('#00e676');
+    const tickRafRef = useRef<number | null>(null);
+    const pendingTickBarRef = useRef<CandlestickData | null>(null);
+
+    const scheduleTickUpdate = useCallback((bar: CandlestickData) => {
+      pendingTickBarRef.current = bar;
+      if (tickRafRef.current !== null) return;
+      tickRafRef.current = requestAnimationFrame(() => {
+        tickRafRef.current = null;
+        const b = pendingTickBarRef.current;
+        if (b && series) {
+          try {
+            series.update(b);
+          } catch (e) {
+            console.warn('[JarvisChart] updateTickPrice error:', e);
+          }
+        }
+      });
+    }, [series]);
+
+    useEffect(() => {
+      return () => {
+        if (tickRafRef.current !== null) {
+          cancelAnimationFrame(tickRafRef.current);
+          tickRafRef.current = null;
+        }
+      };
+    }, []);
 
     const syncPriceLineColor = useCallback((color: string) => {
       if (!series || lastPriceLineColorRef.current === color) return;
@@ -574,11 +613,14 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
         }
         allCandlesRef.current = candles;
 
-        // Clean out any contaminated, zero, negative, or outlier candles
+        const tfSec = TIMEFRAME_SECONDS[preferences.timeframe] || 60;
+
+        // Clean out any contaminated, zero, negative, unaligned, or outlier candles
         let cleanCandles: Candle[] = [];
         if (candles && candles.length > 0) {
           const valid = candles.filter((c) =>
             Number.isFinite(c.time) && c.time > 0 &&
+            c.time % tfSec === 0 &&
             Number.isFinite(c.open) && c.open > 10 &&
             Number.isFinite(c.high) && c.high > 10 &&
             Number.isFinite(c.low) && c.low > 10 &&
@@ -636,7 +678,7 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
             const targetSpacing = isFp ? 72 : 14;
             const rightOffset = isCob ? Math.ceil(cobW / targetSpacing) + 2 : (isFp ? 3 : 6);
 
-            // On initial view for symbol/timeframe, establish default baseline spacing.
+            // On initial view for symbol/timeframe, establish default baseline spacing and visible range.
             // On subsequent candle merges, preserve user's custom zoom level and do not limit zoom out!
             if (!hasInitializedViewRef.current) {
               chart.timeScale().applyOptions({
@@ -644,7 +686,11 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
                 barSpacing: targetSpacing,
                 minBarSpacing: 0.5,
               });
-              chart.timeScale().scrollToRealTime();
+              const visibleCount = isFp ? 16 : 75;
+              chart.timeScale().setVisibleLogicalRange({
+                from: Math.max(0, tvData.length - visibleCount),
+                to: tvData.length + rightOffset,
+              });
               hasInitializedViewRef.current = true;
             } else {
               chart.timeScale().applyOptions({
@@ -664,8 +710,19 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
         if (!series || !candle) return;
         if (!Number.isFinite(candle.close) || candle.close <= 10) return;
 
+        const tfSec = TIMEFRAME_SECONDS[preferences.timeframe] || 60;
+        // Strictly ignore klines not aligned to active timeframe
+        if (candle.time % tfSec !== 0) return;
+
         const barTime = candle.time as UTCTimestamp;
-        const cur = currentCandleRef.current;
+        let cur = currentCandleRef.current;
+
+        // Discard previous candle if it belonged to a different timeframe
+        if (cur && (cur.time as number) % tfSec !== 0) {
+          cur = null;
+          currentCandleRef.current = null;
+        }
+
         const close = candle.close;
         const open = Number.isFinite(candle.open) && candle.open > 10 ? candle.open : close;
         let high = Number.isFinite(candle.high) && candle.high > 10 ? Math.max(candle.high, open, close) : Math.max(open, close);
@@ -729,7 +786,14 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
       },
       updateTickPrice: (price: number, timestamp?: number) => {
         if (!series || !Number.isFinite(price) || price <= 10) return;
-        const cur = currentCandleRef.current;
+        const tfSec = TIMEFRAME_SECONDS[preferences.timeframe] || 60;
+        let cur = currentCandleRef.current;
+
+        // Discard previous candle if it belonged to a different timeframe
+        if (cur && (cur.time as number) % tfSec !== 0) {
+          cur = null;
+          currentCandleRef.current = null;
+        }
 
         // Discard cross-symbol outlier ticks
         if (cur && cur.close > 10) {
@@ -741,7 +805,6 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
 
         const effectiveTimestamp = timestamp || Date.now();
         const tradeSec = Math.floor(effectiveTimestamp / 1000);
-        const tfSec = TIMEFRAME_SECONDS[preferences.timeframe] || 60;
         const barTime = (Math.floor(tradeSec / tfSec) * tfSec) as UTCTimestamp;
 
         // Stale timestamp guard: ignore past ticks that arrive out of order
@@ -784,119 +847,165 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
           };
           currentCandleRef.current = updatedBar;
           syncPriceLineColor(close >= barOpen ? '#00e676' : '#ff2d55');
-          try {
-            series.update(updatedBar);
-          } catch (e) {
-            console.warn('[JarvisChart] updateTickPrice activeBar error:', e);
-          }
+          scheduleTickUpdate(updatedBar);
         }
       },
     }));
 
+    const mouseRafRef = useRef<number | null>(null);
+    const lastMousePosRef = useRef<{ clientX: number; clientY: number } | null>(null);
+
     const handleHoverBubble = useCallback((bubble: TradeBubble | null, x: number, y: number) => {
-      setHoveredBubble({ bubble, x, y });
+      setHoveredBubble((prev) => {
+        if (prev.bubble === bubble && Math.abs(prev.x - x) < 8 && Math.abs(prev.y - y) < 8) return prev;
+        return { bubble, x, y };
+      });
     }, []);
+
+    const handleHoverZone = useCallback((zone: LiquidityZone | null, x: number, y: number) => {
+      setHoveredZone((prev) => {
+        if (prev.zone === zone && Math.abs(prev.x - x) < 8 && Math.abs(prev.y - y) < 8) return prev;
+        return { zone, x, y };
+      });
+    }, []);
+
+    const handleHoverFootprintDebug = useCallback((debug: FootprintDebugInfo | null, x: number, y: number) => {
+      setHoveredFootprintDebug((prev) => {
+        if (prev.debug === debug && Math.abs(prev.x - x) < 8 && Math.abs(prev.y - y) < 8) return prev;
+        return { debug, x, y };
+      });
+    }, []);
+
+    const handleUpdateBubbleCoords = useCallback((coords: Array<{ bubble: TradeBubble; cx: number; cy: number; radius: number }>) => {
+      visibleBubblesCoordsRef.current = coords;
+    }, []);
+
+    const handleUpdateFootprintSettings = useCallback((updated: Partial<import('../../types/footprint').FootprintSettings>) => {
+      if (onUpdatePreferences) {
+        onUpdatePreferences({
+          footprint: { ...preferences.footprint, ...updated },
+        });
+      }
+    }, [onUpdatePreferences, preferences.footprint]);
+
+    const processMouseMove = useCallback(() => {
+      mouseRafRef.current = null;
+      const coords = lastMousePosRef.current;
+      if (!coords || !containerRef.current) return;
+
+      const rect = containerRef.current.getBoundingClientRect();
+      const mouseX = coords.clientX - rect.left;
+      const mouseY = coords.clientY - rect.top;
+
+      const hit = bubbleManager.hitTest(mouseX, mouseY, visibleBubblesCoordsRef.current);
+      if (hit) {
+        handleHoverBubble(hit, coords.clientX, coords.clientY);
+        handleHoverZone(null, 0, 0);
+        handleHoverFootprintDebug(null, 0, 0);
+        return;
+      }
+
+      handleHoverBubble(null, 0, 0);
+
+      // Section 13: Hover Hit-Test for Liquidity Zones
+      let zoneHit = false;
+      if (series && chart) {
+        const mousePrice = series.coordinateToPrice(mouseY);
+        const mouseTime = chart.timeScale().coordinateToTime(mouseX);
+        const mouseTimeSec = typeof mouseTime === 'number' ? mouseTime : (mouseTime as any)?.timestamp;
+
+        if (mousePrice !== null && mouseTimeSec !== undefined) {
+          const hitZone = heatmapEngine.getZoneEngine().hitTest(mousePrice, mouseTimeSec * 1000);
+          if (hitZone) {
+            zoneHit = true;
+            handleHoverZone(hitZone, coords.clientX, coords.clientY);
+            handleHoverFootprintDebug(null, 0, 0);
+          } else {
+            handleHoverZone(null, 0, 0);
+          }
+
+          // Section 14: Footprint Debug Inspection Tooltip
+          if (!zoneHit && isFootprintActive && preferences.footprint.showDebugInspection) {
+            const candle = footprintEngine.getCandleAtTime(mouseTimeSec);
+            const bucketSize = footprintEngine.getBucketSize();
+            if (candle && mousePrice >= (candle.low - bucketSize) && mousePrice <= (candle.high + bucketSize * 2)) {
+              const level = footprintEngine.getLevelAtPrice(candle, mousePrice);
+              if (level) {
+                const yTop = series.priceToCoordinate(level.price + bucketSize);
+                const yBottom = series.priceToCoordinate(level.price);
+                if (yTop !== null && yBottom !== null) {
+                  const yCenter = (yTop + yBottom) / 2;
+                  const debugInfo: FootprintDebugInfo = {
+                    candleStart: candle.candleStart,
+                    candleEnd: candle.candleEnd,
+                    timeframe: candle.timeframe,
+                    bucketPrice: level.price,
+                    bucketSize,
+                    bucketMin: level.price,
+                    bucketMax: level.price + bucketSize,
+                    mouseScreenY: mouseY,
+                    calcScreenYTop: yTop,
+                    calcScreenYBottom: yBottom,
+                    calcScreenYCenter: yCenter,
+                    yDisplacementDelta: mouseY - yCenter,
+                    bidVolume: level.bidVolume,
+                    askVolume: level.askVolume,
+                    totalVolume: level.totalVolume,
+                    delta: level.delta,
+                    isPoc: !!level.isPoc,
+                    pocPrice: candle.pocPrice,
+                    isAskImbalance: !!level.isAskImbalance,
+                    isBidImbalance: !!level.isBidImbalance,
+                    sourceDataValidity: candle.isComplete ? 'Historical / Complete' : 'Live / Forming',
+                  };
+                  handleHoverFootprintDebug(debugInfo, coords.clientX, coords.clientY);
+                } else {
+                  handleHoverFootprintDebug(null, 0, 0);
+                }
+              } else {
+                handleHoverFootprintDebug(null, 0, 0);
+              }
+            } else {
+              handleHoverFootprintDebug(null, 0, 0);
+            }
+          } else if (!zoneHit) {
+            handleHoverFootprintDebug(null, 0, 0);
+          }
+        } else {
+          handleHoverZone(null, 0, 0);
+          handleHoverFootprintDebug(null, 0, 0);
+        }
+      }
+    }, [bubbleManager, series, chart, heatmapEngine, isFootprintActive, preferences.footprint.showDebugInspection, footprintEngine, handleHoverBubble, handleHoverZone, handleHoverFootprintDebug]);
 
     const handleContainerMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
       // If mouse button is pressed (dragging/panning the chart), bypass hover hit-testing completely
       // to keep drag interactions buttery smooth at 120 FPS without React re-render lag
       if (e.buttons !== 0) {
-        if (hoveredZone.zone !== null) setHoveredZone({ zone: null, x: 0, y: 0 });
-        if (hoveredBubble.bubble !== null) setHoveredBubble({ bubble: null, x: 0, y: 0 });
+        if (mouseRafRef.current !== null) {
+          cancelAnimationFrame(mouseRafRef.current);
+          mouseRafRef.current = null;
+        }
+        handleHoverZone(null, 0, 0);
+        handleHoverBubble(null, 0, 0);
+        handleHoverFootprintDebug(null, 0, 0);
         return;
       }
 
-      const rect = containerRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      const mouseX = e.clientX - rect.left;
-      const mouseY = e.clientY - rect.top;
-      const hit = bubbleManager.hitTest(mouseX, mouseY, visibleBubblesCoordsRef.current);
-      if (hit) {
-        handleHoverBubble(hit, e.clientX, e.clientY);
-        setHoveredZone({ zone: null, x: 0, y: 0 });
-        if (hoveredFootprintDebug.debug !== null) {
-          setHoveredFootprintDebug({ debug: null, x: 0, y: 0 });
-        }
-      } else {
-        if (hoveredBubble.bubble !== null) {
-          handleHoverBubble(null, 0, 0);
-        }
-
-        // Section 13: Hover Hit-Test for Liquidity Zones
-        let zoneHit = false;
-        if (series && chart) {
-          const mousePrice = series.coordinateToPrice(mouseY);
-          const mouseTime = chart.timeScale().coordinateToTime(mouseX);
-          const mouseTimeSec = typeof mouseTime === 'number' ? mouseTime : (mouseTime as any)?.timestamp;
-
-          if (mousePrice !== null && mouseTimeSec !== undefined) {
-            const hitZone = heatmapEngine.getZoneEngine().hitTest(mousePrice, mouseTimeSec * 1000);
-            if (hitZone) {
-              zoneHit = true;
-              setHoveredZone({ zone: hitZone, x: e.clientX, y: e.clientY });
-              if (hoveredFootprintDebug.debug !== null) {
-                setHoveredFootprintDebug({ debug: null, x: 0, y: 0 });
-              }
-            } else if (hoveredZone.zone !== null) {
-              setHoveredZone({ zone: null, x: 0, y: 0 });
-            }
-
-            // Section 14: Footprint Debug Inspection Tooltip
-            if (!zoneHit && isFootprintActive && preferences.footprint.showDebugInspection) {
-              const candle = footprintEngine.getCandleAtTime(mouseTimeSec);
-              const bucketSize = footprintEngine.getBucketSize();
-              if (candle && mousePrice >= (candle.low - bucketSize) && mousePrice <= (candle.high + bucketSize * 2)) {
-                const level = footprintEngine.getLevelAtPrice(candle, mousePrice);
-                if (level) {
-                  const yTop = series.priceToCoordinate(level.price + bucketSize);
-                  const yBottom = series.priceToCoordinate(level.price);
-                  if (yTop !== null && yBottom !== null) {
-                    const yCenter = (yTop + yBottom) / 2;
-                    const debugInfo: FootprintDebugInfo = {
-                      candleStart: candle.candleStart,
-                      candleEnd: candle.candleEnd,
-                      timeframe: candle.timeframe,
-                      bucketPrice: level.price,
-                      bucketSize,
-                      bucketMin: level.price,
-                      bucketMax: level.price + bucketSize,
-                      mouseScreenY: mouseY,
-                      calcScreenYTop: yTop,
-                      calcScreenYBottom: yBottom,
-                      calcScreenYCenter: yCenter,
-                      yDisplacementDelta: mouseY - yCenter,
-                      bidVolume: level.bidVolume,
-                      askVolume: level.askVolume,
-                      totalVolume: level.totalVolume,
-                      delta: level.delta,
-                      isPoc: !!level.isPoc,
-                      pocPrice: candle.pocPrice,
-                      isAskImbalance: !!level.isAskImbalance,
-                      isBidImbalance: !!level.isBidImbalance,
-                      sourceDataValidity: candle.isComplete ? 'Historical / Complete' : 'Live / Forming',
-                    };
-                    setHoveredFootprintDebug({ debug: debugInfo, x: e.clientX, y: e.clientY });
-                  }
-                } else if (hoveredFootprintDebug.debug !== null) {
-                  setHoveredFootprintDebug({ debug: null, x: 0, y: 0 });
-                }
-              } else if (hoveredFootprintDebug.debug !== null) {
-                setHoveredFootprintDebug({ debug: null, x: 0, y: 0 });
-              }
-            } else if (!zoneHit && hoveredFootprintDebug.debug !== null) {
-              setHoveredFootprintDebug({ debug: null, x: 0, y: 0 });
-            }
-          } else {
-            if (hoveredZone.zone !== null) {
-              setHoveredZone({ zone: null, x: 0, y: 0 });
-            }
-            if (hoveredFootprintDebug.debug !== null) {
-              setHoveredFootprintDebug({ debug: null, x: 0, y: 0 });
-            }
-          }
-        }
+      lastMousePosRef.current = { clientX: e.clientX, clientY: e.clientY };
+      if (mouseRafRef.current === null) {
+        mouseRafRef.current = requestAnimationFrame(processMouseMove);
       }
     };
+
+    useEffect(() => {
+      return () => {
+        if (mouseRafRef.current !== null) {
+          cancelAnimationFrame(mouseRafRef.current);
+          mouseRafRef.current = null;
+        }
+      };
+    }, []);
 
     return (
       <div
@@ -980,9 +1089,7 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
             showCandles={preferences.showCandles}
             width={dimensions.width}
             height={dimensions.height}
-            onUpdateBubbleCoords={(coords) => {
-              visibleBubblesCoordsRef.current = coords;
-            }}
+            onUpdateBubbleCoords={handleUpdateBubbleCoords}
           />
         )}
 
@@ -1020,13 +1127,7 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
             chart={chart}
             footprintEngine={footprintEngine}
             settings={preferences.footprint}
-            onUpdateSettings={(updated) => {
-              if (onUpdatePreferences) {
-                onUpdatePreferences({
-                  footprint: { ...preferences.footprint, ...updated },
-                });
-              }
-            }}
+            onUpdateSettings={handleUpdateFootprintSettings}
             width={dimensions.width}
           />
         )}
@@ -1078,3 +1179,5 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
     );
   }
 );
+
+export const JarvisChart = React.memo(JarvisChartComponent);

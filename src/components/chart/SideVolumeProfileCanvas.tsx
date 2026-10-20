@@ -30,7 +30,7 @@ function formatVolumeShort(vol: number): string {
   return Math.round(vol).toString();
 }
 
-export const SideVolumeProfileCanvas: React.FC<SideVolumeProfileCanvasProps> = ({
+const SideVolumeProfileCanvasComponent: React.FC<SideVolumeProfileCanvasProps> = ({
   chart,
   series,
   footprintEngine,
@@ -42,6 +42,7 @@ export const SideVolumeProfileCanvas: React.FC<SideVolumeProfileCanvasProps> = (
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const isDirtyRef = useRef<boolean>(true);
   const animFrameRef = useRef<number | null>(null);
+  const lastRenderTimeRef = useRef<number>(0);
 
   const profileWidth = Math.max(90, Math.min(180, settings.sideProfileWidth || 120));
 
@@ -280,11 +281,14 @@ export const SideVolumeProfileCanvas: React.FC<SideVolumeProfileCanvasProps> = (
 
   // Event-driven loop
   useEffect(() => {
+    if (!settings.showSideProfile) return;
     let active = true;
 
     const tick = () => {
       if (!active) return;
-      if (isDirtyRef.current) {
+      const now = performance.now();
+      if (isDirtyRef.current && now - lastRenderTimeRef.current >= 30) {
+        lastRenderTimeRef.current = now;
         isDirtyRef.current = false;
         render();
       }
@@ -299,7 +303,7 @@ export const SideVolumeProfileCanvas: React.FC<SideVolumeProfileCanvasProps> = (
         cancelAnimationFrame(animFrameRef.current);
       }
     };
-  }, [render]);
+  }, [render, settings.showSideProfile]);
 
   if (!settings.showSideProfile) return null;
 
@@ -319,3 +323,5 @@ export const SideVolumeProfileCanvas: React.FC<SideVolumeProfileCanvasProps> = (
     />
   );
 };
+
+export const SideVolumeProfileCanvas = React.memo(SideVolumeProfileCanvasComponent);

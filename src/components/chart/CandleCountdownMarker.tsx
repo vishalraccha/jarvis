@@ -30,7 +30,7 @@ const RED_BG = 'rgba(22, 6, 10, 0.95)';
 const RED_BORDER = 'rgba(255, 45, 85, 0.85)';
 const RED_SHADOW = '0 2px 8px rgba(0, 0, 0, 0.85), 0 0 8px rgba(255, 45, 85, 0.3)';
 
-export const CandleCountdownMarker: React.FC<CandleCountdownMarkerProps> = ({
+const CandleCountdownMarkerComponent: React.FC<CandleCountdownMarkerProps> = ({
   chart,
   series,
   timeframe,
@@ -51,10 +51,23 @@ export const CandleCountdownMarker: React.FC<CandleCountdownMarkerProps> = ({
   const lastFormattedRef = useRef<string>('');
   const lastIsUpRef = useRef<boolean | null>(null);
   const lastNearBottomRef = useRef<boolean | null>(null);
+  const lastTopPosRef = useRef<number | null>(null);
+  const lastBadgeWRef = useRef<number | null>(null);
+  const lastDisplayRef = useRef<string>('none');
+  const cachedScaleWRef = useRef<number>(65);
+  const lastScaleWCheckRef = useRef<number>(0);
+  const lastTimeCheckRef = useRef<number>(0);
 
   useEffect(() => {
     let animId: number | null = null;
     let isRunning = true;
+
+    // Initial scale width measurement
+    try {
+      cachedScaleWRef.current = chart.priceScale('right')?.width() || 65;
+    } catch {
+      cachedScaleWRef.current = 65;
+    }
 
     const updateFrame = () => {
       if (!isRunning) return;
@@ -65,7 +78,10 @@ export const CandleCountdownMarker: React.FC<CandleCountdownMarkerProps> = ({
       const cur = activeCandleRef.current;
 
       if (!container || !textSpan || !cur || cur.close === undefined || cur.close === null) {
-        if (container) container.style.display = 'none';
+        if (container && lastDisplayRef.current !== 'none') {
+          container.style.display = 'none';
+          lastDisplayRef.current = 'none';
+        }
         animId = requestAnimationFrame(updateFrame);
         return;
       }
@@ -73,26 +89,50 @@ export const CandleCountdownMarker: React.FC<CandleCountdownMarkerProps> = ({
       try {
         const y = series.priceToCoordinate(cur.close);
         if (y === null || y < 0 || y > height) {
-          container.style.display = 'none';
+          if (lastDisplayRef.current !== 'none') {
+            container.style.display = 'none';
+            lastDisplayRef.current = 'none';
+          }
           animId = requestAnimationFrame(updateFrame);
           return;
+        }
+
+        const now = Date.now();
+
+        // Sample scale width at most once every 3 seconds without forced reflow in every frame
+        if (now - lastScaleWCheckRef.current > 3000) {
+          lastScaleWCheckRef.current = now;
+          try {
+            const w = chart.priceScale('right')?.width();
+            if (w && w > 20) cachedScaleWRef.current = w;
+          } catch {}
         }
 
         // Market direction: Green if bullish/flat (close >= open), Red if bearish (close < open)
         const isUp = cur.close >= (cur.open ?? cur.close);
         const isNearBottom = y + 28 > height;
 
-        // Position directly attached to the price marker (centered at y, height ~18px: y-9 to y+9)
+        // Position directly attached to the price marker
         const topPos = isNearBottom ? Math.round(y - 25) : Math.round(y + 9);
-        const scaleW = chart.priceScale('right')?.width() || 65;
-        const badgeW = Math.max(52, scaleW - 4);
+        const badgeW = Math.max(52, cachedScaleWRef.current - 4);
 
-        container.style.display = 'flex';
-        container.style.top = `${topPos}px`;
-        container.style.width = `${badgeW}px`;
-        container.style.right = '2px';
+        if (lastDisplayRef.current !== 'flex') {
+          container.style.display = 'flex';
+          container.style.right = '2px';
+          lastDisplayRef.current = 'flex';
+        }
 
-        // Apply dynamic color theme matching marker
+        if (lastTopPosRef.current !== topPos) {
+          lastTopPosRef.current = topPos;
+          container.style.top = `${topPos}px`;
+        }
+
+        if (lastBadgeWRef.current !== badgeW) {
+          lastBadgeWRef.current = badgeW;
+          container.style.width = `${badgeW}px`;
+        }
+
+        // Apply dynamic color theme matching marker only on state change
         if (lastIsUpRef.current !== isUp || lastNearBottomRef.current !== isNearBottom) {
           lastIsUpRef.current = isUp;
           lastNearBottomRef.current = isNearBottom;
@@ -113,16 +153,22 @@ export const CandleCountdownMarker: React.FC<CandleCountdownMarkerProps> = ({
           }
         }
 
-        // Compute authoritative candle countdown
-        const candleTimeSec = typeof cur.time === 'number' ? cur.time : undefined;
-        const res = getCandleTimeRemaining(candleTimeSec, timeframe);
-        if (res.formatted !== lastFormattedRef.current) {
-          lastFormattedRef.current = res.formatted;
-          textSpan.textContent = res.formatted;
-          container.title = `Time remaining in ${timeframe} candle: ${res.formatted}`;
+        // Compute candle countdown at most twice a second (500ms throttle)
+        if (now - lastTimeCheckRef.current >= 500) {
+          lastTimeCheckRef.current = now;
+          const candleTimeSec = typeof cur.time === 'number' ? cur.time : undefined;
+          const res = getCandleTimeRemaining(candleTimeSec, timeframe);
+          if (res.formatted !== lastFormattedRef.current) {
+            lastFormattedRef.current = res.formatted;
+            textSpan.textContent = res.formatted;
+            container.title = `Time remaining in ${timeframe} candle: ${res.formatted}`;
+          }
         }
       } catch {
-        container.style.display = 'none';
+        if (container && lastDisplayRef.current !== 'none') {
+          container.style.display = 'none';
+          lastDisplayRef.current = 'none';
+        }
       }
 
       animId = requestAnimationFrame(updateFrame);
@@ -170,4 +216,6 @@ export const CandleCountdownMarker: React.FC<CandleCountdownMarkerProps> = ({
     </div>
   );
 };
+
+export const CandleCountdownMarker = React.memo(CandleCountdownMarkerComponent);
 

@@ -46,7 +46,7 @@ function formatDeltaNumber(delta: number): string {
   return `${sign}${intVal}`;
 }
 
-export const FootprintCanvas: React.FC<FootprintCanvasProps> = ({
+const FootprintCanvasComponent: React.FC<FootprintCanvasProps> = ({
   chart,
   series,
   footprintEngine,
@@ -59,6 +59,7 @@ export const FootprintCanvas: React.FC<FootprintCanvasProps> = ({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const isDirtyRef = useRef<boolean>(true);
   const animFrameRef = useRef<number | null>(null);
+  const lastRenderTimeRef = useRef<number>(0);
 
   // Mark dirty whenever props or settings change
   useEffect(() => {
@@ -536,11 +537,14 @@ export const FootprintCanvas: React.FC<FootprintCanvasProps> = ({
 
   // Event-driven lightweight animation frame loop
   useEffect(() => {
+    if (!settings.enabled) return;
     let active = true;
 
     const tick = () => {
       if (!active) return;
-      if (isDirtyRef.current) {
+      const now = performance.now();
+      if (isDirtyRef.current && now - lastRenderTimeRef.current >= 30) {
+        lastRenderTimeRef.current = now;
         isDirtyRef.current = false;
         render();
       }
@@ -555,7 +559,9 @@ export const FootprintCanvas: React.FC<FootprintCanvasProps> = ({
         cancelAnimationFrame(animFrameRef.current);
       }
     };
-  }, [render]);
+  }, [render, settings.enabled]);
+
+  if (!settings.enabled) return null;
 
   return (
     <canvas
@@ -572,3 +578,5 @@ export const FootprintCanvas: React.FC<FootprintCanvasProps> = ({
     />
   );
 };
+
+export const FootprintCanvas = React.memo(FootprintCanvasComponent);
