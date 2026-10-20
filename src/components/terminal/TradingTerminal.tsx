@@ -10,6 +10,7 @@ import { HeatmapSettingsModal } from '../settings/HeatmapSettingsModal';
 import { BubbleSettingsModal } from '../settings/BubbleSettingsModal';
 import { DepthProfileSettingsModal } from '../settings/DepthProfileSettingsModal';
 import { FootprintSettingsModal } from '../settings/FootprintSettingsModal';
+import { VwapSettingsModal } from '../settings/VwapSettingsModal';
 import { OrderBookDiagnosticsModal } from '../diagnostics/OrderBookDiagnosticsModal';
 import { CacheSettingsModal } from '../settings/CacheSettingsModal';
 
@@ -71,6 +72,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
   const [isBubbleSettingsOpen, setIsBubbleSettingsOpen] = useState(false);
   const [isDepthProfileSettingsOpen, setIsDepthProfileSettingsOpen] = useState(false);
   const [isFootprintSettingsOpen, setIsFootprintSettingsOpen] = useState(false);
+  const [isVwapSettingsOpen, setIsVwapSettingsOpen] = useState(false);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
   const [isCacheModalOpen, setIsCacheModalOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -197,6 +199,14 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
       }
       if (patch.depthProfile?.enabled !== undefined) {
         next.showDepthProfile = patch.depthProfile.enabled;
+      }
+
+      // Keep showVwap and vwap.enabled in sync
+      if (patch.showVwap !== undefined) {
+        next.vwap = { ...next.vwap, enabled: patch.showVwap };
+      }
+      if (patch.vwap?.enabled !== undefined) {
+        next.showVwap = patch.vwap.enabled;
       }
 
       indexedDBCache.savePreferences(next);
@@ -572,6 +582,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         isFullscreen={isFullscreen}
         onOpenHeatmapSettings={() => setIsHeatmapSettingsOpen(true)}
         onOpenBubbleSettings={() => setIsBubbleSettingsOpen(true)}
+        onOpenVwapSettings={() => setIsVwapSettingsOpen(true)}
         onOpenDepthProfileSettings={() => setIsDepthProfileSettingsOpen(true)}
         onOpenFootprintSettings={() => setIsFootprintSettingsOpen(true)}
         onOpenDiagnostics={() => setIsDiagnosticsOpen(true)}
@@ -609,6 +620,14 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         onClose={() => setIsBubbleSettingsOpen(false)}
         settings={preferences.bubbles}
         onChange={(updated) => handleUpdatePreferences({ bubbles: updated })}
+      />
+
+      <VwapSettingsModal
+        isOpen={isVwapSettingsOpen}
+        onClose={() => setIsVwapSettingsOpen(false)}
+        settings={preferences.vwap}
+        onChange={(updated) => handleUpdatePreferences({ vwap: updated })}
+        onReset={() => handleUpdatePreferences({ vwap: DEFAULT_TERMINAL_PREFERENCES.vwap })}
       />
 
       <DepthProfileSettingsModal

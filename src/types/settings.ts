@@ -7,6 +7,36 @@ import { CandleTimeframe, ExchangeId } from './market';
 import { BubbleSettings, DepthProfileSettings, HeatmapSettings } from './heatmap';
 import { ChartMode, FootprintSettings } from './footprint';
 
+export interface VwapSettings {
+  enabled: boolean;
+  anchor: 'session' | 'week' | 'month' | 'continuous';
+  source: 'hlc3' | 'close' | 'hl2';
+  showBands1: boolean;
+  multiplier1: number;
+  showBands2: boolean;
+  multiplier2: number;
+  vwapColor: string;
+  band1Color: string;
+  band2Color: string;
+  lineWidth: number;
+  bandsStyle: 'dashed' | 'dotted' | 'solid';
+}
+
+export const DEFAULT_VWAP_SETTINGS: VwapSettings = {
+  enabled: true,
+  anchor: 'session',
+  source: 'hlc3',
+  showBands1: true,
+  multiplier1: 1.0,
+  showBands2: true,
+  multiplier2: 2.0,
+  vwapColor: '#ff9f1c', // Radiant golden-orange
+  band1Color: '#38bdf8', // Sky blue for SD 1
+  band2Color: '#a855f7', // Purple/violet for SD 2
+  lineWidth: 2,
+  bandsStyle: 'dashed',
+};
+
 export interface TerminalPreferences {
   exchange: ExchangeId;
   symbol: string;
@@ -20,11 +50,13 @@ export interface TerminalPreferences {
   showBestBidAskLines: boolean;
   showCurrentPriceLine: boolean;
   showLiquidityShifts: boolean;
+  showVwap: boolean;
   autoScrollToLatest: boolean;
   heatmap: HeatmapSettings;
   bubbles: BubbleSettings;
   depthProfile: DepthProfileSettings;
   footprint: FootprintSettings;
+  vwap: VwapSettings;
 }
 
 export const DEFAULT_HEATMAP_SETTINGS: HeatmapSettings = {
@@ -136,9 +168,11 @@ export const DEFAULT_TERMINAL_PREFERENCES: TerminalPreferences = {
   showBestBidAskLines: false,
   showCurrentPriceLine: true,
   showLiquidityShifts: false,
+  showVwap: true, // VWAP active by default
   autoScrollToLatest: true,
   heatmap: DEFAULT_HEATMAP_SETTINGS,
   bubbles: DEFAULT_BUBBLE_SETTINGS,
   depthProfile: DEFAULT_DEPTH_PROFILE_SETTINGS,
   footprint: DEFAULT_FOOTPRINT_SETTINGS,
+  vwap: DEFAULT_VWAP_SETTINGS,
 };

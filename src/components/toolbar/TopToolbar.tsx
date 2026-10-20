@@ -1,7 +1,7 @@
 /**
  * Professional Trading Terminal Top Toolbar
- * JARVIS HEATMAP TERMINAL - ORGANIZED MODULAR UI
- * Grouped into: Market | Chart | Liquidity | Order Flow | View | Status
+ * JARVIS HEATMAP TERMINAL - RESPONSIVE MODULAR UI
+ * Each tool has a dedicated compact dropdown, small exchange/symbol buttons, and zero-overlap layout.
  */
 
 import React, { useState, useRef, useEffect } from 'react';
@@ -10,7 +10,6 @@ import {
   CandlestickChart,
   CircleDot,
   BarChart3,
-  GitCommit,
   Maximize2,
   Minimize2,
   RotateCcw,
@@ -23,19 +22,16 @@ import {
   Layers,
   ChevronDown,
   Settings,
-  PanelBottom,
-  PanelRight,
-  PanelLeft,
-  Percent,
-  Hash,
-  Lock,
   Power,
+  Check,
 } from 'lucide-react';
 import { CandleTimeframe, ConnectionState, ExchangeId, LatencyMetrics } from '../../types/market';
 import { TerminalPreferences } from '../../types/settings';
 import { ChartMode } from '../../types/footprint';
 import { ColorMapEngine } from '../../services/heatmap/ColorMap';
 import { ColorScaleType } from '../../types/heatmap';
+import { InstrumentRegistry } from '../../services/market/InstrumentRegistry';
+import { MarketSessionService } from '../../services/market/MarketSessionService';
 
 interface TopToolbarProps {
   preferences: TerminalPreferences;
@@ -51,15 +47,13 @@ interface TopToolbarProps {
   isFullscreen: boolean;
   onOpenHeatmapSettings?: () => void;
   onOpenBubbleSettings?: () => void;
+  onOpenVwapSettings?: () => void;
   onOpenDepthProfileSettings?: () => void;
   onOpenFootprintSettings?: () => void;
   onOpenDiagnostics: () => void;
   onOpenCacheModal: () => void;
   onLockTerminal?: () => void;
 }
-
-import { InstrumentRegistry } from '../../services/market/InstrumentRegistry';
-import { MarketSessionService } from '../../services/market/MarketSessionService';
 
 const SUPPORTED_TIMEFRAMES: CandleTimeframe[] = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '1d'];
 
@@ -80,6 +74,18 @@ const Switch: React.FC<SwitchProps> = ({ checked, onChange, title }) => (
   </label>
 );
 
+type MenuType =
+  | 'exchange'
+  | 'symbol'
+  | 'timeframe'
+  | 'candles'
+  | 'heatmap'
+  | 'footprint'
+  | 'cob'
+  | 'bubbles'
+  | 'vwap'
+  | 'view';
+
 export const TopToolbar: React.FC<TopToolbarProps> = ({
   preferences,
   onUpdatePreferences,
@@ -94,13 +100,14 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
   isFullscreen,
   onOpenHeatmapSettings,
   onOpenBubbleSettings,
+  onOpenVwapSettings,
   onOpenDepthProfileSettings,
   onOpenFootprintSettings,
   onOpenDiagnostics,
   onOpenCacheModal,
   onLockTerminal,
 }) => {
-  const [openMenu, setOpenMenu] = useState<'chart' | 'liquidity' | 'orderFlow' | 'view' | null>(null);
+  const [openMenu, setOpenMenu] = useState<MenuType | null>(null);
   const toolbarRef = useRef<HTMLElement | null>(null);
 
   // Close open dropdowns on click outside
@@ -116,17 +123,25 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
   }, [openMenu]);
 
   // Live Asia/Kolkata Clock
-  const [kolkataTime, setKolkataTime] = useState<string>('');
+  const [kolkataTimeHhMm, setKolkataTimeHhMm] = useState<string>('');
+  const [kolkataTimeSeconds, setKolkataTimeSeconds] = useState<string>('');
   useEffect(() => {
     const updateTime = () => {
-      const formatted = new Intl.DateTimeFormat('en-IN', {
+      const d = new Date();
+      const parts = new Intl.DateTimeFormat('en-IN', {
         timeZone: 'Asia/Kolkata',
         hour: '2-digit',
         minute: '2-digit',
         second: '2-digit',
         hour12: false,
-      }).format(new Date());
-      setKolkataTime(formatted);
+      }).formatToParts(d);
+
+      const h = parts.find((p) => p.type === 'hour')?.value || '00';
+      const m = parts.find((p) => p.type === 'minute')?.value || '00';
+      const s = parts.find((p) => p.type === 'second')?.value || '00';
+
+      setKolkataTimeHhMm(`${h}:${m}`);
+      setKolkataTimeSeconds(`:${s}`);
     };
     updateTime();
     const interval = setInterval(updateTime, 1000);
@@ -158,7 +173,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
         };
       case 'CONNECTING':
         return {
-          label: 'CONNECTING',
+          label: 'CONN',
           bg: 'rgba(255, 179, 0, 0.12)',
           color: '#ffb300',
           border: 'rgba(255, 179, 0, 0.35)',
@@ -166,7 +181,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
         };
       case 'RESYNCING':
         return {
-          label: 'RESYNCING',
+          label: 'SYNC',
           bg: 'rgba(168, 85, 247, 0.12)',
           color: '#c084fc',
           border: 'rgba(168, 85, 247, 0.35)',
@@ -193,39 +208,68 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
   };
 
   const badge = getStatusBadge();
-  const baseAsset = preferences.symbol.replace(/(USDT|USDC|FDUSD|BUSD|USD)$/i, '') || 'BTC';
 
-  const toggleMenu = (menu: 'chart' | 'liquidity' | 'orderFlow' | 'view') => {
+  const toggleMenu = (menu: MenuType) => {
     setOpenMenu((prev) => (prev === menu ? null : menu));
+  };
+
+  const getCompactSymbolLabel = (symbol: string): string => {
+    if (symbol === 'XAUUSD') return 'XAU/USD (OANDA)';
+    if (symbol === 'XAUUSD_VANTAGE') return 'XAU/USD (Vantage)';
+    if (symbol === 'GC') return 'GC Gold';
+    return symbol.replace('USDT', '/USDT');
+  };
+
+  const handleSelectSymbol = (selected: string, targetExchange: ExchangeId) => {
+    setOpenMenu(null);
+    let sym = selected;
+    let ex = targetExchange;
+
+    if (selected === 'GC') {
+      sym = 'GC';
+      ex = 'comex';
+    } else if (selected === 'XAUUSD' || selected === 'XAUUSD_VANTAGE') {
+      sym = selected;
+      ex = 'binance';
+    }
+
+    const inst = InstrumentRegistry.getInstrument(sym, ex);
+    const patch: Partial<TerminalPreferences> = {
+      symbol: inst.symbol,
+      exchange: ex,
+    };
+    if (!inst.supportedIntervals.includes(preferences.timeframe)) {
+      patch.timeframe = inst.defaultTimeframe;
+    }
+    onUpdatePreferences(patch);
   };
 
   return (
     <header
       ref={toolbarRef}
+      className="terminal-top-toolbar"
       style={{
         height: '42px',
         background: '#0c1017',
         borderBottom: '1px solid rgba(255, 255, 255, 0.07)',
         display: 'flex',
         alignItems: 'center',
-        justifyContent: 'space-between',
         padding: '0 8px 0 10px',
         userSelect: 'none',
         gap: 6,
         position: 'relative',
         zIndex: 100,
-        overflow: 'visible',
         width: '100%',
         maxWidth: '100%',
         boxSizing: 'border-box',
       }}
     >
       {/* ============================================================ */}
-      {/* 1. MARKET GROUP: Exchange, Symbol, Timeframe                 */}
+      {/* 1. MARKET GROUP: Logo, Exchange, Symbol, Timeframe            */}
       {/* ============================================================ */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
         {/* Terminal Logo */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginRight: 2 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginRight: 2 }}>
           <div
             style={{
               width: 20,
@@ -239,121 +283,222 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
               fontSize: 11,
               color: '#ffffff',
               boxShadow: '0 0 8px rgba(0, 180, 216, 0.35)',
+              flexShrink: 0,
             }}
           >
             J
           </div>
-          <span style={{ fontWeight: 800, fontSize: 13, letterSpacing: '0.08em', color: '#f8fafc' }}>
+          <span className="terminal-brand-text" style={{ fontWeight: 800, fontSize: 12.5, letterSpacing: '0.08em', color: '#f8fafc' }}>
             J.A.R.V.I.S
           </span>
         </div>
 
-        {/* Exchange Selector Dropdown */}
-        <select
-          value={preferences.exchange}
-          onChange={(e) => {
-            const newExchange = e.target.value as ExchangeId;
-            let newSymbol = preferences.symbol;
-            if (newExchange === 'binance') {
-              newSymbol = 'XAUUSD';
-            } else if (newExchange === 'comex') {
-              newSymbol = 'GC';
-            }
-            const inst = InstrumentRegistry.getInstrument(newSymbol, newExchange);
-            const patch: Partial<TerminalPreferences> = {
-              exchange: newExchange,
-              symbol: inst.symbol,
-            };
-            if (!inst.supportedIntervals.includes(preferences.timeframe)) {
-              patch.timeframe = inst.defaultTimeframe;
-            }
-            onUpdatePreferences(patch);
-          }}
-          style={{
-            background: 'rgba(245, 158, 11, 0.12)',
-            border: '1px solid rgba(245, 158, 11, 0.45)',
-            borderRadius: 4,
-            color: '#fbbf24',
-            fontSize: 11,
-            fontWeight: 800,
-            padding: '3px 8px',
-            outline: 'none',
-            cursor: 'pointer',
-          }}
-          title="Active Gold Trading Venue / Data Feed"
-        >
-          <option value="binance" style={{ background: '#0d121c', color: '#fcd34d', fontWeight: 800 }}>
-            Spot Gold (OANDA & Vantage Benchmark)
-          </option>
-          <option value="comex" style={{ background: '#0d121c', color: '#fcd34d', fontWeight: 700 }}>
-            COMEX (CME Globex Gold Futures)
-          </option>
-        </select>
+        {/* Small Exchange Selector Dropdown */}
+        <div style={{ position: 'relative' }}>
+          <button
+            className={`terminal-dropdown-btn ${openMenu === 'exchange' ? 'open' : ''}`}
+            onClick={() => toggleMenu('exchange')}
+            style={{
+              height: 26,
+              padding: '0 7px',
+              fontSize: 11,
+              fontWeight: 700,
+              background: 'rgba(245, 158, 11, 0.12)',
+              border: '1px solid rgba(245, 158, 11, 0.45)',
+              color: '#fbbf24',
+              gap: 4,
+              maxWidth: 105,
+            }}
+            title="Trading Venue / Data Feed"
+          >
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {preferences.exchange === 'comex' ? 'COMEX GC' : 'Spot Gold'}
+            </span>
+            <ChevronDown size={10} style={{ opacity: 0.7, flexShrink: 0 }} />
+          </button>
 
-        {/* Pair Selection Dropdown */}
-        <select
-          value={preferences.symbol}
-          onChange={(e) => {
-            const selected = e.target.value;
-            let targetExchange: ExchangeId = preferences.exchange;
-            let targetSymbol = selected;
+          {openMenu === 'exchange' && (
+            <div className="terminal-dropdown-menu" style={{ width: 280, left: 0 }}>
+              <div className="terminal-menu-header">Trading Venue / Data Feed</div>
+              <div
+                className="terminal-menu-item"
+                style={{
+                  background: preferences.exchange === 'binance' ? 'rgba(245, 158, 11, 0.15)' : 'transparent',
+                  color: preferences.exchange === 'binance' ? '#fcd34d' : '#cbd5e1',
+                  padding: '7px 12px',
+                }}
+                onClick={() => {
+                  setOpenMenu(null);
+                  const newExchange: ExchangeId = 'binance';
+                  const newSymbol = 'XAUUSD';
+                  const inst = InstrumentRegistry.getInstrument(newSymbol, newExchange);
+                  const patch: Partial<TerminalPreferences> = {
+                    exchange: newExchange,
+                    symbol: inst.symbol,
+                  };
+                  if (!inst.supportedIntervals.includes(preferences.timeframe)) {
+                    patch.timeframe = inst.defaultTimeframe;
+                  }
+                  onUpdatePreferences(patch);
+                }}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontWeight: 700 }}>Spot Gold</span>
+                    <span style={{ fontSize: 9.5, padding: '1px 5px', borderRadius: 3, background: 'rgba(0, 230, 118, 0.15)', color: '#00e676', fontWeight: 700 }}>OANDA & VANTAGE</span>
+                  </div>
+                  <span style={{ fontSize: 10, color: '#94a3b8' }}>Real-time L1 gold price with tick volume</span>
+                </div>
+                {preferences.exchange === 'binance' && <Check size={13} style={{ color: '#fbbf24', flexShrink: 0 }} />}
+              </div>
 
-            if (selected === 'GC') {
-              targetSymbol = 'GC';
-              targetExchange = 'comex';
-            } else if (selected === 'XAUUSD' || selected === 'XAUUSD_VANTAGE') {
-              targetSymbol = selected;
-              targetExchange = 'binance';
-            } else {
-              const inst = InstrumentRegistry.getInstrument(selected);
-              targetSymbol = inst.symbol;
-              targetExchange = inst.providerId;
-            }
+              <div
+                className="terminal-menu-item"
+                style={{
+                  background: preferences.exchange === 'comex' ? 'rgba(245, 158, 11, 0.15)' : 'transparent',
+                  color: preferences.exchange === 'comex' ? '#fcd34d' : '#cbd5e1',
+                  padding: '7px 12px',
+                }}
+                onClick={() => {
+                  setOpenMenu(null);
+                  const newExchange: ExchangeId = 'comex';
+                  const newSymbol = 'GC';
+                  const inst = InstrumentRegistry.getInstrument(newSymbol, newExchange);
+                  const patch: Partial<TerminalPreferences> = {
+                    exchange: newExchange,
+                    symbol: inst.symbol,
+                  };
+                  if (!inst.supportedIntervals.includes(preferences.timeframe)) {
+                    patch.timeframe = inst.defaultTimeframe;
+                  }
+                  onUpdatePreferences(patch);
+                }}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontWeight: 700 }}>COMEX GC</span>
+                    <span style={{ fontSize: 9.5, padding: '1px 5px', borderRadius: 3, background: 'rgba(245, 158, 11, 0.18)', color: '#fbbf24', fontWeight: 700 }}>CME GLOBEX</span>
+                  </div>
+                  <span style={{ fontSize: 10, color: '#94a3b8' }}>Official COMEX active futures contract</span>
+                </div>
+                {preferences.exchange === 'comex' && <Check size={13} style={{ color: '#fbbf24', flexShrink: 0 }} />}
+              </div>
+            </div>
+          )}
+        </div>
 
-            const inst = InstrumentRegistry.getInstrument(targetSymbol, targetExchange);
-            const patch: Partial<TerminalPreferences> = {
-              symbol: inst.symbol,
-              exchange: targetExchange,
-            };
-            if (!inst.supportedIntervals.includes(preferences.timeframe)) {
-              patch.timeframe = inst.defaultTimeframe;
-            }
-            onUpdatePreferences(patch);
-          }}
-          style={{
-            background: 'rgba(234, 179, 8, 0.08)',
-            border: '1px solid rgba(234, 179, 8, 0.35)',
-            borderRadius: 4,
-            color: '#facc15',
-            fontSize: 11.5,
-            fontWeight: 800,
-            padding: '3px 8px',
-            outline: 'none',
-            cursor: 'pointer',
-            maxWidth: 260,
-          }}
-          title="Active Gold Trading Instrument"
-        >
-          <optgroup label="🥇 Gold Benchmark Instruments (TradingView Real-Time)" style={{ background: '#0b101b', color: '#fbbf24', fontWeight: 800 }}>
-            <option value="XAUUSD" style={{ background: '#0d121c', color: '#fcd34d', fontWeight: 800 }}>
-              XAU/USD • OANDA (TradingView Spot Gold)
-            </option>
-            <option value="XAUUSD_VANTAGE" style={{ background: '#0d121c', color: '#fcd34d', fontWeight: 800 }}>
-              XAU/USD • Vantage (TradingView Spot Gold)
-            </option>
-            <option value="GC" style={{ background: '#0d121c', color: '#f59e0b', fontWeight: 700 }}>
-              GC • COMEX Gold Futures (CME Globex)
-            </option>
-          </optgroup>
-          <optgroup label="⚡ Crypto Spot" style={{ background: '#0b101b', color: '#38bdf8', fontWeight: 800 }}>
-            <option value="BTCUSDT" style={{ background: '#0d121c', color: '#93c5fd' }}>BTC/USDT Spot</option>
-            <option value="ETHUSDT" style={{ background: '#0d121c', color: '#93c5fd' }}>ETH/USDT Spot</option>
-            <option value="SOLUSDT" style={{ background: '#0d121c', color: '#93c5fd' }}>SOL/USDT Spot</option>
-          </optgroup>
-        </select>
+        {/* Small Symbol / Pair Selector Dropdown */}
+        <div style={{ position: 'relative' }}>
+          <button
+            className={`terminal-dropdown-btn ${openMenu === 'symbol' ? 'open' : ''}`}
+            onClick={() => toggleMenu('symbol')}
+            style={{
+              height: 26,
+              padding: '0 8px',
+              fontSize: 11,
+              fontWeight: 700,
+              background: 'rgba(234, 179, 8, 0.08)',
+              border: '1px solid rgba(234, 179, 8, 0.35)',
+              color: '#facc15',
+              gap: 4,
+              maxWidth: 135,
+            }}
+            title="Active Trading Instrument"
+          >
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {getCompactSymbolLabel(preferences.symbol)}
+            </span>
+            <ChevronDown size={10} style={{ opacity: 0.7, flexShrink: 0 }} />
+          </button>
 
-        {/* Timeframe Selector Pills */}
-        <div style={{ display: 'flex', background: 'rgba(255, 255, 255, 0.03)', borderRadius: 4, padding: 1.5, gap: 1 }}>
+          {openMenu === 'symbol' && (
+            <div className="terminal-dropdown-menu" style={{ width: 290, left: 0 }}>
+              <div className="terminal-menu-header">🥇 Gold Benchmark Instruments</div>
+
+              <div
+                className="terminal-menu-item"
+                style={{
+                  background: preferences.symbol === 'XAUUSD' ? 'rgba(234, 179, 8, 0.12)' : 'transparent',
+                  color: preferences.symbol === 'XAUUSD' ? '#fde047' : '#cbd5e1',
+                  padding: '6px 12px',
+                }}
+                onClick={() => handleSelectSymbol('XAUUSD', 'binance')}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontWeight: 700 }}>XAU/USD • OANDA</span>
+                    <span style={{ fontSize: 9, padding: '0 4px', borderRadius: 3, background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8' }}>Spot Gold</span>
+                  </div>
+                  <span style={{ fontSize: 9.5, color: '#94a3b8' }}>TradingView OANDA Benchmark</span>
+                </div>
+                {preferences.symbol === 'XAUUSD' && <Check size={13} style={{ color: '#facc15' }} />}
+              </div>
+
+              <div
+                className="terminal-menu-item"
+                style={{
+                  background: preferences.symbol === 'XAUUSD_VANTAGE' ? 'rgba(234, 179, 8, 0.12)' : 'transparent',
+                  color: preferences.symbol === 'XAUUSD_VANTAGE' ? '#fde047' : '#cbd5e1',
+                  padding: '6px 12px',
+                }}
+                onClick={() => handleSelectSymbol('XAUUSD_VANTAGE', 'binance')}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontWeight: 700 }}>XAU/USD • Vantage</span>
+                    <span style={{ fontSize: 9, padding: '0 4px', borderRadius: 3, background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8' }}>Spot Gold</span>
+                  </div>
+                  <span style={{ fontSize: 9.5, color: '#94a3b8' }}>TradingView Vantage Benchmark</span>
+                </div>
+                {preferences.symbol === 'XAUUSD_VANTAGE' && <Check size={13} style={{ color: '#facc15' }} />}
+              </div>
+
+              <div
+                className="terminal-menu-item"
+                style={{
+                  background: preferences.symbol === 'GC' ? 'rgba(234, 179, 8, 0.12)' : 'transparent',
+                  color: preferences.symbol === 'GC' ? '#fde047' : '#cbd5e1',
+                  padding: '6px 12px',
+                }}
+                onClick={() => handleSelectSymbol('GC', 'comex')}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontWeight: 700 }}>GC • COMEX Futures</span>
+                    <span style={{ fontSize: 9, padding: '0 4px', borderRadius: 3, background: 'rgba(245, 158, 11, 0.18)', color: '#fbbf24' }}>CME Globex</span>
+                  </div>
+                  <span style={{ fontSize: 9.5, color: '#94a3b8' }}>Official COMEX Gold Futures</span>
+                </div>
+                {preferences.symbol === 'GC' && <Check size={13} style={{ color: '#facc15' }} />}
+              </div>
+
+              <div className="terminal-menu-divider" />
+              <div className="terminal-menu-header">⚡ Crypto Spot</div>
+
+              {['BTCUSDT', 'ETHUSDT', 'SOLUSDT'].map((sym) => {
+                const isSel = preferences.symbol === sym;
+                return (
+                  <div
+                    key={sym}
+                    className="terminal-menu-item"
+                    style={{
+                      background: isSel ? 'rgba(56, 189, 248, 0.12)' : 'transparent',
+                      color: isSel ? '#38bdf8' : '#cbd5e1',
+                      padding: '6px 12px',
+                    }}
+                    onClick={() => handleSelectSymbol(sym, 'binance')}
+                  >
+                    <span style={{ fontWeight: isSel ? 700 : 500 }}>{sym.replace('USDT', '/USDT Spot')}</span>
+                    {isSel && <Check size={13} style={{ color: '#38bdf8' }} />}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Timeframe Selector Pills (Desktop) */}
+        <div className="timeframe-pills" style={{ background: 'rgba(255, 255, 255, 0.03)', borderRadius: 4, padding: 1.5, gap: 1 }}>
           {SUPPORTED_TIMEFRAMES.map((tf) => {
             const isSupported = currentInst.supportedIntervals.includes(tf);
             return (
@@ -376,7 +521,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
                 onClick={() => isSupported && onUpdatePreferences({ timeframe: tf })}
                 title={
                   !isSupported
-                    ? `${currentInst.provider} free tier supports ${currentInst.supportedIntervals.join(', ')} only`
+                    ? `${currentInst.provider} supports ${currentInst.supportedIntervals.join(', ')}`
                     : `Switch timeframe to ${tf}`
                 }
               >
@@ -385,80 +530,96 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
             );
           })}
         </div>
+
+        {/* Compact Timeframe Dropdown (Mobile / Tablet) */}
+        <div className="timeframe-dropdown" style={{ position: 'relative' }}>
+          <button
+            className="terminal-dropdown-btn"
+            onClick={() => toggleMenu('timeframe')}
+            style={{ height: 26, padding: '0 6px', fontSize: 11, fontWeight: 700, color: '#38bdf8', gap: 3 }}
+          >
+            <span>{preferences.timeframe}</span>
+            <ChevronDown size={10} style={{ opacity: 0.7 }} />
+          </button>
+          {openMenu === 'timeframe' && (
+            <div className="terminal-dropdown-menu" style={{ width: 110, minWidth: 90 }}>
+              <div className="terminal-menu-header">Timeframe</div>
+              {SUPPORTED_TIMEFRAMES.map((tf) => {
+                const isSupported = currentInst.supportedIntervals.includes(tf);
+                return (
+                  <div
+                    key={tf}
+                    className="terminal-menu-item"
+                    style={{
+                      fontWeight: preferences.timeframe === tf ? 700 : 500,
+                      color: preferences.timeframe === tf ? '#38bdf8' : isSupported ? '#cbd5e1' : '#475569',
+                      cursor: isSupported ? 'pointer' : 'not-allowed',
+                      opacity: isSupported ? 1 : 0.4,
+                      padding: '4px 10px',
+                    }}
+                    onClick={() => {
+                      if (isSupported) {
+                        setOpenMenu(null);
+                        onUpdatePreferences({ timeframe: tf });
+                      }
+                    }}
+                  >
+                    <span>{tf}</span>
+                    {preferences.timeframe === tf && <Check size={12} style={{ color: '#38bdf8' }} />}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
-      {/* Divider */}
-      <div style={{ width: 1, height: 18, background: 'rgba(255, 255, 255, 0.08)', margin: '0 2px' }} />
+      {/* Subtle Vertical Divider */}
+      <div style={{ width: 1, height: 18, background: 'rgba(255, 255, 255, 0.08)', margin: '0 2px', flexShrink: 0 }} />
 
       {/* ============================================================ */}
-      {/* 2. NESTED DROPDOWN GROUPS: Chart | Liquidity | Order Flow | View */}
+      {/* 2. DEDICATED TOOL DROPDOWNS: Candles, Heatmap, COB, Footprint, Bubbles, VWAP, View */}
       {/* ============================================================ */}
-      <div className="toolbar-dropdown-group" style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-        {/* --- CHART TOOLS DROPDOWN --- */}
+      <div className="toolbar-tools-group">
+        {/* --- TOOL 1: CANDLES DROPDOWN --- */}
         <div style={{ position: 'relative' }}>
           <button
-            className={`terminal-dropdown-btn ${preferences.showCandles ? 'active' : ''} ${openMenu === 'chart' ? 'open' : ''}`}
-            onClick={() => toggleMenu('chart')}
-            title="Chart Display Modes & Core Layers"
+            className={`terminal-dropdown-btn ${preferences.showCandles ? 'active' : ''} ${openMenu === 'candles' ? 'open' : ''}`}
+            onClick={() => toggleMenu('candles')}
+            title="Candlestick Chart & Modes"
+            style={{ height: 26, padding: '0 7px', fontSize: 11 }}
           >
-            <CandlestickChart size={13} />
-            <span>Chart</span>
-            <ChevronDown size={11} style={{ opacity: 0.6 }} />
+            <CandlestickChart size={12} />
+            <span>Candles</span>
+            <ChevronDown size={9} style={{ opacity: 0.6 }} />
           </button>
 
-          {openMenu === 'chart' && (
-            <div className="terminal-dropdown-menu" style={{ width: 240 }}>
+          {openMenu === 'candles' && (
+            <div className="terminal-dropdown-menu" style={{ width: 230 }}>
+              <div className="terminal-menu-header">Candlestick Chart</div>
+              <div
+                className="terminal-menu-item"
+                onClick={() => onUpdatePreferences({ showCandles: !preferences.showCandles })}
+              >
+                <span style={{ fontWeight: 600 }}>Show Candles</span>
+                <Switch checked={preferences.showCandles} onChange={(c) => onUpdatePreferences({ showCandles: c })} />
+              </div>
+
+              <div className="terminal-menu-divider" />
               <div className="terminal-menu-header">Primary Mode</div>
-              <div style={{ padding: '4px 10px 8px 10px' }}>
+              <div style={{ padding: '4px 10px 6px 10px' }}>
                 <select
                   value={preferences.chartMode || 'candles'}
                   onChange={(e) => {
                     const mode = e.target.value as ChartMode;
                     if (mode === 'candles') {
-                      onUpdatePreferences({
-                        chartMode: mode,
-                        showCandles: true,
-                        showHeatmap: false,
-                        showFootprint: false,
-                        showBubbles: false,
-                        bubbles: { ...preferences.bubbles, enabled: false },
-                        showDepthProfile: false,
-                        footprint: { ...preferences.footprint, enabled: false },
-                      });
+                      onUpdatePreferences({ chartMode: mode, showCandles: true, showHeatmap: false, showFootprint: false });
                     } else if (mode === 'heatmap') {
-                      onUpdatePreferences({
-                        chartMode: mode,
-                        showCandles: true,
-                        showHeatmap: true,
-                        showFootprint: false,
-                        showBubbles: true,
-                        bubbles: { ...preferences.bubbles, enabled: true },
-                        showDepthProfile: true,
-                        depthProfile: { ...preferences.depthProfile, enabled: true },
-                        footprint: { ...preferences.footprint, enabled: false },
-                      });
+                      onUpdatePreferences({ chartMode: mode, showCandles: true, showHeatmap: true, showFootprint: false });
                     } else if (mode === 'footprint') {
-                      onUpdatePreferences({
-                        chartMode: mode,
-                        showCandles: true,
-                        showHeatmap: false,
-                        showFootprint: true,
-                        showBubbles: preferences.showBubbles,
-                        bubbles: { ...preferences.bubbles, enabled: preferences.showBubbles },
-                        showDepthProfile: false,
-                        footprint: { ...preferences.footprint, enabled: true, showSideProfile: true },
-                      });
+                      onUpdatePreferences({ chartMode: mode, showCandles: true, showHeatmap: false, showFootprint: true, footprint: { ...preferences.footprint, enabled: true } });
                     } else if (mode === 'heatmap_footprint') {
-                      onUpdatePreferences({
-                        chartMode: mode,
-                        showCandles: true,
-                        showHeatmap: true,
-                        showFootprint: true,
-                        showBubbles: preferences.showBubbles,
-                        bubbles: { ...preferences.bubbles, enabled: preferences.showBubbles },
-                        showDepthProfile: false,
-                        footprint: { ...preferences.footprint, enabled: true },
-                      });
+                      onUpdatePreferences({ chartMode: mode, showCandles: true, showHeatmap: true, showFootprint: true, footprint: { ...preferences.footprint, enabled: true } });
                     }
                   }}
                   style={{
@@ -469,7 +630,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
                     color: '#38bdf8',
                     fontSize: 11,
                     fontWeight: 700,
-                    padding: '4px 8px',
+                    padding: '3px 6px',
                     outline: 'none',
                     cursor: 'pointer',
                   }}
@@ -482,45 +643,208 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
               </div>
 
               <div className="terminal-menu-divider" />
-              <div className="terminal-menu-header">Display Layers</div>
-
               <div
                 className="terminal-menu-item"
-                onClick={() => onUpdatePreferences({ showCandles: !preferences.showCandles })}
+                onClick={() => onUpdatePreferences({ showBestBidAskLines: !preferences.showBestBidAskLines })}
               >
-                <span>Candlesticks</span>
-                <Switch checked={preferences.showCandles} onChange={(c) => onUpdatePreferences({ showCandles: c })} />
+                <span>Best Bid / Ask Ribbon</span>
+                <Switch checked={preferences.showBestBidAskLines} onChange={(c) => onUpdatePreferences({ showBestBidAskLines: c })} />
               </div>
+              <div
+                className="terminal-menu-item action-btn"
+                onClick={() => {
+                  setOpenMenu(null);
+                  onResetView();
+                }}
+              >
+                <span>Reset Chart View</span>
+                <RotateCcw size={11} />
+              </div>
+            </div>
+          )}
+        </div>
 
+        {/* --- TOOL 2: HEATMAP DROPDOWN --- */}
+        <div style={{ position: 'relative' }}>
+          <button
+            className={`terminal-dropdown-btn ${preferences.showHeatmap ? 'active' : ''} ${openMenu === 'heatmap' ? 'open' : ''}`}
+            onClick={() => toggleMenu('heatmap')}
+            title="Liquidity Heatmap Settings"
+            style={{ height: 26, padding: '0 7px', fontSize: 11 }}
+          >
+            <Flame size={12} style={{ color: preferences.showHeatmap ? '#38bdf8' : 'inherit' }} />
+            <span>Heatmap</span>
+            <ChevronDown size={9} style={{ opacity: 0.6 }} />
+          </button>
+
+          {openMenu === 'heatmap' && (
+            <div className="terminal-dropdown-menu" style={{ width: 250 }}>
+              <div className="terminal-menu-header">Liquidity Heatmap</div>
               <div
                 className="terminal-menu-item"
                 onClick={() => onUpdatePreferences({ showHeatmap: !preferences.showHeatmap })}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span>Liquidity Heatmap</span>
-                  {onOpenHeatmapSettings && (
-                    <span
-                      title="Open Heatmap Settings"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setOpenMenu(null);
-                        onOpenHeatmapSettings();
-                      }}
-                      style={{
-                        color: preferences.showHeatmap ? '#00b4d8' : '#64748b',
-                        cursor: 'pointer',
-                        padding: '1px 3px',
-                        display: 'flex',
-                        alignItems: 'center',
-                      }}
-                    >
-                      <Sliders size={11} />
-                    </span>
-                  )}
-                </div>
+                <span style={{ fontWeight: 600 }}>Enable Heatmap</span>
                 <Switch checked={preferences.showHeatmap} onChange={(c) => onUpdatePreferences({ showHeatmap: c })} />
               </div>
 
+              <div className="terminal-menu-divider" />
+              <div className="terminal-menu-header">Color Palette</div>
+              <div style={{ padding: '3px 10px 6px 10px' }}>
+                <select
+                  value={preferences.heatmap.colorScale}
+                  onChange={(e) => {
+                    const scale = e.target.value as ColorScaleType;
+                    colorMapEngine.rebuildLut(scale);
+                    onUpdatePreferences({ heatmap: { ...preferences.heatmap, colorScale: scale } });
+                  }}
+                  style={{
+                    width: '100%',
+                    background: '#141a27',
+                    border: '1px solid rgba(255, 255, 255, 0.12)',
+                    borderRadius: 4,
+                    color: '#f8fafc',
+                    fontSize: 11,
+                    padding: '3px 6px',
+                    outline: 'none',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <option value="bookmap">Bookmap Classic</option>
+                  <option value="fire">Fire / Thermal</option>
+                  <option value="grayscale">Grayscale</option>
+                  <option value="custom">Custom Heat</option>
+                </select>
+              </div>
+
+              <div
+                className="terminal-menu-item"
+                onClick={() => onUpdatePreferences({ showLiquidityShifts: !preferences.showLiquidityShifts })}
+              >
+                <span>Liquidity Shifts</span>
+                <Switch checked={preferences.showLiquidityShifts} onChange={(c) => onUpdatePreferences({ showLiquidityShifts: c })} />
+              </div>
+
+              {onOpenHeatmapSettings && (
+                <>
+                  <div className="terminal-menu-divider" />
+                  <div
+                    className="terminal-menu-item action-btn"
+                    onClick={() => {
+                      setOpenMenu(null);
+                      onOpenHeatmapSettings();
+                    }}
+                  >
+                    <span>Heatmap Settings...</span>
+                    <Sliders size={11} />
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* --- TOOL 3: COB (ORDER BOOK LADDER) DROPDOWN --- */}
+        <div style={{ position: 'relative' }}>
+          <button
+            className={`terminal-dropdown-btn ${preferences.showDepthProfile ? 'active' : ''} ${openMenu === 'cob' ? 'open' : ''}`}
+            onClick={() => toggleMenu('cob')}
+            title="Order Book (COB) Ladder"
+            style={{ height: 26, padding: '0 7px', fontSize: 11 }}
+          >
+            <Layers size={12} style={{ color: preferences.showDepthProfile ? '#38bdf8' : 'inherit' }} />
+            <span>COB</span>
+            <ChevronDown size={9} style={{ opacity: 0.6 }} />
+          </button>
+
+          {openMenu === 'cob' && (
+            <div className="terminal-dropdown-menu" style={{ width: 230 }}>
+              <div className="terminal-menu-header">Order Book Ladder (COB)</div>
+              <div
+                className="terminal-menu-item"
+                onClick={() => {
+                  const next = !preferences.showDepthProfile;
+                  onUpdatePreferences({
+                    showDepthProfile: next,
+                    depthProfile: { ...preferences.depthProfile, enabled: next },
+                  });
+                }}
+              >
+                <span style={{ fontWeight: 600 }}>Show COB Ladder</span>
+                <Switch
+                  checked={preferences.showDepthProfile}
+                  onChange={(c) =>
+                    onUpdatePreferences({
+                      showDepthProfile: c,
+                      depthProfile: { ...preferences.depthProfile, enabled: c },
+                    })
+                  }
+                />
+              </div>
+
+              <div className="terminal-menu-divider" />
+              <div className="terminal-menu-header">Depth Levels</div>
+              <div style={{ padding: '3px 10px 6px 10px', display: 'flex', gap: 4 }}>
+                {[25, 50, 100, 200].map((levels) => (
+                  <button
+                    key={levels}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onUpdatePreferences({ depthProfile: { ...preferences.depthProfile, maxLevels: levels } });
+                    }}
+                    style={{
+                      flex: 1,
+                      padding: '2px 0',
+                      border: 'none',
+                      background: preferences.depthProfile.maxLevels === levels ? 'rgba(0, 180, 216, 0.35)' : 'rgba(255, 255, 255, 0.04)',
+                      color: preferences.depthProfile.maxLevels === levels ? '#38bdf8' : '#94a3b8',
+                      borderRadius: 3,
+                      fontSize: 10,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {levels}
+                  </button>
+                ))}
+              </div>
+
+              {onOpenDepthProfileSettings && (
+                <>
+                  <div className="terminal-menu-divider" />
+                  <div
+                    className="terminal-menu-item action-btn"
+                    onClick={() => {
+                      setOpenMenu(null);
+                      onOpenDepthProfileSettings();
+                    }}
+                  >
+                    <span>COB Settings...</span>
+                    <Sliders size={11} />
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* --- TOOL 4: FOOTPRINT DROPDOWN --- */}
+        <div style={{ position: 'relative' }}>
+          <button
+            className={`terminal-dropdown-btn ${preferences.showFootprint ? 'active' : ''} ${openMenu === 'footprint' ? 'open' : ''}`}
+            onClick={() => toggleMenu('footprint')}
+            title="Footprint Order Flow"
+            style={{ height: 26, padding: '0 7px', fontSize: 11 }}
+          >
+            <BarChart3 size={12} style={{ color: preferences.showFootprint ? '#38bdf8' : 'inherit' }} />
+            <span>Footprint</span>
+            <ChevronDown size={9} style={{ opacity: 0.6 }} />
+          </button>
+
+          {openMenu === 'footprint' && (
+            <div className="terminal-dropdown-menu" style={{ width: 250 }}>
+              <div className="terminal-menu-header">Footprint Order Flow</div>
               <div
                 className="terminal-menu-item"
                 onClick={() => {
@@ -533,31 +857,99 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
                   });
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span>Footprint Order Flow</span>
-                  {onOpenFootprintSettings && (
-                    <span
-                      title="Open Footprint Settings"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setOpenMenu(null);
-                        onOpenFootprintSettings();
-                      }}
-                      style={{
-                        color: preferences.showFootprint ? '#00b4d8' : '#64748b',
-                        cursor: 'pointer',
-                        padding: '1px 3px',
-                        display: 'flex',
-                        alignItems: 'center',
-                      }}
-                    >
-                      <Sliders size={11} />
-                    </span>
-                  )}
-                </div>
-                <Switch checked={preferences.showFootprint} onChange={(c) => onUpdatePreferences({ showFootprint: c, footprint: { ...preferences.footprint, enabled: c } })} />
+                <span style={{ fontWeight: 600 }}>Enable Footprint</span>
+                <Switch
+                  checked={preferences.showFootprint}
+                  onChange={(c) =>
+                    onUpdatePreferences({
+                      showFootprint: c,
+                      footprint: { ...preferences.footprint, enabled: c },
+                      showCandles: true,
+                      chartMode: c ? 'footprint' : (preferences.showHeatmap ? 'heatmap' : 'candles'),
+                    })
+                  }
+                />
               </div>
 
+              <div className="terminal-menu-divider" />
+              <div className="terminal-menu-header">Tick Multiplier</div>
+              <div style={{ padding: '3px 10px 6px 10px', display: 'flex', gap: 4 }}>
+                {[1, 2, 4, 8].map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onUpdatePreferences({ footprint: { ...preferences.footprint, tickMultiplier: t } });
+                    }}
+                    style={{
+                      flex: 1,
+                      padding: '2px 0',
+                      border: 'none',
+                      background: preferences.footprint.tickMultiplier === t ? 'rgba(0, 180, 216, 0.35)' : 'rgba(255, 255, 255, 0.04)',
+                      color: preferences.footprint.tickMultiplier === t ? '#38bdf8' : '#94a3b8',
+                      borderRadius: 3,
+                      fontSize: 10,
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {t}x
+                  </button>
+                ))}
+              </div>
+
+              <div
+                className="terminal-menu-item"
+                onClick={() => onUpdatePreferences({ footprint: { ...preferences.footprint, showImbalances: !preferences.footprint.showImbalances } })}
+              >
+                <span>Imbalances Highlights</span>
+                <Switch checked={preferences.footprint.showImbalances} onChange={(c) => onUpdatePreferences({ footprint: { ...preferences.footprint, showImbalances: c } })} />
+              </div>
+
+              <div
+                className="terminal-menu-item"
+                onClick={() => onUpdatePreferences({ footprint: { ...preferences.footprint, showSideProfile: !preferences.footprint.showSideProfile } })}
+              >
+                <span>Side Volume Profile</span>
+                <Switch checked={preferences.footprint.showSideProfile} onChange={(c) => onUpdatePreferences({ footprint: { ...preferences.footprint, showSideProfile: c } })} />
+              </div>
+
+              {onOpenFootprintSettings && (
+                <>
+                  <div className="terminal-menu-divider" />
+                  <div
+                    className="terminal-menu-item action-btn"
+                    onClick={() => {
+                      setOpenMenu(null);
+                      onOpenFootprintSettings();
+                    }}
+                  >
+                    <span>Footprint Settings...</span>
+                    <Sliders size={11} />
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* --- TOOL 5: BUBBLES DROPDOWN --- */}
+        <div style={{ position: 'relative' }}>
+          <button
+            className={`terminal-dropdown-btn ${preferences.showBubbles ? 'active' : ''} ${openMenu === 'bubbles' ? 'open' : ''}`}
+            onClick={() => toggleMenu('bubbles')}
+            title="Trade Volume Bubbles"
+            style={{ height: 26, padding: '0 7px', fontSize: 11 }}
+          >
+            <CircleDot size={12} style={{ color: preferences.showBubbles ? '#38bdf8' : 'inherit' }} />
+            <span>Bubbles</span>
+            <ChevronDown size={9} style={{ opacity: 0.6 }} />
+          </button>
+
+          {openMenu === 'bubbles' && (
+            <div className="terminal-dropdown-menu" style={{ width: 240 }}>
+              <div className="terminal-menu-header">Trade Volume Bubbles</div>
               <div
                 className="terminal-menu-item"
                 onClick={() => {
@@ -568,28 +960,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
                   });
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span>Trade Volume Bubbles</span>
-                  {onOpenBubbleSettings && (
-                    <span
-                      title="Open Bubble Settings"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setOpenMenu(null);
-                        onOpenBubbleSettings();
-                      }}
-                      style={{
-                        color: preferences.showBubbles ? '#00b4d8' : '#64748b',
-                        cursor: 'pointer',
-                        padding: '1px 3px',
-                        display: 'flex',
-                        alignItems: 'center',
-                      }}
-                    >
-                      <Sliders size={11} />
-                    </span>
-                  )}
-                </div>
+                <span style={{ fontWeight: 600 }}>Show Bubbles</span>
                 <Switch
                   checked={preferences.showBubbles}
                   onChange={(c) =>
@@ -601,34 +972,30 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
                 />
               </div>
 
-              <div
-                className="terminal-menu-item"
-                onClick={() => {
-                  const next = !preferences.showDepthProfile;
-                  onUpdatePreferences({
-                    showDepthProfile: next,
-                    depthProfile: { ...preferences.depthProfile, enabled: next },
-                  });
-                }}
-              >
-                <span>Order Book Ladder (COB)</span>
-                <Switch checked={preferences.showDepthProfile} onChange={(c) => onUpdatePreferences({ showDepthProfile: c, depthProfile: { ...preferences.depthProfile, enabled: c } })} />
-              </div>
-
-              <div
-                className="terminal-menu-item"
-                onClick={() => onUpdatePreferences({ showBestBidAskLines: !preferences.showBestBidAskLines })}
-              >
-                <span>Best Bid / Ask Ribbon</span>
-                <Switch checked={preferences.showBestBidAskLines} onChange={(c) => onUpdatePreferences({ showBestBidAskLines: c })} />
-              </div>
-
-              <div
-                className="terminal-menu-item"
-                onClick={() => onUpdatePreferences({ showCurrentPriceLine: !preferences.showCurrentPriceLine })}
-              >
-                <span>Current Price Line</span>
-                <Switch checked={preferences.showCurrentPriceLine} onChange={(c) => onUpdatePreferences({ showCurrentPriceLine: c })} />
+              <div className="terminal-menu-divider" />
+              <div className="terminal-menu-header">Min Trade Size</div>
+              <div style={{ padding: '3px 10px 6px 10px' }}>
+                <select
+                  value={preferences.bubbles.minTradeNotional}
+                  onChange={(e) => onUpdatePreferences({ bubbles: { ...preferences.bubbles, minTradeNotional: Number(e.target.value) } })}
+                  style={{
+                    width: '100%',
+                    background: '#141a27',
+                    border: '1px solid rgba(255, 255, 255, 0.12)',
+                    borderRadius: 4,
+                    color: '#f8fafc',
+                    fontSize: 11,
+                    padding: '3px 6px',
+                    outline: 'none',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <option value={0}>All Trades</option>
+                  <option value={10000}>$10k+</option>
+                  <option value={50000}>$50k+</option>
+                  <option value={250000}>$250k+ (Whales)</option>
+                  <option value={1000000}>$1M+ (Mega Whales)</option>
+                </select>
               </div>
 
               {onOpenBubbleSettings && (
@@ -641,8 +1008,8 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
                       onOpenBubbleSettings();
                     }}
                   >
-                    <span>Trade Bubble Settings...</span>
-                    <Sliders size={12} />
+                    <span>Bubble Settings...</span>
+                    <Sliders size={11} />
                   </div>
                 </>
               )}
@@ -650,814 +1017,192 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
           )}
         </div>
 
-        {/* --- LIQUIDITY DROPDOWN --- */}
+        {/* --- TOOL 6: VWAP DROPDOWN --- */}
         <div style={{ position: 'relative' }}>
           <button
-            className={`terminal-dropdown-btn ${preferences.showHeatmap ? 'active' : ''} ${openMenu === 'liquidity' ? 'open' : ''}`}
-            onClick={() => toggleMenu('liquidity')}
-            title="Heatmap Settings, Liquidity Filter, Color Scales & COB"
+            className={`terminal-dropdown-btn ${preferences.showVwap ? 'active' : ''} ${openMenu === 'vwap' ? 'open' : ''}`}
+            onClick={() => toggleMenu('vwap')}
+            title="Volume-Weighted Average Price & SD Bands"
+            style={{ height: 26, padding: '0 7px', fontSize: 11 }}
           >
-            <Flame size={13} />
-            <span>Liquidity</span>
-            <ChevronDown size={11} style={{ opacity: 0.6 }} />
+            <Activity size={12} style={{ color: preferences.showVwap ? '#38bdf8' : 'inherit' }} />
+            <span>VWAP</span>
+            <ChevronDown size={9} style={{ opacity: 0.6 }} />
           </button>
 
-          {openMenu === 'liquidity' && (
-            <div className="terminal-dropdown-menu" style={{ width: 270 }}>
-              <div className="terminal-menu-header">Heatmap Master</div>
+          {openMenu === 'vwap' && (
+            <div className="terminal-dropdown-menu" style={{ width: 250 }}>
+              <div className="terminal-menu-header">Volume-Weighted Average Price</div>
               <div
                 className="terminal-menu-item"
-                onClick={() => onUpdatePreferences({ showHeatmap: !preferences.showHeatmap })}
+                onClick={() => {
+                  const next = !preferences.showVwap;
+                  onUpdatePreferences({
+                    showVwap: next,
+                    vwap: { ...preferences.vwap, enabled: next },
+                  });
+                }}
               >
-                <span style={{ fontWeight: 600, color: '#f8fafc' }}>Enable Heatmap</span>
-                <Switch checked={preferences.showHeatmap} onChange={(c) => onUpdatePreferences({ showHeatmap: c })} />
-              </div>
-
-              <div className="terminal-menu-divider" />
-              <div className="terminal-menu-header">Liquidity Filter</div>
-
-              <div style={{ padding: '4px 12px 8px 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {/* Filter Mode & Inputs */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
-                  <div style={{ display: 'flex', background: '#141a27', borderRadius: 3, border: '1px solid rgba(255, 255, 255, 0.1)', overflow: 'hidden' }}>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onUpdatePreferences({ heatmap: { ...preferences.heatmap, liquidityFilterMode: 'percentile' } });
-                      }}
-                      style={{
-                        padding: '2px 8px',
-                        border: 'none',
-                        background: preferences.heatmap.liquidityFilterMode === 'percentile' ? 'rgba(0, 180, 216, 0.35)' : 'transparent',
-                        color: preferences.heatmap.liquidityFilterMode === 'percentile' ? '#38bdf8' : '#64748b',
-                        fontSize: 10,
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      %
-                    </button>
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onUpdatePreferences({ heatmap: { ...preferences.heatmap, liquidityFilterMode: 'absolute' } });
-                      }}
-                      style={{
-                        padding: '2px 8px',
-                        border: 'none',
-                        background: preferences.heatmap.liquidityFilterMode === 'absolute' ? 'rgba(0, 180, 216, 0.35)' : 'transparent',
-                        color: preferences.heatmap.liquidityFilterMode === 'absolute' ? '#38bdf8' : '#64748b',
-                        fontSize: 10,
-                        fontWeight: 700,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      QTY
-                    </button>
-                  </div>
-
-                  {preferences.heatmap.liquidityFilterMode === 'percentile' ? (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <input
-                        type="number"
-                        min={0}
-                        max={99}
-                        value={preferences.heatmap.liquidityFilterPercentile ?? 0}
-                        onChange={(e) => {
-                          const val = Math.max(0, Math.min(99, parseInt(e.target.value, 10) || 0));
-                          onUpdatePreferences({ heatmap: { ...preferences.heatmap, liquidityFilterPercentile: val, saturation: val } });
-                        }}
-                        style={{
-                          width: 44,
-                          background: '#141a27',
-                          border: '1px solid rgba(0, 180, 216, 0.35)',
-                          borderRadius: 3,
-                          color: '#38bdf8',
-                          fontSize: 11,
-                          fontWeight: 700,
-                          textAlign: 'center',
-                          padding: '2px 4px',
-                          outline: 'none',
-                        }}
-                      />
-                      <span style={{ fontSize: 10, color: '#64748b' }}>%</span>
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <input
-                        type="number"
-                        min={0}
-                        step={0.1}
-                        value={preferences.heatmap.minLiquidityQty}
-                        onChange={(e) => {
-                          const val = Math.max(0, parseFloat(e.target.value) || 0);
-                          onUpdatePreferences({ heatmap: { ...preferences.heatmap, minLiquidityQty: val } });
-                        }}
-                        style={{
-                          width: 55,
-                          background: '#141a27',
-                          border: '1px solid rgba(0, 180, 216, 0.35)',
-                          borderRadius: 3,
-                          color: '#38bdf8',
-                          fontSize: 11,
-                          fontWeight: 700,
-                          textAlign: 'right',
-                          padding: '2px 4px',
-                          outline: 'none',
-                        }}
-                      />
-                      <span style={{ fontSize: 9.5, color: '#64748b' }}>{baseAsset}</span>
-                    </div>
-                  )}
-
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onUpdatePreferences({ heatmap: { ...preferences.heatmap, liquidityFilterPercentile: 0, saturation: 0, minLiquidityQty: 0 } });
-                    }}
-                    style={{
-                      background: 'rgba(255, 255, 255, 0.05)',
-                      border: '1px solid rgba(255, 255, 255, 0.1)',
-                      borderRadius: 3,
-                      color: '#94a3b8',
-                      fontSize: 10,
-                      fontWeight: 600,
-                      padding: '2px 6px',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    Auto
-                  </button>
-                </div>
-              </div>
-
-              <div
-                className="terminal-menu-item"
-                onClick={() => onUpdatePreferences({ heatmap: { ...preferences.heatmap, removeTradedLiquidity: !preferences.heatmap.removeTradedLiquidity } })}
-              >
-                <span>Active Only (Clear Traded)</span>
+                <span style={{ fontWeight: 600 }}>Enable VWAP</span>
                 <Switch
-                  checked={preferences.heatmap.removeTradedLiquidity}
-                  onChange={(c) => onUpdatePreferences({ heatmap: { ...preferences.heatmap, removeTradedLiquidity: c } })}
-                />
-              </div>
-
-              <div className="terminal-menu-divider" />
-              <div className="terminal-menu-header">Color Palette</div>
-
-              <div style={{ padding: '4px 12px 6px 12px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                  <div
-                    style={{
-                      height: 12,
-                      flex: 1,
-                      borderRadius: 2,
-                      background: colorMapEngine.generateCssGradient(),
-                      border: '1px solid rgba(255, 255, 255, 0.2)',
-                    }}
-                  />
-                  <select
-                    value={preferences.heatmap.colorScale}
-                    onChange={(e) => {
-                      const scale = e.target.value as ColorScaleType;
-                      const updated = { ...preferences.heatmap, colorScale: scale };
-                      colorMapEngine.rebuildLut(scale, updated.colorSaturation ?? 1.0, updated.brightness, updated.opacity);
-                      onUpdatePreferences({ heatmap: updated });
-                    }}
-                    style={{
-                      background: '#141a27',
-                      border: '1px solid rgba(255, 255, 255, 0.12)',
-                      borderRadius: 3,
-                      color: '#38bdf8',
-                      fontSize: 10.5,
-                      fontWeight: 600,
-                      padding: '2px 4px',
-                      outline: 'none',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    <option value="bookmap">Bookmap</option>
-                    <option value="fire">Thermal Fire</option>
-                    <option value="grayscale">Grayscale</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="terminal-menu-divider" />
-              <div className="terminal-menu-header">Order Book Ladder (COB)</div>
-
-              <div
-                className="terminal-menu-item"
-                onClick={() => {
-                  const next = !preferences.showDepthProfile;
-                  onUpdatePreferences({
-                    showDepthProfile: next,
-                    depthProfile: { ...preferences.depthProfile, enabled: next },
-                  });
-                }}
-              >
-                <span>Show Ladder</span>
-                <Switch checked={preferences.showDepthProfile} onChange={(c) => onUpdatePreferences({ showDepthProfile: c, depthProfile: { ...preferences.depthProfile, enabled: c } })} />
-              </div>
-
-              {onOpenDepthProfileSettings && (
-                <div
-                  className="terminal-menu-item action-btn"
-                  onClick={() => {
-                    setOpenMenu(null);
-                    onOpenDepthProfileSettings();
-                  }}
-                >
-                  <span>Ladder Settings...</span>
-                  <Sliders size={12} />
-                </div>
-              )}
-
-              <div className="terminal-menu-divider" />
-              <div
-                className="terminal-menu-item action-btn"
-                onClick={() => {
-                  setOpenMenu(null);
-                  onOpenHeatmapSettings?.();
-                }}
-              >
-                <span>Advanced Heatmap Settings...</span>
-                <Sliders size={12} />
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* --- ORDER FLOW DROPDOWN --- */}
-        <div style={{ position: 'relative' }}>
-          <button
-            className={`terminal-dropdown-btn ${preferences.showFootprint ? 'active' : ''} ${openMenu === 'orderFlow' ? 'open' : ''}`}
-            onClick={() => toggleMenu('orderFlow')}
-            title="Footprint Order Flow, Ticks, Imbalances & Delta"
-          >
-            <Layers size={13} />
-            <span>Order Flow</span>
-            <ChevronDown size={11} style={{ opacity: 0.6 }} />
-          </button>
-
-          {openMenu === 'orderFlow' && (
-            <div className="terminal-dropdown-menu" style={{ width: 260 }}>
-              <div className="terminal-menu-header">Footprint Master</div>
-              <div
-                className="terminal-menu-item"
-                onClick={() => {
-                  const next = !preferences.showFootprint;
-                  onUpdatePreferences({
-                    showFootprint: next,
-                    footprint: { ...preferences.footprint, enabled: next },
-                  });
-                }}
-              >
-                <span style={{ fontWeight: 600, color: '#f8fafc' }}>Enable Footprint</span>
-                <Switch checked={preferences.showFootprint} onChange={(c) => onUpdatePreferences({ showFootprint: c, footprint: { ...preferences.footprint, enabled: c } })} />
-              </div>
-
-              <div className="terminal-menu-divider" />
-              <div className="terminal-menu-header">Price Aggregation (Ticks)</div>
-
-              <div style={{ padding: '4px 12px 6px 12px', display: 'flex', gap: 4 }}>
-                {[1, 2, 3, 5, 10].map((t) => (
-                  <button
-                    key={t}
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onUpdatePreferences({ footprint: { ...preferences.footprint, tickMultiplier: t } });
-                    }}
-                    style={{
-                      flex: 1,
-                      height: 22,
-                      border: 'none',
-                      borderRadius: 3,
-                      background: (preferences.footprint?.tickMultiplier || 1) === t ? 'rgba(0, 180, 216, 0.35)' : '#141a27',
-                      color: (preferences.footprint?.tickMultiplier || 1) === t ? '#38bdf8' : '#94a3b8',
-                      fontSize: 10,
-                      fontWeight: 700,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {t}x
-                  </button>
-                ))}
-              </div>
-
-              <div className="terminal-menu-divider" />
-              <div className="terminal-menu-header">Order Flow Signals</div>
-
-              <div
-                className="terminal-menu-item"
-                onClick={() => onUpdatePreferences({ footprint: { ...preferences.footprint, showImbalances: !preferences.footprint.showImbalances } })}
-              >
-                <span>Bid/Ask Imbalances</span>
-                <Switch checked={preferences.footprint.showImbalances} onChange={(c) => onUpdatePreferences({ footprint: { ...preferences.footprint, showImbalances: c } })} />
-              </div>
-
-              <div
-                className="terminal-menu-item"
-                onClick={() => onUpdatePreferences({ footprint: { ...preferences.footprint, showStackedImbalances: !preferences.footprint.showStackedImbalances } })}
-              >
-                <span>Stacked Imbalances</span>
-                <Switch checked={preferences.footprint.showStackedImbalances} onChange={(c) => onUpdatePreferences({ footprint: { ...preferences.footprint, showStackedImbalances: c } })} />
-              </div>
-
-              <div
-                className="terminal-menu-item"
-                onClick={() => onUpdatePreferences({ footprint: { ...preferences.footprint, showPocHighlight: !preferences.footprint.showPocHighlight } })}
-              >
-                <span>POC Level Highlight</span>
-                <Switch checked={preferences.footprint.showPocHighlight} onChange={(c) => onUpdatePreferences({ footprint: { ...preferences.footprint, showPocHighlight: c } })} />
-              </div>
-
-              <div
-                className="terminal-menu-item"
-                onClick={() => onUpdatePreferences({ footprint: { ...preferences.footprint, showCandleDelta: !preferences.footprint.showCandleDelta } })}
-              >
-                <span>Candle Delta Summary</span>
-                <Switch checked={preferences.footprint.showCandleDelta} onChange={(c) => onUpdatePreferences({ footprint: { ...preferences.footprint, showCandleDelta: c } })} />
-              </div>
-
-              <div className="terminal-menu-divider" />
-              <div className="terminal-menu-header">Panels & Profiles</div>
-
-              <div
-                className="terminal-menu-item"
-                onClick={() => onUpdatePreferences({ footprint: { ...preferences.footprint, showBottomPanel: !preferences.footprint.showBottomPanel } })}
-              >
-                <span>Bottom Volume & Delta Panel</span>
-                <Switch checked={preferences.footprint.showBottomPanel} onChange={(c) => onUpdatePreferences({ footprint: { ...preferences.footprint, showBottomPanel: c } })} />
-              </div>
-
-              <div
-                className="terminal-menu-item"
-                onClick={() => onUpdatePreferences({ footprint: { ...preferences.footprint, showSideProfile: !preferences.footprint.showSideProfile } })}
-              >
-                <span>Side Volume Profile (VR POC)</span>
-                <Switch checked={preferences.footprint.showSideProfile} onChange={(c) => onUpdatePreferences({ footprint: { ...preferences.footprint, showSideProfile: c } })} />
-              </div>
-
-              <div
-                className="terminal-menu-item"
-                onClick={() => onUpdatePreferences({ footprint: { ...preferences.footprint, showDebugInspection: !preferences.footprint.showDebugInspection } })}
-              >
-                <span>Debug Inspection Mode</span>
-                <Switch checked={preferences.footprint.showDebugInspection || false} onChange={(c) => onUpdatePreferences({ footprint: { ...preferences.footprint, showDebugInspection: c } })} />
-              </div>
-
-              <div className="terminal-menu-divider" />
-              <div className="terminal-menu-header">Trade Bubbles</div>
-
-              <div
-                className="terminal-menu-item"
-                onClick={() => {
-                  const next = !preferences.showBubbles;
-                  onUpdatePreferences({
-                    showBubbles: next,
-                    bubbles: { ...preferences.bubbles, enabled: next },
-                  });
-                }}
-              >
-                <span>Show Trade Bubbles</span>
-                <Switch
-                  checked={preferences.showBubbles}
+                  checked={preferences.showVwap}
                   onChange={(c) =>
                     onUpdatePreferences({
-                      showBubbles: c,
-                      bubbles: { ...preferences.bubbles, enabled: c },
+                      showVwap: c,
+                      vwap: { ...preferences.vwap, enabled: c },
                     })
                   }
                 />
               </div>
 
-              <div style={{ padding: '3px 12px 6px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: 11, color: '#94a3b8' }}>Min Trade Size:</span>
+              <div className="terminal-menu-divider" />
+              <div className="terminal-menu-header">Anchor Period</div>
+              <div style={{ padding: '3px 10px 6px 10px' }}>
                 <select
-                  value={
-                    [0, 1000, 10000, 50000, 250000, 500000, 1000000, 5000000].includes(preferences.bubbles.minTradeNotional)
-                      ? preferences.bubbles.minTradeNotional
-                      : 'custom'
-                  }
-                  onChange={(e) => {
-                    if (e.target.value === 'custom') {
-                      setOpenMenu(null);
-                      onOpenBubbleSettings?.();
-                    } else {
-                      onUpdatePreferences({ bubbles: { ...preferences.bubbles, minTradeNotional: parseFloat(e.target.value) } });
-                    }
-                  }}
+                  value={preferences.vwap.anchor}
+                  onChange={(e) => onUpdatePreferences({ vwap: { ...preferences.vwap, anchor: e.target.value as any } })}
                   style={{
+                    width: '100%',
                     background: '#141a27',
-                    border: '1px solid rgba(255, 255, 255, 0.1)',
-                    borderRadius: 3,
-                    color: '#38bdf8',
-                    fontSize: 10.5,
-                    fontWeight: 700,
-                    padding: '2px 4px',
+                    border: '1px solid rgba(255, 255, 255, 0.12)',
+                    borderRadius: 4,
+                    color: '#f8fafc',
+                    fontSize: 11,
+                    padding: '3px 6px',
                     outline: 'none',
                     cursor: 'pointer',
                   }}
                 >
-                  <option value={0}>All ($0)</option>
-                  <option value={1000}>&gt; $1K</option>
-                  <option value={10000}>&gt; $10K</option>
-                  <option value={50000}>&gt; $50K</option>
-                  <option value={250000}>&gt; $250K</option>
-                  <option value={500000}>&gt; $500K</option>
-                  <option value={1000000}>&gt; $1M</option>
-                  <option value={5000000}>&gt; $5M</option>
-                  <option value="custom">Custom...</option>
+                  <option value="session">Session (Daily 00:00 UTC)</option>
+                  <option value="week">Weekly</option>
+                  <option value="month">Monthly</option>
+                  <option value="continuous">Continuous</option>
                 </select>
               </div>
 
-              {onOpenBubbleSettings && (
-                <div
-                  className="terminal-menu-item action-btn"
-                  onClick={() => {
-                    setOpenMenu(null);
-                    onOpenBubbleSettings();
-                  }}
-                >
-                  <span>Trade Bubble Settings...</span>
-                  <Sliders size={12} />
-                </div>
-              )}
+              <div
+                className="terminal-menu-item"
+                onClick={() => onUpdatePreferences({ vwap: { ...preferences.vwap, showBands1: !preferences.vwap.showBands1 } })}
+              >
+                <span>SD 1 Bands (±1σ)</span>
+                <Switch checked={preferences.vwap.showBands1} onChange={(c) => onUpdatePreferences({ vwap: { ...preferences.vwap, showBands1: c } })} />
+              </div>
 
-              <div className="terminal-menu-divider" />
-              {onOpenFootprintSettings && (
-                <div
-                  className="terminal-menu-item action-btn"
-                  onClick={() => {
-                    setOpenMenu(null);
-                    onOpenFootprintSettings();
-                  }}
-                >
-                  <span>Advanced Footprint Settings...</span>
-                  <Sliders size={12} />
-                </div>
+              <div
+                className="terminal-menu-item"
+                onClick={() => onUpdatePreferences({ vwap: { ...preferences.vwap, showBands2: !preferences.vwap.showBands2 } })}
+              >
+                <span>SD 2 Bands (±2σ)</span>
+                <Switch checked={preferences.vwap.showBands2} onChange={(c) => onUpdatePreferences({ vwap: { ...preferences.vwap, showBands2: c } })} />
+              </div>
+
+              {onOpenVwapSettings && (
+                <>
+                  <div className="terminal-menu-divider" />
+                  <div
+                    className="terminal-menu-item action-btn"
+                    onClick={() => {
+                      setOpenMenu(null);
+                      onOpenVwapSettings();
+                    }}
+                  >
+                    <span>VWAP Settings...</span>
+                    <Sliders size={11} />
+                  </div>
+                </>
               )}
             </div>
           )}
         </div>
 
-        {/* --- VIEW & PANELS DROPDOWN --- */}
+        {/* --- TOOL 7: VIEW & LAYOUT DROPDOWN --- */}
         <div style={{ position: 'relative' }}>
           <button
             className={`terminal-dropdown-btn ${openMenu === 'view' ? 'open' : ''}`}
             onClick={() => toggleMenu('view')}
-            title="Panels, Zoom, Fullscreen & Diagnostics"
+            title="View & Layout Controls"
+            style={{ height: 26, padding: '0 7px', fontSize: 11 }}
           >
-            <BarChart3 size={13} />
+            <Settings size={12} />
             <span>View</span>
-            <ChevronDown size={11} style={{ opacity: 0.6 }} />
+            <ChevronDown size={9} style={{ opacity: 0.6 }} />
           </button>
 
           {openMenu === 'view' && (
-            <div className="terminal-dropdown-menu" style={{ width: 230 }}>
-              <div className="terminal-menu-header">Panels Visibility</div>
-
-              <div
-                className="terminal-menu-item"
-                onClick={() => onUpdatePreferences({ footprint: { ...preferences.footprint, showBottomPanel: !preferences.footprint.showBottomPanel } })}
-              >
-                <span>Bottom Delta Panel</span>
-                <Switch checked={preferences.footprint.showBottomPanel} onChange={(c) => onUpdatePreferences({ footprint: { ...preferences.footprint, showBottomPanel: c } })} />
-              </div>
-
-              <div
-                className="terminal-menu-item"
-                onClick={() => onUpdatePreferences({ footprint: { ...preferences.footprint, showSideProfile: !preferences.footprint.showSideProfile } })}
-              >
-                <span>Side Volume Profile</span>
-                <Switch checked={preferences.footprint.showSideProfile} onChange={(c) => onUpdatePreferences({ footprint: { ...preferences.footprint, showSideProfile: c } })} />
-              </div>
-
+            <div className="terminal-dropdown-menu" style={{ width: 220 }}>
+              <div className="terminal-menu-header">Navigation & Zoom</div>
               <div
                 className="terminal-menu-item"
                 onClick={() => {
-                  const next = !preferences.showDepthProfile;
-                  onUpdatePreferences({ showDepthProfile: next, depthProfile: { ...preferences.depthProfile, enabled: next } });
-                }}
-              >
-                <span>Order Book (COB) Ladder</span>
-                <Switch checked={preferences.showDepthProfile} onChange={(c) => onUpdatePreferences({ showDepthProfile: c, depthProfile: { ...preferences.depthProfile, enabled: c } })} />
-              </div>
-
-              <div className="terminal-menu-divider" />
-              <div className="terminal-menu-header">Navigation & Display</div>
-
-              <div
-                className="terminal-menu-item"
-                onClick={() => {
-                  onJumpToLatest();
                   onUpdatePreferences({ autoScrollToLatest: !preferences.autoScrollToLatest });
+                  onJumpToLatest();
                 }}
               >
                 <span>Auto-Follow Price</span>
-                <Switch checked={preferences.autoScrollToLatest} onChange={(c) => onUpdatePreferences({ autoScrollToLatest: c })} />
+                <Switch
+                  checked={preferences.autoScrollToLatest}
+                  onChange={(c) => {
+                    onUpdatePreferences({ autoScrollToLatest: c });
+                    if (c) onJumpToLatest();
+                  }}
+                />
               </div>
 
-              <div
-                className="terminal-menu-item"
-                onClick={() => {
-                  setOpenMenu(null);
-                  onResetView();
-                }}
-              >
-                <span>Reset Chart View</span>
-                <RotateCcw size={12} style={{ opacity: 0.7 }} />
+              <div className="terminal-menu-item action-btn" onClick={onZoomIn}>
+                <span>Zoom In</span>
+                <ZoomIn size={12} />
               </div>
-
-              <div
-                className="terminal-menu-item"
-                onClick={() => {
-                  setOpenMenu(null);
-                  onToggleFullscreen();
-                }}
-              >
-                <span>Fullscreen</span>
+              <div className="terminal-menu-item action-btn" onClick={onZoomOut}>
+                <span>Zoom Out</span>
+                <ZoomOut size={12} />
+              </div>
+              <div className="terminal-menu-item action-btn" onClick={onResetView}>
+                <span>Reset View</span>
+                <RotateCcw size={12} />
+              </div>
+              <div className="terminal-menu-item action-btn" onClick={onToggleFullscreen}>
+                <span>{isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}</span>
                 {isFullscreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
               </div>
 
               <div className="terminal-menu-divider" />
-              <div className="terminal-menu-header">Diagnostics & System</div>
-
+              <div className="terminal-menu-header">Diagnostics & Storage</div>
               <div
-                className="terminal-menu-item"
+                className="terminal-menu-item action-btn"
                 onClick={() => {
                   setOpenMenu(null);
                   onOpenDiagnostics();
                 }}
               >
-                <span>Order Book Diagnostics</span>
-                <Activity size={12} style={{ opacity: 0.7 }} />
+                <span>L2 Diagnostics</span>
+                <Activity size={12} />
               </div>
-
               <div
-                className="terminal-menu-item"
+                className="terminal-menu-item action-btn"
                 onClick={() => {
                   setOpenMenu(null);
                   onOpenCacheModal();
                 }}
               >
-                <span>Historical Cache & Storage</span>
-                <Database size={12} style={{ opacity: 0.7 }} />
+                <span>Cache & Storage</span>
+                <Database size={12} />
               </div>
             </div>
           )}
         </div>
       </div>
 
-      {/* Divider */}
-      <div style={{ width: 1, height: 18, background: 'rgba(255, 255, 255, 0.08)', margin: '0 2px' }} />
-
       {/* ============================================================ */}
-      {/* 3. CENTER-RIGHT QUICK 1-CLICK ACTION TOGGLES                */}
+      {/* 3. STATUS & CLOCK GROUP: IST Clock, Latency & Power          */}
       {/* ============================================================ */}
-      <div className="toolbar-quick-toggles-wrapper" style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 1, minWidth: 0 }}>
-        {/* Quick Toggles: Candles | Heatmap | Footprint | COB | Bubbles */}
-        <div className="toolbar-quick-toggles" style={{ display: 'flex', background: 'rgba(255, 255, 255, 0.03)', borderRadius: 4, padding: 1.5, gap: 1 }}>
-          <button
-            className={`tool-btn ${preferences.showCandles && !preferences.showFootprint ? 'active' : ''}`}
-            onClick={() => {
-              if (preferences.showFootprint) {
-                onUpdatePreferences({
-                  showCandles: true,
-                  showFootprint: false,
-                  footprint: { ...preferences.footprint, enabled: false },
-                  chartMode: preferences.showHeatmap ? 'heatmap' : 'candles',
-                });
-              } else {
-                onUpdatePreferences({
-                  showCandles: !preferences.showCandles,
-                });
-              }
-            }}
-            title="Toggle Candles"
-            style={{ height: 24, padding: '0 6px', fontSize: 11 }}
-          >
-            Candles
-          </button>
-          {/* Heatmap Tool with inline Settings Button */}
-          <div style={{ display: 'inline-flex', alignItems: 'center' }}>
-            <button
-              className={`tool-btn ${preferences.showHeatmap ? 'active' : ''}`}
-              onClick={() => onUpdatePreferences({ showHeatmap: !preferences.showHeatmap })}
-              title="Toggle Heatmap"
-              style={{
-                height: 24,
-                padding: '0 6px',
-                fontSize: 11,
-                borderTopRightRadius: onOpenHeatmapSettings ? 0 : 3,
-                borderBottomRightRadius: onOpenHeatmapSettings ? 0 : 3,
-              }}
-            >
-              Heatmap
-            </button>
-            {onOpenHeatmapSettings && (
-              <button
-                className={`tool-btn ${preferences.showHeatmap ? 'active' : ''}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onOpenHeatmapSettings();
-                }}
-                title="Heatmap Settings"
-                style={{
-                  height: 24,
-                  padding: '0 4px',
-                  borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
-                  borderTopLeftRadius: 0,
-                  borderBottomLeftRadius: 0,
-                }}
-              >
-                <Sliders size={10} />
-              </button>
-            )}
-          </div>
-
-          {/* Footprint Tool with inline Settings Button */}
-          <div style={{ display: 'inline-flex', alignItems: 'center' }}>
-            <button
-              className={`tool-btn ${preferences.showFootprint ? 'active' : ''}`}
-              onClick={() => {
-                const next = !preferences.showFootprint;
-                onUpdatePreferences({
-                  showFootprint: next,
-                  footprint: { ...preferences.footprint, enabled: next },
-                  showCandles: true,
-                  chartMode: next ? 'footprint' : (preferences.showHeatmap ? 'heatmap' : 'candles'),
-                });
-              }}
-              title="Toggle Footprint"
-              style={{
-                height: 24,
-                padding: '0 6px',
-                fontSize: 11,
-                borderTopRightRadius: onOpenFootprintSettings ? 0 : 3,
-                borderBottomRightRadius: onOpenFootprintSettings ? 0 : 3,
-              }}
-            >
-              Footprint
-            </button>
-            {onOpenFootprintSettings && (
-              <button
-                className={`tool-btn ${preferences.showFootprint ? 'active' : ''}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onOpenFootprintSettings();
-                }}
-                title="Footprint Settings"
-                style={{
-                  height: 24,
-                  padding: '0 4px',
-                  borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
-                  borderTopLeftRadius: 0,
-                  borderBottomLeftRadius: 0,
-                }}
-              >
-                <Sliders size={10} />
-              </button>
-            )}
-          </div>
-          {/* COB Tool with inline Settings Button */}
-          <div style={{ display: 'inline-flex', alignItems: 'center' }}>
-            <button
-              className={`tool-btn ${preferences.showDepthProfile ? 'active' : ''}`}
-              onClick={() => {
-                const next = !preferences.showDepthProfile;
-                onUpdatePreferences({
-                  showDepthProfile: next,
-                  depthProfile: { ...preferences.depthProfile, enabled: next },
-                });
-              }}
-              title="Toggle Order Book (COB) Ladder"
-              style={{
-                height: 24,
-                padding: '0 6px',
-                fontSize: 11,
-                borderTopRightRadius: onOpenDepthProfileSettings ? 0 : 3,
-                borderBottomRightRadius: onOpenDepthProfileSettings ? 0 : 3,
-              }}
-            >
-              COB
-            </button>
-            {onOpenDepthProfileSettings && (
-              <button
-                className={`tool-btn ${preferences.showDepthProfile ? 'active' : ''}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onOpenDepthProfileSettings();
-                }}
-                title="Order Book (COB) Settings"
-                style={{
-                  height: 24,
-                  padding: '0 4px',
-                  borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
-                  borderTopLeftRadius: 0,
-                  borderBottomLeftRadius: 0,
-                }}
-              >
-                <Sliders size={10} />
-              </button>
-            )}
-          </div>
-          <div style={{ display: 'inline-flex', alignItems: 'center' }}>
-            <button
-              className={`tool-btn ${preferences.showBubbles ? 'active' : ''}`}
-              onClick={() => {
-                const next = !preferences.showBubbles;
-                onUpdatePreferences({
-                  showBubbles: next,
-                  bubbles: { ...preferences.bubbles, enabled: next },
-                });
-              }}
-              title="Toggle Trade Bubbles"
-              style={{
-                height: 24,
-                padding: '0 6px',
-                fontSize: 11,
-                borderTopRightRadius: onOpenBubbleSettings ? 0 : 3,
-                borderBottomRightRadius: onOpenBubbleSettings ? 0 : 3,
-              }}
-            >
-              Bubbles
-            </button>
-            {onOpenBubbleSettings && (
-              <button
-                className={`tool-btn ${preferences.showBubbles ? 'active' : ''}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onOpenBubbleSettings();
-                }}
-                title="Trade Bubble Settings"
-                style={{
-                  height: 24,
-                  padding: '0 4px',
-                  borderLeft: '1px solid rgba(255, 255, 255, 0.1)',
-                  borderTopLeftRadius: 0,
-                  borderBottomLeftRadius: 0,
-                }}
-              >
-                <Sliders size={10} />
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Quick Zoom, Reset, Follow & Fullscreen Buttons */}
-        <div className="toolbar-zoom-group" style={{ display: 'flex', alignItems: 'center', background: 'rgba(255, 255, 255, 0.03)', borderRadius: 4, padding: 1.5, gap: 1 }}>
-          <button className="tool-btn" title="Zoom In" onClick={onZoomIn} style={{ height: 24, width: 24, padding: 0 }}>
-            <ZoomIn size={12} />
-          </button>
-          <button className="tool-btn" title="Zoom Out" onClick={onZoomOut} style={{ height: 24, width: 24, padding: 0 }}>
-            <ZoomOut size={12} />
-          </button>
-          <button className="tool-btn" title="Reset View" onClick={onResetView} style={{ height: 24, width: 24, padding: 0 }}>
-            <RotateCcw size={12} />
-          </button>
-          <button
-            className={`tool-btn ${preferences.autoScrollToLatest ? 'active' : ''}`}
-            title="Auto Follow Latest Price"
-            onClick={() => {
-              onJumpToLatest();
-              onUpdatePreferences({ autoScrollToLatest: !preferences.autoScrollToLatest });
-            }}
-            style={{ height: 24, width: 24, padding: 0 }}
-          >
-            <ArrowRightCircle size={12} />
-          </button>
-          <button className="tool-btn" title="Toggle Fullscreen" onClick={onToggleFullscreen} style={{ height: 24, width: 24, padding: 0 }}>
-            {isFullscreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
-          </button>
-        </div>
-      </div>
-
-      {/* ============================================================ */}
-      {/* 4. STATUS & CLOCK GROUP: IST Clock, Exchange Latency & Power */}
-      {/* ============================================================ */}
-      <div
-        className="toolbar-status-group"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          flexShrink: 0,
-          marginLeft: 'auto',
-          paddingRight: 4,
-        }}
-      >
+      <div className="toolbar-status-group">
         {/* Indian Standard Time (Asia/Kolkata) */}
         <div
+          className="toolbar-clock-container"
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: 4,
+            gap: 3,
             padding: '2px 6px',
             borderRadius: 4,
             background: 'rgba(255, 153, 51, 0.08)',
@@ -1471,7 +1216,8 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
           title="Terminal Time: Asia/Kolkata (IST, UTC+5:30)"
         >
           <span style={{ fontSize: 10 }}>🇮🇳</span>
-          <span>{kolkataTime || '--:--:--'}</span>
+          <span>{kolkataTimeHhMm || '--:--'}</span>
+          <span className="toolbar-clock-seconds">{kolkataTimeSeconds}</span>
           <span style={{ fontSize: 8.5, color: '#f59e0b', fontWeight: 600 }}>IST</span>
         </div>
 
@@ -1503,19 +1249,26 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
             }}
           />
           <span>{badge.label}</span>
-          <span style={{
-            color: (latencyMetrics.orderBookAgeMs > 0 && latencyMetrics.orderBookAgeMs <= 120)
-              ? '#00e676'
-              : (latencyMetrics.orderBookAgeMs <= 250 ? '#ffb300' : '#f87171'),
-            fontWeight: 500,
-          }}>
+          <span
+            style={{
+              color:
+                latencyMetrics.orderBookAgeMs > 0 && latencyMetrics.orderBookAgeMs <= 120
+                  ? '#00e676'
+                  : latencyMetrics.orderBookAgeMs <= 250
+                  ? '#ffb300'
+                  : '#f87171',
+              fontWeight: 500,
+            }}
+          >
             {latencyMetrics.orderBookAgeMs > 0
               ? `${latencyMetrics.orderBookAgeMs}ms`
-              : (latencyMetrics.wsPingMs > 0 ? `${latencyMetrics.wsPingMs}ms` : '--')}
+              : latencyMetrics.wsPingMs > 0
+              ? `${latencyMetrics.wsPingMs}ms`
+              : '--'}
           </span>
         </div>
 
-        {/* Dedicated Single Power Button */}
+        {/* Dedicated Power Off / Lock Button */}
         {onLockTerminal && (
           <button
             className="tool-btn"
@@ -1535,10 +1288,9 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
               cursor: 'pointer',
               boxShadow: '0 0 8px rgba(255, 45, 85, 0.25)',
               flexShrink: 0,
-              marginLeft: 2,
             }}
           >
-            <Power size={12} />
+            <Power size={11} />
           </button>
         )}
       </div>

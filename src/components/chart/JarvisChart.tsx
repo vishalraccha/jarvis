@@ -14,7 +14,10 @@ import {
   CandlestickData,
   UTCTimestamp,
   CandlestickSeries,
+  LineSeries,
+  LineStyle,
 } from 'lightweight-charts';
+import { VwapEngine } from '../../services/indicators/VwapEngine';
 import { HeatmapCanvas } from './HeatmapCanvas';
 import { TradeBubblesCanvas } from './TradeBubblesCanvas';
 import { DepthProfileCanvas } from './DepthProfileCanvas';
@@ -119,6 +122,12 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
       Array<{ bubble: TradeBubble; cx: number; cy: number; radius: number }>
     >([]);
 
+    const vwapSeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+    const upper1SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+    const lower1SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+    const upper2SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+    const lower2SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+
     // 1. Initialize Lightweight Chart
     useEffect(() => {
       if (!chartHostRef.current || !containerRef.current) return;
@@ -196,7 +205,7 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
           },
         },
         handleScroll: {
-          mouseWheel: false,
+          mouseWheel: true,
           pressedMouseMove: true,
           horzTouchDrag: true,
           vertTouchDrag: false,
@@ -228,6 +237,71 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
         lastValueVisible: true,
       });
 
+      // VWAP Center Line and Standard Deviation Bands (SD 1 and SD 2)
+      const vwapCfg = preferences.vwap;
+      const isVwapActive = preferences.showVwap && vwapCfg?.enabled !== false;
+      const bandStyle = VwapEngine.getLineStyle(vwapCfg?.bandsStyle);
+
+      const vwapSeries = tvChart.addSeries(LineSeries, {
+        color: vwapCfg?.vwapColor || '#ff9f1c',
+        lineWidth: (vwapCfg?.lineWidth || 2) as any,
+        priceLineVisible: false,
+        lastValueVisible: true,
+        crosshairMarkerVisible: true,
+        title: 'VWAP',
+        visible: isVwapActive,
+      });
+
+      const upper1Series = tvChart.addSeries(LineSeries, {
+        color: vwapCfg?.band1Color || '#38bdf8',
+        lineWidth: 1,
+        lineStyle: bandStyle,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+        title: 'VWAP +1σ',
+        visible: isVwapActive && vwapCfg?.showBands1 !== false,
+      });
+
+      const lower1Series = tvChart.addSeries(LineSeries, {
+        color: vwapCfg?.band1Color || '#38bdf8',
+        lineWidth: 1,
+        lineStyle: bandStyle,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+        title: 'VWAP -1σ',
+        visible: isVwapActive && vwapCfg?.showBands1 !== false,
+      });
+
+      const upper2Series = tvChart.addSeries(LineSeries, {
+        color: vwapCfg?.band2Color || '#a855f7',
+        lineWidth: 1,
+        lineStyle: LineStyle.Dotted,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+        title: 'VWAP +2σ',
+        visible: isVwapActive && vwapCfg?.showBands2 !== false,
+      });
+
+      const lower2Series = tvChart.addSeries(LineSeries, {
+        color: vwapCfg?.band2Color || '#a855f7',
+        lineWidth: 1,
+        lineStyle: LineStyle.Dotted,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+        title: 'VWAP -2σ',
+        visible: isVwapActive && vwapCfg?.showBands2 !== false,
+      });
+
+      vwapSeriesRef.current = vwapSeries;
+      upper1SeriesRef.current = upper1Series;
+      lower1SeriesRef.current = lower1Series;
+      upper2SeriesRef.current = upper2Series;
+      lower2SeriesRef.current = lower2Series;
+
       setChart(tvChart);
       setSeries(candleSeries);
 
@@ -245,6 +319,11 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
 
       return () => {
         resizeObserver.disconnect();
+        vwapSeriesRef.current = null;
+        upper1SeriesRef.current = null;
+        lower1SeriesRef.current = null;
+        upper2SeriesRef.current = null;
+        lower2SeriesRef.current = null;
         tvChart.remove();
       };
     }, []);
@@ -355,6 +434,80 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
       currentCandleRef.current = null;
     }, [preferences.timeframe, preferences.symbol]);
 
+    // 2.5. Synchronize Volume-Weighted Average Price (VWAP) and SD 1 & SD 2 Bands
+    const refreshVwap = useCallback((candles: Candle[]) => {
+      const vSeries = vwapSeriesRef.current;
+      const u1Series = upper1SeriesRef.current;
+      const l1Series = lower1SeriesRef.current;
+      const u2Series = upper2SeriesRef.current;
+      const l2Series = lower2SeriesRef.current;
+      if (!vSeries || !u1Series || !l1Series || !u2Series || !l2Series) return;
+
+      const isVwapActive = preferences.showVwap && preferences.vwap?.enabled !== false;
+      if (!isVwapActive || !candles || candles.length === 0) {
+        vSeries.applyOptions({ visible: false });
+        u1Series.applyOptions({ visible: false });
+        l1Series.applyOptions({ visible: false });
+        u2Series.applyOptions({ visible: false });
+        l2Series.applyOptions({ visible: false });
+        return;
+      }
+
+      const vwapCfg = preferences.vwap;
+      const bandStyle = VwapEngine.getLineStyle(vwapCfg.bandsStyle);
+
+      vSeries.applyOptions({
+        visible: true,
+        color: vwapCfg.vwapColor || '#ff9f1c',
+        lineWidth: (vwapCfg.lineWidth || 2) as any,
+      });
+
+      const showBands1 = vwapCfg.showBands1 !== false;
+      u1Series.applyOptions({
+        visible: showBands1,
+        color: vwapCfg.band1Color || '#38bdf8',
+        lineStyle: bandStyle,
+      });
+      l1Series.applyOptions({
+        visible: showBands1,
+        color: vwapCfg.band1Color || '#38bdf8',
+        lineStyle: bandStyle,
+      });
+
+      const showBands2 = vwapCfg.showBands2 !== false;
+      u2Series.applyOptions({
+        visible: showBands2,
+        color: vwapCfg.band2Color || '#a855f7',
+        lineStyle: LineStyle.Dotted,
+      });
+      l2Series.applyOptions({
+        visible: showBands2,
+        color: vwapCfg.band2Color || '#a855f7',
+        lineStyle: LineStyle.Dotted,
+      });
+
+      const vwapResult = VwapEngine.calculate(candles, vwapCfg);
+      vSeries.setData(vwapResult.vwap);
+      if (showBands1) {
+        u1Series.setData(vwapResult.upper1);
+        l1Series.setData(vwapResult.lower1);
+      } else {
+        u1Series.setData([]);
+        l1Series.setData([]);
+      }
+      if (showBands2) {
+        u2Series.setData(vwapResult.upper2);
+        l2Series.setData(vwapResult.lower2);
+      } else {
+        u2Series.setData([]);
+        l2Series.setData([]);
+      }
+    }, [preferences.showVwap, preferences.vwap]);
+
+    useEffect(() => {
+      refreshVwap(allCandlesRef.current);
+    }, [refreshVwap]);
+
     // 3. Expose chart manipulation methods to parent
     useImperativeHandle(ref, () => ({
       zoomIn: () => {
@@ -405,6 +558,11 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
             series.setData([]);
           } catch {}
         }
+        vwapSeriesRef.current?.setData([]);
+        upper1SeriesRef.current?.setData([]);
+        lower1SeriesRef.current?.setData([]);
+        upper2SeriesRef.current?.setData([]);
+        lower2SeriesRef.current?.setData([]);
       },
       updateCandles: (candles: Candle[]) => {
         if (!series) return;
@@ -499,6 +657,8 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
             }
           }
         }
+
+        refreshVwap(cleanCandles);
       },
       updateLiveCandle: (candle: Candle) => {
         if (!series || !candle) return;
