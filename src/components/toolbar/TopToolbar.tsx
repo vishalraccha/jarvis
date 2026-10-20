@@ -1,7 +1,7 @@
 /**
  * Professional Trading Terminal Top Toolbar
  * JARVIS HEATMAP TERMINAL - RESPONSIVE MODULAR UI
- * Each tool has a dedicated compact dropdown, small exchange/symbol buttons, and zero-overlap layout.
+ * All tools grouped into a single unified Tools dropdown, compact exchange/symbol selectors, and zero-overlap layout.
  */
 
 import React, { useState, useRef, useEffect } from 'react';
@@ -17,19 +17,19 @@ import {
   ZoomOut,
   Sliders,
   Activity,
-  ArrowRightCircle,
   Database,
   Layers,
   ChevronDown,
   Settings,
   Power,
   Check,
+  GitCommit,
+  Zap,
 } from 'lucide-react';
 import { CandleTimeframe, ConnectionState, ExchangeId, LatencyMetrics } from '../../types/market';
 import { TerminalPreferences } from '../../types/settings';
 import { ChartMode } from '../../types/footprint';
 import { ColorMapEngine } from '../../services/heatmap/ColorMap';
-import { ColorScaleType } from '../../types/heatmap';
 import { InstrumentRegistry } from '../../services/market/InstrumentRegistry';
 import { MarketSessionService } from '../../services/market/MarketSessionService';
 
@@ -64,34 +64,118 @@ interface SwitchProps {
 }
 
 const Switch: React.FC<SwitchProps> = ({ checked, onChange, title }) => (
-  <label className="terminal-switch" title={title} onClick={(e) => e.stopPropagation()}>
+  <label
+    className="terminal-switch"
+    title={title}
+    onClick={(e) => {
+      e.stopPropagation();
+      onChange(!checked);
+    }}
+  >
     <input
       type="checkbox"
       checked={checked}
-      onChange={(e) => onChange(e.target.checked)}
+      readOnly
+      style={{ pointerEvents: 'none' }}
     />
-    <span className="terminal-switch-slider" />
+    <span className="terminal-switch-slider" style={{ pointerEvents: 'none' }} />
   </label>
 );
 
-type MenuType =
-  | 'exchange'
-  | 'symbol'
-  | 'timeframe'
-  | 'candles'
-  | 'heatmap'
-  | 'footprint'
-  | 'cob'
-  | 'bubbles'
-  | 'vwap'
-  | 'view';
+interface ToolItemProps {
+  icon: React.ReactNode;
+  title: string;
+  subtitle?: string;
+  active: boolean;
+  onToggle: () => void;
+  onOpenSettings?: () => void;
+  settingsTitle?: string;
+}
+
+const ToolItem: React.FC<ToolItemProps> = ({
+  icon,
+  title,
+  subtitle,
+  active,
+  onToggle,
+  onOpenSettings,
+  settingsTitle,
+}) => (
+  <div
+    className="terminal-menu-item"
+    onClick={onToggle}
+    style={{
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: '7px 12px',
+      cursor: 'pointer',
+      background: active ? 'rgba(0, 180, 216, 0.08)' : 'transparent',
+      borderLeft: active ? '2px solid #00b4d8' : '2px solid transparent',
+      transition: 'all 0.12s ease',
+    }}
+  >
+    <div style={{ display: 'flex', alignItems: 'center', gap: 9 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: 18, height: 18, flexShrink: 0 }}>
+        {icon}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+        <span style={{ fontSize: 11.5, fontWeight: active ? 700 : 500, color: active ? '#ffffff' : '#cbd5e1' }}>
+          {title}
+        </span>
+        {subtitle && (
+          <span style={{ fontSize: 9.5, color: '#64748b', fontWeight: 500 }}>
+            {subtitle}
+          </span>
+        )}
+      </div>
+    </div>
+
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }} onClick={(e) => e.stopPropagation()}>
+      {onOpenSettings && (
+        <button
+          type="button"
+          title={settingsTitle || `Open ${title} Settings`}
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenSettings();
+          }}
+          style={{
+            background: 'rgba(255, 255, 255, 0.05)',
+            border: '1px solid rgba(255, 255, 255, 0.12)',
+            borderRadius: 4,
+            color: active ? '#00b4d8' : '#64748b',
+            padding: '3px 6px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            cursor: 'pointer',
+            transition: 'all 0.12s ease',
+          }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLElement).style.background = 'rgba(0, 180, 216, 0.2)';
+            (e.currentTarget as HTMLElement).style.color = '#38bdf8';
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLElement).style.background = 'rgba(255, 255, 255, 0.05)';
+            (e.currentTarget as HTMLElement).style.color = active ? '#00b4d8' : '#64748b';
+          }}
+        >
+          <Sliders size={12} />
+        </button>
+      )}
+      <Switch checked={active} onChange={onToggle} />
+    </div>
+  </div>
+);
+
+type MenuType = 'exchange' | 'symbol' | 'timeframe' | 'tools' | 'view';
 
 export const TopToolbar: React.FC<TopToolbarProps> = ({
   preferences,
   onUpdatePreferences,
   connectionState,
   latencyMetrics,
-  colorMapEngine,
   onZoomIn,
   onZoomOut,
   onResetView,
@@ -244,6 +328,17 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
     onUpdatePreferences(patch);
   };
 
+  const activeToolsCount = [
+    preferences.showCandles,
+    preferences.showHeatmap,
+    preferences.showDepthProfile,
+    preferences.showFootprint,
+    preferences.showBubbles,
+    preferences.showVwap,
+    preferences.showBestBidAskLines,
+    preferences.showLiquidityShifts,
+  ].filter(Boolean).length;
+
   return (
     <header
       ref={toolbarRef}
@@ -258,7 +353,8 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
         userSelect: 'none',
         gap: 6,
         position: 'relative',
-        zIndex: 100,
+        zIndex: 99999,
+        overflow: 'visible',
         width: '100%',
         maxWidth: '100%',
         boxSizing: 'border-box',
@@ -578,35 +674,214 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
       <div style={{ width: 1, height: 18, background: 'rgba(255, 255, 255, 0.08)', margin: '0 2px', flexShrink: 0 }} />
 
       {/* ============================================================ */}
-      {/* 2. DEDICATED TOOL DROPDOWNS: Candles, Heatmap, COB, Footprint, Bubbles, VWAP, View */}
+      {/* 2. CENTER GROUP: SINGLE UNIFIED TOOLS DROPDOWN + VIEW MENU   */}
       {/* ============================================================ */}
-      <div className="toolbar-tools-group">
-        {/* --- TOOL 1: CANDLES DROPDOWN --- */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+        {/* --- SINGLE UNIFIED TOOLS & INDICATORS DROPDOWN --- */}
         <div style={{ position: 'relative' }}>
           <button
-            className={`terminal-dropdown-btn ${preferences.showCandles ? 'active' : ''} ${openMenu === 'candles' ? 'open' : ''}`}
-            onClick={() => toggleMenu('candles')}
-            title="Candlestick Chart & Modes"
+            className={`terminal-dropdown-btn ${activeToolsCount > 0 ? 'active' : ''} ${openMenu === 'tools' ? 'open' : ''}`}
+            onClick={() => toggleMenu('tools')}
+            title="Trading Tools, Overlays & Indicators"
+            style={{ height: 26, padding: '0 8px', fontSize: 11, gap: 5 }}
+          >
+            <Sliders size={12} style={{ color: activeToolsCount > 0 ? '#38bdf8' : 'inherit' }} />
+            <span style={{ fontWeight: 700 }}>Tools</span>
+            <span
+              style={{
+                fontSize: 9.5,
+                fontWeight: 700,
+                padding: '0 5px',
+                borderRadius: 10,
+                background: activeToolsCount > 0 ? 'rgba(0, 180, 216, 0.28)' : 'rgba(255, 255, 255, 0.08)',
+                color: activeToolsCount > 0 ? '#38bdf8' : '#94a3b8',
+              }}
+            >
+              {activeToolsCount}
+            </span>
+            <ChevronDown size={10} style={{ opacity: 0.6 }} />
+          </button>
+
+          {openMenu === 'tools' && (
+            <div className="terminal-dropdown-menu" style={{ width: 310, left: 0 }}>
+              <div className="terminal-menu-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <span>Trading Tools & Indicators</span>
+                <span style={{ fontSize: 9, color: '#38bdf8' }}>{activeToolsCount} Active</span>
+              </div>
+
+              {/* 1. VWAP + SD Bands */}
+              <ToolItem
+                icon={<Activity size={14} style={{ color: '#ff9f1c' }} />}
+                title="VWAP + SD Bands"
+                subtitle={`Anchor: ${preferences.vwap.anchor.toUpperCase()} • Multipliers: ±${preferences.vwap.multiplier1}σ, ±${preferences.vwap.multiplier2}σ`}
+                active={preferences.showVwap}
+                onToggle={() => {
+                  const next = !preferences.showVwap;
+                  onUpdatePreferences({
+                    showVwap: next,
+                    vwap: { ...preferences.vwap, enabled: next },
+                  });
+                }}
+                onOpenSettings={
+                  onOpenVwapSettings
+                    ? () => {
+                        setOpenMenu(null);
+                        onOpenVwapSettings();
+                      }
+                    : undefined
+                }
+                settingsTitle="VWAP Settings (Anchor, Multipliers, Colors, Styles)"
+              />
+
+              {/* 2. Liquidity Heatmap */}
+              <ToolItem
+                icon={<Flame size={14} style={{ color: '#00b4d8' }} />}
+                title="Liquidity Heatmap"
+                subtitle={`Palette: ${preferences.heatmap.colorScale} • Resting L2 Depth`}
+                active={preferences.showHeatmap}
+                onToggle={() => {
+                  onUpdatePreferences({ showHeatmap: !preferences.showHeatmap });
+                }}
+                onOpenSettings={
+                  onOpenHeatmapSettings
+                    ? () => {
+                        setOpenMenu(null);
+                        onOpenHeatmapSettings();
+                      }
+                    : undefined
+                }
+                settingsTitle="Heatmap Settings (Palette, Contrast, Cutoff)"
+              />
+
+              {/* 3. Order Book Ladder (COB) */}
+              <ToolItem
+                icon={<Layers size={14} style={{ color: '#fbbf24' }} />}
+                title="Order Book Ladder (COB)"
+                subtitle={`Depth: ${preferences.depthProfile.maxLevels} levels • Limit Walls`}
+                active={preferences.showDepthProfile}
+                onToggle={() => {
+                  const next = !preferences.showDepthProfile;
+                  onUpdatePreferences({
+                    showDepthProfile: next,
+                    depthProfile: { ...preferences.depthProfile, enabled: next },
+                  });
+                }}
+                onOpenSettings={
+                  onOpenDepthProfileSettings
+                    ? () => {
+                        setOpenMenu(null);
+                        onOpenDepthProfileSettings();
+                      }
+                    : undefined
+                }
+                settingsTitle="COB Settings (Depth, Colors, Cumulative)"
+              />
+
+              {/* 4. Footprint Order Flow */}
+              <ToolItem
+                icon={<BarChart3 size={14} style={{ color: '#a855f7' }} />}
+                title="Footprint Order Flow"
+                subtitle={`Tick: ${preferences.footprint.tickMultiplier}x • Bid x Ask Clusters`}
+                active={preferences.showFootprint}
+                onToggle={() => {
+                  const next = !preferences.showFootprint;
+                  onUpdatePreferences({
+                    showFootprint: next,
+                    footprint: { ...preferences.footprint, enabled: next },
+                    showCandles: true,
+                    chartMode: next ? 'footprint' : (preferences.showHeatmap ? 'heatmap' : 'candles'),
+                  });
+                }}
+                onOpenSettings={
+                  onOpenFootprintSettings
+                    ? () => {
+                        setOpenMenu(null);
+                        onOpenFootprintSettings();
+                      }
+                    : undefined
+                }
+                settingsTitle="Footprint Settings (Imbalance, Ticks, POC)"
+              />
+
+              {/* 5. Trade Volume Bubbles */}
+              <ToolItem
+                icon={<CircleDot size={14} style={{ color: '#38bdf8' }} />}
+                title="Trade Volume Bubbles"
+                subtitle={`Min: ${preferences.bubbles.minTradeNotional === 0 ? 'All Trades' : '$' + (preferences.bubbles.minTradeNotional / 1000) + 'k+'} • Market Orders`}
+                active={preferences.showBubbles}
+                onToggle={() => {
+                  const next = !preferences.showBubbles;
+                  onUpdatePreferences({
+                    showBubbles: next,
+                    bubbles: { ...preferences.bubbles, enabled: next },
+                  });
+                }}
+                onOpenSettings={
+                  onOpenBubbleSettings
+                    ? () => {
+                        setOpenMenu(null);
+                        onOpenBubbleSettings();
+                      }
+                    : undefined
+                }
+                settingsTitle="Bubble Settings (Min Size, Scaling, Colors)"
+              />
+
+              {/* 6. Candlesticks */}
+              <ToolItem
+                icon={<CandlestickChart size={14} style={{ color: '#22c55e' }} />}
+                title="Candlesticks"
+                subtitle={`Mode: ${preferences.chartMode || 'candles'}`}
+                active={preferences.showCandles}
+                onToggle={() => {
+                  onUpdatePreferences({ showCandles: !preferences.showCandles });
+                }}
+              />
+
+              <div className="terminal-menu-divider" />
+              <div className="terminal-menu-header">Overlays & Ribbons</div>
+
+              {/* 7. Best Bid / Ask Ribbon */}
+              <ToolItem
+                icon={<GitCommit size={14} style={{ color: '#00e676' }} />}
+                title="Best Bid / Ask Ribbon"
+                subtitle="Live L1 BBO Price Lines"
+                active={preferences.showBestBidAskLines}
+                onToggle={() => {
+                  onUpdatePreferences({ showBestBidAskLines: !preferences.showBestBidAskLines });
+                }}
+              />
+
+              {/* 8. Liquidity Shift Highlights */}
+              <ToolItem
+                icon={<Zap size={14} style={{ color: '#f59e0b' }} />}
+                title="Liquidity Shift Highlights"
+                subtitle="Detect Resting Order Adds / Pulls"
+                active={preferences.showLiquidityShifts}
+                onToggle={() => {
+                  onUpdatePreferences({ showLiquidityShifts: !preferences.showLiquidityShifts });
+                }}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* --- VIEW & LAYOUT DROPDOWN --- */}
+        <div style={{ position: 'relative' }}>
+          <button
+            className={`terminal-dropdown-btn ${openMenu === 'view' ? 'open' : ''}`}
+            onClick={() => toggleMenu('view')}
+            title="View & Layout Controls"
             style={{ height: 26, padding: '0 7px', fontSize: 11 }}
           >
-            <CandlestickChart size={12} />
-            <span>Candles</span>
+            <Settings size={12} />
+            <span>View</span>
             <ChevronDown size={9} style={{ opacity: 0.6 }} />
           </button>
 
-          {openMenu === 'candles' && (
-            <div className="terminal-dropdown-menu" style={{ width: 230 }}>
-              <div className="terminal-menu-header">Candlestick Chart</div>
-              <div
-                className="terminal-menu-item"
-                onClick={() => onUpdatePreferences({ showCandles: !preferences.showCandles })}
-              >
-                <span style={{ fontWeight: 600 }}>Show Candles</span>
-                <Switch checked={preferences.showCandles} onChange={(c) => onUpdatePreferences({ showCandles: c })} />
-              </div>
-
-              <div className="terminal-menu-divider" />
-              <div className="terminal-menu-header">Primary Mode</div>
+          {openMenu === 'view' && (
+            <div className="terminal-dropdown-menu" style={{ width: 220 }}>
+              <div className="terminal-menu-header">Chart Display Mode</div>
               <div style={{ padding: '4px 10px 6px 10px' }}>
                 <select
                   value={preferences.chartMode || 'candles'}
@@ -643,493 +918,6 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
               </div>
 
               <div className="terminal-menu-divider" />
-              <div
-                className="terminal-menu-item"
-                onClick={() => onUpdatePreferences({ showBestBidAskLines: !preferences.showBestBidAskLines })}
-              >
-                <span>Best Bid / Ask Ribbon</span>
-                <Switch checked={preferences.showBestBidAskLines} onChange={(c) => onUpdatePreferences({ showBestBidAskLines: c })} />
-              </div>
-              <div
-                className="terminal-menu-item action-btn"
-                onClick={() => {
-                  setOpenMenu(null);
-                  onResetView();
-                }}
-              >
-                <span>Reset Chart View</span>
-                <RotateCcw size={11} />
-              </div>
-            </div>
-          )}
-        </div>
-
-        {/* --- TOOL 2: HEATMAP DROPDOWN --- */}
-        <div style={{ position: 'relative' }}>
-          <button
-            className={`terminal-dropdown-btn ${preferences.showHeatmap ? 'active' : ''} ${openMenu === 'heatmap' ? 'open' : ''}`}
-            onClick={() => toggleMenu('heatmap')}
-            title="Liquidity Heatmap Settings"
-            style={{ height: 26, padding: '0 7px', fontSize: 11 }}
-          >
-            <Flame size={12} style={{ color: preferences.showHeatmap ? '#38bdf8' : 'inherit' }} />
-            <span>Heatmap</span>
-            <ChevronDown size={9} style={{ opacity: 0.6 }} />
-          </button>
-
-          {openMenu === 'heatmap' && (
-            <div className="terminal-dropdown-menu" style={{ width: 250 }}>
-              <div className="terminal-menu-header">Liquidity Heatmap</div>
-              <div
-                className="terminal-menu-item"
-                onClick={() => onUpdatePreferences({ showHeatmap: !preferences.showHeatmap })}
-              >
-                <span style={{ fontWeight: 600 }}>Enable Heatmap</span>
-                <Switch checked={preferences.showHeatmap} onChange={(c) => onUpdatePreferences({ showHeatmap: c })} />
-              </div>
-
-              <div className="terminal-menu-divider" />
-              <div className="terminal-menu-header">Color Palette</div>
-              <div style={{ padding: '3px 10px 6px 10px' }}>
-                <select
-                  value={preferences.heatmap.colorScale}
-                  onChange={(e) => {
-                    const scale = e.target.value as ColorScaleType;
-                    colorMapEngine.rebuildLut(scale);
-                    onUpdatePreferences({ heatmap: { ...preferences.heatmap, colorScale: scale } });
-                  }}
-                  style={{
-                    width: '100%',
-                    background: '#141a27',
-                    border: '1px solid rgba(255, 255, 255, 0.12)',
-                    borderRadius: 4,
-                    color: '#f8fafc',
-                    fontSize: 11,
-                    padding: '3px 6px',
-                    outline: 'none',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <option value="bookmap">Bookmap Classic</option>
-                  <option value="fire">Fire / Thermal</option>
-                  <option value="grayscale">Grayscale</option>
-                  <option value="custom">Custom Heat</option>
-                </select>
-              </div>
-
-              <div
-                className="terminal-menu-item"
-                onClick={() => onUpdatePreferences({ showLiquidityShifts: !preferences.showLiquidityShifts })}
-              >
-                <span>Liquidity Shifts</span>
-                <Switch checked={preferences.showLiquidityShifts} onChange={(c) => onUpdatePreferences({ showLiquidityShifts: c })} />
-              </div>
-
-              {onOpenHeatmapSettings && (
-                <>
-                  <div className="terminal-menu-divider" />
-                  <div
-                    className="terminal-menu-item action-btn"
-                    onClick={() => {
-                      setOpenMenu(null);
-                      onOpenHeatmapSettings();
-                    }}
-                  >
-                    <span>Heatmap Settings...</span>
-                    <Sliders size={11} />
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* --- TOOL 3: COB (ORDER BOOK LADDER) DROPDOWN --- */}
-        <div style={{ position: 'relative' }}>
-          <button
-            className={`terminal-dropdown-btn ${preferences.showDepthProfile ? 'active' : ''} ${openMenu === 'cob' ? 'open' : ''}`}
-            onClick={() => toggleMenu('cob')}
-            title="Order Book (COB) Ladder"
-            style={{ height: 26, padding: '0 7px', fontSize: 11 }}
-          >
-            <Layers size={12} style={{ color: preferences.showDepthProfile ? '#38bdf8' : 'inherit' }} />
-            <span>COB</span>
-            <ChevronDown size={9} style={{ opacity: 0.6 }} />
-          </button>
-
-          {openMenu === 'cob' && (
-            <div className="terminal-dropdown-menu" style={{ width: 230 }}>
-              <div className="terminal-menu-header">Order Book Ladder (COB)</div>
-              <div
-                className="terminal-menu-item"
-                onClick={() => {
-                  const next = !preferences.showDepthProfile;
-                  onUpdatePreferences({
-                    showDepthProfile: next,
-                    depthProfile: { ...preferences.depthProfile, enabled: next },
-                  });
-                }}
-              >
-                <span style={{ fontWeight: 600 }}>Show COB Ladder</span>
-                <Switch
-                  checked={preferences.showDepthProfile}
-                  onChange={(c) =>
-                    onUpdatePreferences({
-                      showDepthProfile: c,
-                      depthProfile: { ...preferences.depthProfile, enabled: c },
-                    })
-                  }
-                />
-              </div>
-
-              <div className="terminal-menu-divider" />
-              <div className="terminal-menu-header">Depth Levels</div>
-              <div style={{ padding: '3px 10px 6px 10px', display: 'flex', gap: 4 }}>
-                {[25, 50, 100, 200].map((levels) => (
-                  <button
-                    key={levels}
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onUpdatePreferences({ depthProfile: { ...preferences.depthProfile, maxLevels: levels } });
-                    }}
-                    style={{
-                      flex: 1,
-                      padding: '2px 0',
-                      border: 'none',
-                      background: preferences.depthProfile.maxLevels === levels ? 'rgba(0, 180, 216, 0.35)' : 'rgba(255, 255, 255, 0.04)',
-                      color: preferences.depthProfile.maxLevels === levels ? '#38bdf8' : '#94a3b8',
-                      borderRadius: 3,
-                      fontSize: 10,
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {levels}
-                  </button>
-                ))}
-              </div>
-
-              {onOpenDepthProfileSettings && (
-                <>
-                  <div className="terminal-menu-divider" />
-                  <div
-                    className="terminal-menu-item action-btn"
-                    onClick={() => {
-                      setOpenMenu(null);
-                      onOpenDepthProfileSettings();
-                    }}
-                  >
-                    <span>COB Settings...</span>
-                    <Sliders size={11} />
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* --- TOOL 4: FOOTPRINT DROPDOWN --- */}
-        <div style={{ position: 'relative' }}>
-          <button
-            className={`terminal-dropdown-btn ${preferences.showFootprint ? 'active' : ''} ${openMenu === 'footprint' ? 'open' : ''}`}
-            onClick={() => toggleMenu('footprint')}
-            title="Footprint Order Flow"
-            style={{ height: 26, padding: '0 7px', fontSize: 11 }}
-          >
-            <BarChart3 size={12} style={{ color: preferences.showFootprint ? '#38bdf8' : 'inherit' }} />
-            <span>Footprint</span>
-            <ChevronDown size={9} style={{ opacity: 0.6 }} />
-          </button>
-
-          {openMenu === 'footprint' && (
-            <div className="terminal-dropdown-menu" style={{ width: 250 }}>
-              <div className="terminal-menu-header">Footprint Order Flow</div>
-              <div
-                className="terminal-menu-item"
-                onClick={() => {
-                  const next = !preferences.showFootprint;
-                  onUpdatePreferences({
-                    showFootprint: next,
-                    footprint: { ...preferences.footprint, enabled: next },
-                    showCandles: true,
-                    chartMode: next ? 'footprint' : (preferences.showHeatmap ? 'heatmap' : 'candles'),
-                  });
-                }}
-              >
-                <span style={{ fontWeight: 600 }}>Enable Footprint</span>
-                <Switch
-                  checked={preferences.showFootprint}
-                  onChange={(c) =>
-                    onUpdatePreferences({
-                      showFootprint: c,
-                      footprint: { ...preferences.footprint, enabled: c },
-                      showCandles: true,
-                      chartMode: c ? 'footprint' : (preferences.showHeatmap ? 'heatmap' : 'candles'),
-                    })
-                  }
-                />
-              </div>
-
-              <div className="terminal-menu-divider" />
-              <div className="terminal-menu-header">Tick Multiplier</div>
-              <div style={{ padding: '3px 10px 6px 10px', display: 'flex', gap: 4 }}>
-                {[1, 2, 4, 8].map((t) => (
-                  <button
-                    key={t}
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onUpdatePreferences({ footprint: { ...preferences.footprint, tickMultiplier: t } });
-                    }}
-                    style={{
-                      flex: 1,
-                      padding: '2px 0',
-                      border: 'none',
-                      background: preferences.footprint.tickMultiplier === t ? 'rgba(0, 180, 216, 0.35)' : 'rgba(255, 255, 255, 0.04)',
-                      color: preferences.footprint.tickMultiplier === t ? '#38bdf8' : '#94a3b8',
-                      borderRadius: 3,
-                      fontSize: 10,
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {t}x
-                  </button>
-                ))}
-              </div>
-
-              <div
-                className="terminal-menu-item"
-                onClick={() => onUpdatePreferences({ footprint: { ...preferences.footprint, showImbalances: !preferences.footprint.showImbalances } })}
-              >
-                <span>Imbalances Highlights</span>
-                <Switch checked={preferences.footprint.showImbalances} onChange={(c) => onUpdatePreferences({ footprint: { ...preferences.footprint, showImbalances: c } })} />
-              </div>
-
-              <div
-                className="terminal-menu-item"
-                onClick={() => onUpdatePreferences({ footprint: { ...preferences.footprint, showSideProfile: !preferences.footprint.showSideProfile } })}
-              >
-                <span>Side Volume Profile</span>
-                <Switch checked={preferences.footprint.showSideProfile} onChange={(c) => onUpdatePreferences({ footprint: { ...preferences.footprint, showSideProfile: c } })} />
-              </div>
-
-              {onOpenFootprintSettings && (
-                <>
-                  <div className="terminal-menu-divider" />
-                  <div
-                    className="terminal-menu-item action-btn"
-                    onClick={() => {
-                      setOpenMenu(null);
-                      onOpenFootprintSettings();
-                    }}
-                  >
-                    <span>Footprint Settings...</span>
-                    <Sliders size={11} />
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* --- TOOL 5: BUBBLES DROPDOWN --- */}
-        <div style={{ position: 'relative' }}>
-          <button
-            className={`terminal-dropdown-btn ${preferences.showBubbles ? 'active' : ''} ${openMenu === 'bubbles' ? 'open' : ''}`}
-            onClick={() => toggleMenu('bubbles')}
-            title="Trade Volume Bubbles"
-            style={{ height: 26, padding: '0 7px', fontSize: 11 }}
-          >
-            <CircleDot size={12} style={{ color: preferences.showBubbles ? '#38bdf8' : 'inherit' }} />
-            <span>Bubbles</span>
-            <ChevronDown size={9} style={{ opacity: 0.6 }} />
-          </button>
-
-          {openMenu === 'bubbles' && (
-            <div className="terminal-dropdown-menu" style={{ width: 240 }}>
-              <div className="terminal-menu-header">Trade Volume Bubbles</div>
-              <div
-                className="terminal-menu-item"
-                onClick={() => {
-                  const next = !preferences.showBubbles;
-                  onUpdatePreferences({
-                    showBubbles: next,
-                    bubbles: { ...preferences.bubbles, enabled: next },
-                  });
-                }}
-              >
-                <span style={{ fontWeight: 600 }}>Show Bubbles</span>
-                <Switch
-                  checked={preferences.showBubbles}
-                  onChange={(c) =>
-                    onUpdatePreferences({
-                      showBubbles: c,
-                      bubbles: { ...preferences.bubbles, enabled: c },
-                    })
-                  }
-                />
-              </div>
-
-              <div className="terminal-menu-divider" />
-              <div className="terminal-menu-header">Min Trade Size</div>
-              <div style={{ padding: '3px 10px 6px 10px' }}>
-                <select
-                  value={preferences.bubbles.minTradeNotional}
-                  onChange={(e) => onUpdatePreferences({ bubbles: { ...preferences.bubbles, minTradeNotional: Number(e.target.value) } })}
-                  style={{
-                    width: '100%',
-                    background: '#141a27',
-                    border: '1px solid rgba(255, 255, 255, 0.12)',
-                    borderRadius: 4,
-                    color: '#f8fafc',
-                    fontSize: 11,
-                    padding: '3px 6px',
-                    outline: 'none',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <option value={0}>All Trades</option>
-                  <option value={10000}>$10k+</option>
-                  <option value={50000}>$50k+</option>
-                  <option value={250000}>$250k+ (Whales)</option>
-                  <option value={1000000}>$1M+ (Mega Whales)</option>
-                </select>
-              </div>
-
-              {onOpenBubbleSettings && (
-                <>
-                  <div className="terminal-menu-divider" />
-                  <div
-                    className="terminal-menu-item action-btn"
-                    onClick={() => {
-                      setOpenMenu(null);
-                      onOpenBubbleSettings();
-                    }}
-                  >
-                    <span>Bubble Settings...</span>
-                    <Sliders size={11} />
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* --- TOOL 6: VWAP DROPDOWN --- */}
-        <div style={{ position: 'relative' }}>
-          <button
-            className={`terminal-dropdown-btn ${preferences.showVwap ? 'active' : ''} ${openMenu === 'vwap' ? 'open' : ''}`}
-            onClick={() => toggleMenu('vwap')}
-            title="Volume-Weighted Average Price & SD Bands"
-            style={{ height: 26, padding: '0 7px', fontSize: 11 }}
-          >
-            <Activity size={12} style={{ color: preferences.showVwap ? '#38bdf8' : 'inherit' }} />
-            <span>VWAP</span>
-            <ChevronDown size={9} style={{ opacity: 0.6 }} />
-          </button>
-
-          {openMenu === 'vwap' && (
-            <div className="terminal-dropdown-menu" style={{ width: 250 }}>
-              <div className="terminal-menu-header">Volume-Weighted Average Price</div>
-              <div
-                className="terminal-menu-item"
-                onClick={() => {
-                  const next = !preferences.showVwap;
-                  onUpdatePreferences({
-                    showVwap: next,
-                    vwap: { ...preferences.vwap, enabled: next },
-                  });
-                }}
-              >
-                <span style={{ fontWeight: 600 }}>Enable VWAP</span>
-                <Switch
-                  checked={preferences.showVwap}
-                  onChange={(c) =>
-                    onUpdatePreferences({
-                      showVwap: c,
-                      vwap: { ...preferences.vwap, enabled: c },
-                    })
-                  }
-                />
-              </div>
-
-              <div className="terminal-menu-divider" />
-              <div className="terminal-menu-header">Anchor Period</div>
-              <div style={{ padding: '3px 10px 6px 10px' }}>
-                <select
-                  value={preferences.vwap.anchor}
-                  onChange={(e) => onUpdatePreferences({ vwap: { ...preferences.vwap, anchor: e.target.value as any } })}
-                  style={{
-                    width: '100%',
-                    background: '#141a27',
-                    border: '1px solid rgba(255, 255, 255, 0.12)',
-                    borderRadius: 4,
-                    color: '#f8fafc',
-                    fontSize: 11,
-                    padding: '3px 6px',
-                    outline: 'none',
-                    cursor: 'pointer',
-                  }}
-                >
-                  <option value="session">Session (Daily 00:00 UTC)</option>
-                  <option value="week">Weekly</option>
-                  <option value="month">Monthly</option>
-                  <option value="continuous">Continuous</option>
-                </select>
-              </div>
-
-              <div
-                className="terminal-menu-item"
-                onClick={() => onUpdatePreferences({ vwap: { ...preferences.vwap, showBands1: !preferences.vwap.showBands1 } })}
-              >
-                <span>SD 1 Bands (±1σ)</span>
-                <Switch checked={preferences.vwap.showBands1} onChange={(c) => onUpdatePreferences({ vwap: { ...preferences.vwap, showBands1: c } })} />
-              </div>
-
-              <div
-                className="terminal-menu-item"
-                onClick={() => onUpdatePreferences({ vwap: { ...preferences.vwap, showBands2: !preferences.vwap.showBands2 } })}
-              >
-                <span>SD 2 Bands (±2σ)</span>
-                <Switch checked={preferences.vwap.showBands2} onChange={(c) => onUpdatePreferences({ vwap: { ...preferences.vwap, showBands2: c } })} />
-              </div>
-
-              {onOpenVwapSettings && (
-                <>
-                  <div className="terminal-menu-divider" />
-                  <div
-                    className="terminal-menu-item action-btn"
-                    onClick={() => {
-                      setOpenMenu(null);
-                      onOpenVwapSettings();
-                    }}
-                  >
-                    <span>VWAP Settings...</span>
-                    <Sliders size={11} />
-                  </div>
-                </>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* --- TOOL 7: VIEW & LAYOUT DROPDOWN --- */}
-        <div style={{ position: 'relative' }}>
-          <button
-            className={`terminal-dropdown-btn ${openMenu === 'view' ? 'open' : ''}`}
-            onClick={() => toggleMenu('view')}
-            title="View & Layout Controls"
-            style={{ height: 26, padding: '0 7px', fontSize: 11 }}
-          >
-            <Settings size={12} />
-            <span>View</span>
-            <ChevronDown size={9} style={{ opacity: 0.6 }} />
-          </button>
-
-          {openMenu === 'view' && (
-            <div className="terminal-dropdown-menu" style={{ width: 220 }}>
               <div className="terminal-menu-header">Navigation & Zoom</div>
               <div
                 className="terminal-menu-item"

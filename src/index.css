@@ -143,14 +143,16 @@ body {
   top: calc(100% + 4px);
   left: 0;
   background: #0d121c;
-  border: 1px solid rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 6px;
-  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.85), 0 0 1px rgba(255, 255, 255, 0.2);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.95), 0 0 1px rgba(255, 255, 255, 0.3);
   padding: 6px 0;
-  z-index: 1000;
+  z-index: 100000;
   min-width: 220px;
+  max-height: calc(100vh - 60px);
+  overflow-y: auto;
   animation: terminalFadeIn 0.14s ease-out;
-  backdrop-filter: blur(16px);
+  backdrop-filter: blur(20px);
 }
 
 @keyframes terminalFadeIn {
@@ -290,14 +292,9 @@ body {
 
 /* Top Toolbar Responsive Layout Protection */
 .terminal-top-toolbar {
-  overflow-x: auto;
-  overflow-y: visible;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-}
-
-.terminal-top-toolbar::-webkit-scrollbar {
-  display: none;
+  overflow: visible !important;
+  position: relative !important;
+  z-index: 99999 !important;
 }
 
 .toolbar-tools-group {
