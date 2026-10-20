@@ -130,9 +130,11 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
           exchange: safeExchange,
           showBubbles: bubblesActive,
           showHeatmap: isFpMode ? false : (stored.showHeatmap ?? true),
-          showDepthProfile: isFpMode ? false : true,
+          showDepthProfile: isFpMode ? false : (stored.showDepthProfile ?? true),
           showFootprint: isFpMode ? true : (stored.showFootprint ?? false),
           showBestBidAskLines: stored.showBestBidAskLines ?? false,
+          showLiquidityShifts: stored.showLiquidityShifts ?? false,
+          showVwap: stored.showVwap ?? true,
           showCandles: stored.showCandles ?? true,
           heatmap: {
             ...DEFAULT_HEATMAP_SETTINGS,

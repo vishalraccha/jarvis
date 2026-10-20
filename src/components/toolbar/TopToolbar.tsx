@@ -64,22 +64,19 @@ interface SwitchProps {
 }
 
 const Switch: React.FC<SwitchProps> = ({ checked, onChange, title }) => (
-  <label
-    className="terminal-switch"
+  <button
+    type="button"
+    role="switch"
+    aria-checked={checked}
+    className={`terminal-switch ${checked ? 'checked' : ''}`}
     title={title}
     onClick={(e) => {
       e.stopPropagation();
       onChange(!checked);
     }}
   >
-    <input
-      type="checkbox"
-      checked={checked}
-      readOnly
-      style={{ pointerEvents: 'none' }}
-    />
-    <span className="terminal-switch-slider" style={{ pointerEvents: 'none' }} />
-  </label>
+    <span className="terminal-switch-knob" />
+  </button>
 );
 
 interface ToolItemProps {
@@ -87,7 +84,7 @@ interface ToolItemProps {
   title: string;
   subtitle?: string;
   active: boolean;
-  onToggle: () => void;
+  onToggle: (targetVal?: boolean) => void;
   onOpenSettings?: () => void;
   settingsTitle?: string;
 }
@@ -103,7 +100,7 @@ const ToolItem: React.FC<ToolItemProps> = ({
 }) => (
   <div
     className="terminal-menu-item"
-    onClick={onToggle}
+    onClick={() => onToggle(!active)}
     style={{
       display: 'flex',
       alignItems: 'center',
@@ -131,7 +128,7 @@ const ToolItem: React.FC<ToolItemProps> = ({
       </div>
     </div>
 
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }} onClick={(e) => e.stopPropagation()}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
       {onOpenSettings && (
         <button
           type="button"
@@ -164,7 +161,7 @@ const ToolItem: React.FC<ToolItemProps> = ({
           <Sliders size={12} />
         </button>
       )}
-      <Switch checked={active} onChange={onToggle} />
+      <Switch checked={active} onChange={(newChecked) => onToggle(newChecked)} />
     </div>
   </div>
 );
@@ -715,8 +712,8 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
                 title="VWAP + SD Bands"
                 subtitle={`Anchor: ${preferences.vwap.anchor.toUpperCase()} • Multipliers: ±${preferences.vwap.multiplier1}σ, ±${preferences.vwap.multiplier2}σ`}
                 active={preferences.showVwap}
-                onToggle={() => {
-                  const next = !preferences.showVwap;
+                onToggle={(targetVal) => {
+                  const next = typeof targetVal === 'boolean' ? targetVal : !preferences.showVwap;
                   onUpdatePreferences({
                     showVwap: next,
                     vwap: { ...preferences.vwap, enabled: next },
@@ -739,8 +736,9 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
                 title="Liquidity Heatmap"
                 subtitle={`Palette: ${preferences.heatmap.colorScale} • Resting L2 Depth`}
                 active={preferences.showHeatmap}
-                onToggle={() => {
-                  onUpdatePreferences({ showHeatmap: !preferences.showHeatmap });
+                onToggle={(targetVal) => {
+                  const next = typeof targetVal === 'boolean' ? targetVal : !preferences.showHeatmap;
+                  onUpdatePreferences({ showHeatmap: next });
                 }}
                 onOpenSettings={
                   onOpenHeatmapSettings
@@ -759,8 +757,8 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
                 title="Order Book Ladder (COB)"
                 subtitle={`Depth: ${preferences.depthProfile.maxLevels} levels • Limit Walls`}
                 active={preferences.showDepthProfile}
-                onToggle={() => {
-                  const next = !preferences.showDepthProfile;
+                onToggle={(targetVal) => {
+                  const next = typeof targetVal === 'boolean' ? targetVal : !preferences.showDepthProfile;
                   onUpdatePreferences({
                     showDepthProfile: next,
                     depthProfile: { ...preferences.depthProfile, enabled: next },
@@ -783,8 +781,8 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
                 title="Footprint Order Flow"
                 subtitle={`Tick: ${preferences.footprint.tickMultiplier}x • Bid x Ask Clusters`}
                 active={preferences.showFootprint}
-                onToggle={() => {
-                  const next = !preferences.showFootprint;
+                onToggle={(targetVal) => {
+                  const next = typeof targetVal === 'boolean' ? targetVal : !preferences.showFootprint;
                   onUpdatePreferences({
                     showFootprint: next,
                     footprint: { ...preferences.footprint, enabled: next },
@@ -809,8 +807,8 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
                 title="Trade Volume Bubbles"
                 subtitle={`Min: ${preferences.bubbles.minTradeNotional === 0 ? 'All Trades' : '$' + (preferences.bubbles.minTradeNotional / 1000) + 'k+'} • Market Orders`}
                 active={preferences.showBubbles}
-                onToggle={() => {
-                  const next = !preferences.showBubbles;
+                onToggle={(targetVal) => {
+                  const next = typeof targetVal === 'boolean' ? targetVal : !preferences.showBubbles;
                   onUpdatePreferences({
                     showBubbles: next,
                     bubbles: { ...preferences.bubbles, enabled: next },
@@ -833,8 +831,9 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
                 title="Candlesticks"
                 subtitle={`Mode: ${preferences.chartMode || 'candles'}`}
                 active={preferences.showCandles}
-                onToggle={() => {
-                  onUpdatePreferences({ showCandles: !preferences.showCandles });
+                onToggle={(targetVal) => {
+                  const next = typeof targetVal === 'boolean' ? targetVal : !preferences.showCandles;
+                  onUpdatePreferences({ showCandles: next });
                 }}
               />
 
@@ -847,8 +846,9 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
                 title="Best Bid / Ask Ribbon"
                 subtitle="Live L1 BBO Price Lines"
                 active={preferences.showBestBidAskLines}
-                onToggle={() => {
-                  onUpdatePreferences({ showBestBidAskLines: !preferences.showBestBidAskLines });
+                onToggle={(targetVal) => {
+                  const next = typeof targetVal === 'boolean' ? targetVal : !preferences.showBestBidAskLines;
+                  onUpdatePreferences({ showBestBidAskLines: next });
                 }}
               />
 
@@ -858,8 +858,9 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
                 title="Liquidity Shift Highlights"
                 subtitle="Detect Resting Order Adds / Pulls"
                 active={preferences.showLiquidityShifts}
-                onToggle={() => {
-                  onUpdatePreferences({ showLiquidityShifts: !preferences.showLiquidityShifts });
+                onToggle={(targetVal) => {
+                  const next = typeof targetVal === 'boolean' ? targetVal : !preferences.showLiquidityShifts;
+                  onUpdatePreferences({ showLiquidityShifts: next });
                 }}
               />
             </div>
