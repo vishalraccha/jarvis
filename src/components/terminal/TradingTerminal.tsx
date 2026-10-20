@@ -232,6 +232,8 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
 
   const latestCandlesRef = useRef<any[]>([]);
   const currentInstrumentKeyRef = useRef<string>('');
+  const lastTickTimeRef = useRef<number>(0);
+  const lastTickPriceRef = useRef<number>(0);
 
   const seedEngines = useCallback((candles: any[], symbol: string, timeframe: any, exchange: ExchangeId) => {
     const instrument = InstrumentRegistry.getInstrument(symbol, exchange);
@@ -307,16 +309,18 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
           exchange === preferencesRef.current.exchange &&
           timeframe === preferencesRef.current.timeframe
         ) {
-          // Purge any rogue cross-symbol outliers or unaligned timeframe bars
+          // Purge any rogue cross-symbol outliers and align timestamps to timeframe grid
           dbCached = dbCached.filter((c) =>
             Number.isFinite(c.time) && c.time > 0 &&
-            c.time % tfSec === 0 &&
             Number.isFinite(c.open) && c.open > 10 &&
             Number.isFinite(c.high) && c.high > 10 &&
             Number.isFinite(c.low) && c.low > 10 &&
             Number.isFinite(c.close) && c.close > 10 &&
             c.low <= c.high
-          );
+          ).map((c) => ({
+            ...c,
+            time: (Math.floor(c.time / tfSec) * tfSec) as any,
+          }));
           const sample = dbCached.slice(-30).map((c) => c.close).sort((a, b) => a - b);
           const median = sample[Math.floor(sample.length / 2)];
           if (median > 0) {
@@ -368,18 +372,20 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
             return;
           }
 
-          // Filter out cross-symbol outliers, unaligned timestamps, and zero/negative prices
+          // Filter out cross-symbol outliers, zero/negative prices, and align to timeframe grid
           const isGold = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase() === 'GC';
           const tfSec = TIMEFRAME_SECONDS[timeframe] || 60;
           const validBars = freshCandles.filter((c) =>
             Number.isFinite(c.time) && c.time > 0 &&
-            c.time % tfSec === 0 &&
             Number.isFinite(c.open) && c.open > 10 &&
             Number.isFinite(c.high) && c.high > 10 &&
             Number.isFinite(c.low) && c.low > 10 &&
             Number.isFinite(c.close) && c.close > 10 &&
             c.low <= c.high
-          );
+          ).map((c) => ({
+            ...c,
+            time: (Math.floor(c.time / tfSec) * tfSec) as any,
+          }));
           const sample = validBars.slice(-30).map((c) => c.close).sort((a, b) => a - b);
           const median = sample[Math.floor(sample.length / 2)];
 
@@ -480,12 +486,13 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
           heatmap.seedHistoricalCandlesLiquidity(latestCandlesRef.current, symbol, exchange);
         }
 
-        // Load genuine historical slices previously recorded for THIS symbol from IndexedDB (strictly within active window)
+        // Load genuine historical slices previously recorded for THIS symbol from IndexedDB (strictly within active window, max 2h)
         try {
           const oldestCandleMs = latestCandlesRef.current.length > 0
             ? latestCandlesRef.current[0].time * 1000
             : Date.now() - 3600000;
-          const cachedSlices = await indexedDBCache.loadSlices(symbol, oldestCandleMs, Date.now());
+          const queryStartMs = Math.max(oldestCandleMs, Date.now() - 2 * 3600000);
+          const cachedSlices = await indexedDBCache.loadSlices(symbol, queryStartMs, Date.now());
           if (cachedSlices.length > 0) {
             heatmap.loadHistoricalSlices(cachedSlices);
           }
@@ -512,13 +519,25 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         const trSym = (trade.symbol || symbol).toUpperCase().replace(/[-_/]/g, '');
         if (trSym !== curSym) return;
 
+        const prefs = preferencesRef.current;
         // Consume resting limit liquidity at the traded price so COB and prices move dynamically!
         orderBook.consumeLiquidity(trade.price, trade.quantity, trade.side);
-        bubbles.addTrade(trade);
-        shiftDetector.recordTrade(trade);
-        heatmap.recordTrade(trade);
-        footprintEngineRef.current.addTrade(trade);
-        chartRef.current?.updateTickPrice(trade.price, trade.timestamp);
+        if (prefs.showBubbles) bubbles.addTrade(trade);
+        if (prefs.showLiquidityShifts) shiftDetector.recordTrade(trade);
+        if (prefs.showHeatmap) heatmap.recordTrade(trade);
+        if (prefs.showFootprint || prefs.chartMode === 'footprint') {
+          footprintEngineRef.current.addTrade(trade);
+        }
+
+        const now = performance.now();
+        if (
+          now - lastTickTimeRef.current >= 40 ||
+          Math.abs(trade.price - lastTickPriceRef.current) >= instrument.priceTick
+        ) {
+          lastTickTimeRef.current = now;
+          lastTickPriceRef.current = trade.price;
+          chartRef.current?.updateTickPrice(trade.price, trade.timestamp);
+        }
       },
       onKline: (candle) => {
         if (!candle || !Number.isFinite(candle.close) || candle.close <= 10) return;
@@ -526,13 +545,13 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         const sSym = symbol.toUpperCase().replace(/[-_/]/g, '');
         if (sSym !== curSym) return;
 
-        // Verify candle matches current timeframe interval
+        // Verify candle matches current timeframe interval and align
         const tfSec = TIMEFRAME_SECONDS[preferencesRef.current.timeframe] || 60;
-        if (candle.time % tfSec !== 0) return;
+        const alignedCandle = { ...candle, time: Math.floor(candle.time / tfSec) * tfSec };
 
-        chartRef.current?.updateLiveCandle(candle);
+        chartRef.current?.updateLiveCandle(alignedCandle);
         if (instrument.supportsFootprint) {
-          footprintEngineRef.current.updateLiveCandle(candle, orderBookRef.current);
+          footprintEngineRef.current.updateLiveCandle(alignedCandle, orderBookRef.current);
         }
       },
       onConnectionChange: (state, metrics) => {

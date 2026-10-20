@@ -235,7 +235,7 @@ export class BinanceAdapter implements IExchangeAdapter {
     this.setConnectionState('CONNECTING');
     const effSym = this.getEffectiveSymbol(this.currentSymbol).toLowerCase();
     const isFut = this.isFutures(effSym);
-    const tradeStreams = isFut ? `${effSym}@trade/${effSym}@aggTrade` : `${effSym}@trade`;
+    const tradeStreams = isFut ? `${effSym}@aggTrade` : `${effSym}@trade`;
     const streamName = `${effSym}@depth@100ms/${tradeStreams}/${effSym}@kline_${this.currentTimeframe}`;
     const wsUrl = isFut
       ? `wss://fstream.binance.com/stream?streams=${streamName}`
@@ -280,6 +280,10 @@ export class BinanceAdapter implements IExchangeAdapter {
       this.messagesInSecond++;
       this.metrics.totalMessagesProcessed++;
       this.metrics.lastMessageTimestamp = now;
+
+      if (this.connectionState === 'STALE' || this.connectionState === 'CONNECTING') {
+        this.setConnectionState('LIVE');
+      }
 
       // Handle Binance combined stream payload: { stream: "...", data: {...} }
       const data = payload.data || payload;
@@ -381,14 +385,20 @@ export class BinanceAdapter implements IExchangeAdapter {
       this.metrics.messageRatePerSec = this.messagesInSecond;
       this.messagesInSecond = 0;
 
-      // Check for stale data if no messages received in 4 seconds
+      // Check for stale data if no messages received in 6 seconds, and restore to LIVE when flowing
       const now = Date.now();
       if (
         this.connectionState === 'LIVE' &&
         this.metrics.lastMessageTimestamp > 0 &&
-        now - this.metrics.lastMessageTimestamp > 4000
+        now - this.metrics.lastMessageTimestamp > 6000
       ) {
         this.setConnectionState('STALE');
+      } else if (
+        this.connectionState === 'STALE' &&
+        this.metrics.lastMessageTimestamp > 0 &&
+        now - this.metrics.lastMessageTimestamp <= 6000
+      ) {
+        this.setConnectionState('LIVE');
       }
 
       this.events?.onConnectionChange(this.connectionState, this.getLatencyMetrics());

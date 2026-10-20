@@ -615,18 +615,20 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
 
         const tfSec = TIMEFRAME_SECONDS[preferences.timeframe] || 60;
 
-        // Clean out any contaminated, zero, negative, unaligned, or outlier candles
+        // Clean out any contaminated, zero, negative, or outlier candles, aligning to timeframe grid
         let cleanCandles: Candle[] = [];
         if (candles && candles.length > 0) {
           const valid = candles.filter((c) =>
             Number.isFinite(c.time) && c.time > 0 &&
-            c.time % tfSec === 0 &&
             Number.isFinite(c.open) && c.open > 10 &&
             Number.isFinite(c.high) && c.high > 10 &&
             Number.isFinite(c.low) && c.low > 10 &&
             Number.isFinite(c.close) && c.close > 10 &&
             c.low <= c.high
-          );
+          ).map((c) => ({
+            ...c,
+            time: (Math.floor(c.time / tfSec) * tfSec) as any,
+          }));
           if (valid.length > 0) {
             const sample = valid.slice(-50).map((c) => c.close).sort((a, b) => a - b);
             const medianPrice = sample[Math.floor(sample.length / 2)];
@@ -711,17 +713,8 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         if (!Number.isFinite(candle.close) || candle.close <= 10) return;
 
         const tfSec = TIMEFRAME_SECONDS[preferences.timeframe] || 60;
-        // Strictly ignore klines not aligned to active timeframe
-        if (candle.time % tfSec !== 0) return;
-
-        const barTime = candle.time as UTCTimestamp;
+        const barTime = (Math.floor(candle.time / tfSec) * tfSec) as UTCTimestamp;
         let cur = currentCandleRef.current;
-
-        // Discard previous candle if it belonged to a different timeframe
-        if (cur && (cur.time as number) % tfSec !== 0) {
-          cur = null;
-          currentCandleRef.current = null;
-        }
 
         const close = candle.close;
         const open = Number.isFinite(candle.open) && candle.open > 10 ? candle.open : close;
@@ -788,12 +781,6 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         if (!series || !Number.isFinite(price) || price <= 10) return;
         const tfSec = TIMEFRAME_SECONDS[preferences.timeframe] || 60;
         let cur = currentCandleRef.current;
-
-        // Discard previous candle if it belonged to a different timeframe
-        if (cur && (cur.time as number) % tfSec !== 0) {
-          cur = null;
-          currentCandleRef.current = null;
-        }
 
         // Discard cross-symbol outlier ticks
         if (cur && cur.close > 10) {

@@ -164,6 +164,12 @@ export class ComexAdapter implements IExchangeAdapter {
         try {
           const data = JSON.parse(event.data);
           if (data.e === 'trade' && data.p) {
+            if (this.connectionState === 'STALE' || this.connectionState === 'CONNECTING') {
+              const session = MarketSessionService.getSessionInfo('cme_futures');
+              if (session.isOpen) {
+                this.setConnectionState('LIVE');
+              }
+            }
             const spotPrice = parseFloat(data.p);
             const comexPrice = Math.round((spotPrice + this.comexBasis) * 10) / 10;
             const tradeTime = data.T || Date.now();
