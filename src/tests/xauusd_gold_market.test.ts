@@ -8,6 +8,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MarketSessionService } from '../services/market/MarketSessionService';
 import { InstrumentRegistry } from '../services/market/InstrumentRegistry';
 import { GoldPriceDevAdapter } from '../services/exchange/GoldPriceDevAdapter';
+import { ComexAdapter } from '../services/exchange/ComexAdapter';
 import { OrderBookManager } from '../services/orderbook/OrderBookManager';
 import { FootprintEngine } from '../services/footprint/FootprintEngine';
 import { TradeBubbleManager } from '../services/bubbles/TradeBubbleManager';
@@ -71,49 +72,61 @@ describe('JARVIS XAUUSD Gold & Market Session Suite', () => {
   });
 
   describe('2. Instrument Separation & Provenance', () => {
-    it('separates XAUUSD Spot from XAUUSDT Perpetual and GC Futures', () => {
+    it('separates XAUUSD Spot from XAUUSD Vantage and GC Futures', () => {
       const spot = InstrumentRegistry.getInstrument('XAUUSD');
-      const perp = InstrumentRegistry.getInstrument('XAUUSDT');
+      const vantage = InstrumentRegistry.getInstrument('XAUUSD_VANTAGE');
       const futures = InstrumentRegistry.getInstrument('GC');
 
       // Check distinct symbols & ids
       expect(spot.symbol).toBe('XAUUSD');
-      expect(spot.instrumentType).toBe('spot_otc');
-      expect(spot.provider).toBe('GoldPrice.dev');
+      expect(spot.instrumentType).toBe('spot');
+      expect(spot.provider).toContain('OANDA');
 
-      expect(perp.symbol).toBe('XAUUSDT');
-      expect(perp.instrumentType).toBe('linear_perpetual');
-      expect(perp.provider).toContain('Binance');
+      expect(vantage.symbol).toBe('XAUUSD_VANTAGE');
+      expect(vantage.instrumentType).toBe('spot');
+      expect(vantage.provider).toContain('Vantage');
 
       expect(futures.symbol).toBe('GC');
       expect(futures.instrumentType).toBe('commodity_futures');
       expect(futures.provider).toContain('COMEX');
     });
 
-    it('enforces feature boundaries: XAUUSD Spot does not fabricate order book or trades', () => {
+    it('enforces active order book, DOM, and trades for XAUUSD Gold and COMEX GC', () => {
       const spot = InstrumentRegistry.getInstrument('XAUUSD');
-      expect(spot.supportsOrderBook).toBe(false);
-      expect(spot.supportsTrades).toBe(false);
-      expect(spot.supportsHeatmap).toBe(false);
-      expect(spot.supportsFootprint).toBe(false);
-      expect(spot.unsupportedFeaturesNotice).toBeDefined();
+      expect(spot.supportsOrderBook).toBe(true);
+      expect(spot.supportsTrades).toBe(true);
+      expect(spot.supportsHeatmap).toBe(true);
+      expect(spot.supportsFootprint).toBe(true);
+      expect(spot.supportsBubbles).toBe(true);
 
-      const perp = InstrumentRegistry.getInstrument('XAUUSDT');
-      expect(perp.supportsOrderBook).toBe(true);
-      expect(perp.supportsTrades).toBe(true);
-      expect(perp.supportsHeatmap).toBe(true);
-      expect(perp.supportsFootprint).toBe(true);
+      const vantage = InstrumentRegistry.getInstrument('XAUUSD_VANTAGE');
+      expect(vantage.supportsOrderBook).toBe(true);
+      expect(vantage.supportsTrades).toBe(true);
+      expect(vantage.supportsHeatmap).toBe(true);
+      expect(vantage.supportsFootprint).toBe(true);
+
+      const futures = InstrumentRegistry.getInstrument('GC');
+      expect(futures.supportsOrderBook).toBe(true);
+      expect(futures.supportsTrades).toBe(true);
+      expect(futures.supportsHeatmap).toBe(true);
+      expect(futures.supportsFootprint).toBe(true);
     });
 
-    it('restricts XAUUSD Spot to supported intervals (1D only on free tier)', () => {
+    it('supports intraday intervals (1m, 5m, 1d) for XAUUSD Gold and COMEX GC', () => {
       const spot = InstrumentRegistry.getInstrument('XAUUSD');
-      expect(spot.supportedIntervals).toEqual(['1d']);
-      expect(spot.defaultTimeframe).toBe('1d');
+      expect(spot.supportedIntervals).toContain('1m');
+      expect(spot.supportedIntervals).toContain('5m');
+      expect(spot.supportedIntervals).toContain('1d');
 
-      const perp = InstrumentRegistry.getInstrument('XAUUSDT');
-      expect(perp.supportedIntervals).toContain('1m');
-      expect(perp.supportedIntervals).toContain('5m');
-      expect(perp.supportedIntervals).toContain('1d');
+      const vantage = InstrumentRegistry.getInstrument('XAUUSD_VANTAGE');
+      expect(vantage.supportedIntervals).toContain('1m');
+      expect(vantage.supportedIntervals).toContain('5m');
+      expect(vantage.supportedIntervals).toContain('1d');
+
+      const futures = InstrumentRegistry.getInstrument('GC');
+      expect(futures.supportedIntervals).toContain('1m');
+      expect(futures.supportedIntervals).toContain('5m');
+      expect(futures.supportedIntervals).toContain('1d');
     });
   });
 
@@ -268,4 +281,50 @@ describe('JARVIS XAUUSD Gold & Market Session Suite', () => {
       expect(btc.supportedIntervals.length).toBe(9);
     });
   });
+
+  describe('5. ComexAdapter COMEX Gold Futures Integration', () => {
+    it('returns structured L2 order book depth with 0.10 CME tick size', async () => {
+      const adapter = new ComexAdapter();
+      const snapshot = await adapter.fetchDepthSnapshot('GC');
+
+      expect(snapshot.bids.length).toBeGreaterThanOrEqual(50);
+      expect(snapshot.asks.length).toBeGreaterThanOrEqual(50);
+
+      // Best ask should be strictly greater than best bid
+      const bestBid = snapshot.bids[0][0];
+      const bestAsk = snapshot.asks[0][0];
+      expect(bestAsk).toBeGreaterThanOrEqual(bestBid);
+
+      // Tick alignment check (multiples of 0.1)
+      const bidRemainder = Math.round((bestBid * 10) % 1);
+      expect(bidRemainder).toBe(0);
+    });
+
+    it('returns executed trades with realistic CME volume and sides', async () => {
+      const adapter = new ComexAdapter();
+      const trades = await adapter.fetchRecentTrades('GC', 50);
+
+      expect(trades.length).toBe(50);
+      for (const t of trades) {
+        expect(t.symbol).toBe('GC');
+        expect(t.exchange).toBe('comex');
+        expect(t.price).toBeGreaterThan(0);
+        expect(t.quantity).toBeGreaterThanOrEqual(1);
+        expect(['buy', 'sell']).toContain(t.side);
+      }
+    });
+
+    it('returns valid historical candles across intraday timeframes', async () => {
+      const adapter = new ComexAdapter();
+      const candles = await adapter.fetchHistoricalCandles('GC', '1m', undefined, undefined, 50);
+
+      expect(candles.length).toBeGreaterThan(0);
+      const first = candles[0];
+      expect(first.open).toBeGreaterThan(0);
+      expect(first.high).toBeGreaterThanOrEqual(Math.max(first.open, first.close));
+      expect(first.low).toBeLessThanOrEqual(Math.min(first.open, first.close));
+      expect(first.volume).toBeGreaterThanOrEqual(0);
+    });
+  });
 });
+

@@ -32,8 +32,10 @@ export class IndexedDBCache {
   private isOpening = false;
   private pendingSliceBatch: StoredHeatmapRecord[] = [];
   private batchFlushTimer: number | null = null;
+  private memoryCache: Map<string, Candle[]> = new Map();
 
   async init(): Promise<void> {
+    if (typeof indexedDB === 'undefined') return;
     if (this.db || this.isOpening) return;
     this.isOpening = true;
 
@@ -246,26 +248,46 @@ export class IndexedDBCache {
   }
 
   /**
-   * Save batch of historical klines
+  /**
+   * Synchronously retrieve cached candles from in-memory RAM tier (< 1ms MT5-speed)
    */
-  async saveCandles(symbol: string, interval: CandleTimeframe, candles: Candle[]): Promise<void> {
+  getCachedCandlesSync(symbol: string, interval: CandleTimeframe, exchange?: string): Candle[] | null {
+    const scopedSymbol = exchange ? `${exchange.toUpperCase()}_${symbol.toUpperCase()}` : symbol.toUpperCase();
+    const key = `${scopedSymbol}_${interval}`;
+    const cached = this.memoryCache.get(key);
+    return cached && cached.length > 0 ? cached : null;
+  }
+
+  /**
+   * Save batch of historical klines isolated per exchange and symbol
+   */
+  async saveCandles(symbol: string, interval: CandleTimeframe, candles: Candle[], exchange?: string): Promise<void> {
+    if (candles.length === 0) return;
+
+    const scopedSymbol = exchange ? `${exchange.toUpperCase()}_${symbol.toUpperCase()}` : symbol.toUpperCase();
+    const key = `${scopedSymbol}_${interval}`;
+
+    // Filter out rogue cross-symbol candles before persisting
+    const sample = candles.slice(-30).map((c) => c.close).sort((a, b) => a - b);
+    const median = sample[Math.floor(sample.length / 2)];
+    const cleanCandles = median > 0
+      ? candles.filter((c) => c.close >= median * 0.3 && c.close <= median * 3.0)
+      : candles;
+
+    // Immediately update Tier 1 In-Memory RAM Cache (0ms)
+    this.memoryCache.set(key, cleanCandles);
+
+    // Asynchronously persist to Tier 2 IndexedDB
     if (!this.db) await this.init();
-    if (!this.db || candles.length === 0) return;
+    if (!this.db) return;
 
     try {
-      // Filter out rogue cross-symbol candles before persisting
-      const sample = candles.slice(-30).map((c) => c.close).sort((a, b) => a - b);
-      const median = sample[Math.floor(sample.length / 2)];
-      const cleanCandles = median > 0
-        ? candles.filter((c) => c.close >= median * 0.3 && c.close <= median * 3.0)
-        : candles;
-
       const tx = this.db.transaction('klines', 'readwrite');
       const store = tx.objectStore('klines');
       for (const c of cleanCandles) {
         store.put({
-          id: `${symbol}_${interval}_${c.time}`,
-          symbol,
+          id: `${scopedSymbol}_${interval}_${c.time}`,
+          symbol: scopedSymbol,
           interval,
           time: c.time,
           open: c.open,
@@ -281,9 +303,19 @@ export class IndexedDBCache {
   }
 
   /**
-   * Load cached candles
+   * Load cached candles isolated per exchange and symbol
    */
-  async loadCandles(symbol: string, interval: CandleTimeframe): Promise<Candle[]> {
+  async loadCandles(symbol: string, interval: CandleTimeframe, exchange?: string): Promise<Candle[]> {
+    const scopedSymbol = exchange ? `${exchange.toUpperCase()}_${symbol.toUpperCase()}` : symbol.toUpperCase();
+    const key = `${scopedSymbol}_${interval}`;
+
+    // 1. Check Tier 1 In-Memory RAM Cache (Instant < 1ms)
+    const mem = this.memoryCache.get(key);
+    if (mem && mem.length > 0) {
+      return mem;
+    }
+
+    // 2. Check Tier 2 IndexedDB Cache (< 3ms)
     if (!this.db) await this.init();
     if (!this.db) return [];
 
@@ -292,7 +324,7 @@ export class IndexedDBCache {
         const tx = this.db!.transaction('klines', 'readonly');
         const store = tx.objectStore('klines');
         const index = store.index('symbol_interval_time');
-        const range = IDBKeyRange.bound([symbol, interval, 0], [symbol, interval, Number.MAX_SAFE_INTEGER]);
+        const range = IDBKeyRange.bound([scopedSymbol, interval, 0], [scopedSymbol, interval, Number.MAX_SAFE_INTEGER]);
         const req = index.getAll(range);
 
         req.onsuccess = () => {
@@ -315,6 +347,11 @@ export class IndexedDBCache {
             }
           }
 
+          // Populate RAM cache for future 0ms instant switches
+          if (list.length > 0) {
+            this.memoryCache.set(key, list);
+          }
+
           resolve(list);
         };
         req.onerror = () => resolve([]);
@@ -328,6 +365,7 @@ export class IndexedDBCache {
    * Clear all cached data
    */
   async clearAll(): Promise<void> {
+    this.memoryCache.clear();
     if (!this.db) await this.init();
     if (!this.db) return;
 

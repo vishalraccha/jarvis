@@ -135,13 +135,13 @@ export class OrderBookManager {
 
       // 3. Populate snapshot bids & asks
       for (const [p, q] of snapshot.bids) {
-        if (q > 0) {
+        if (p > 10 && q > 0) {
           const tick = Math.round(p * this.precisionMultiplier);
           this.bids.set(tick, q);
         }
       }
       for (const [p, q] of snapshot.asks) {
-        if (q > 0) {
+        if (p > 10 && q > 0) {
           const tick = Math.round(p * this.precisionMultiplier);
           this.asks.set(tick, q);
         }
@@ -191,51 +191,113 @@ export class OrderBookManager {
     }
   }
 
+  private lastTradeHit: { price: number; quantity: number; side: 'buy' | 'sell'; timestamp: number } | null = null;
+
+  getLastTradeHit(): { price: number; quantity: number; side: 'buy' | 'sell'; timestamp: number } | null {
+    return this.lastTradeHit;
+  }
+
   /**
-   * Handle incoming WebSocket depth delta update
+   * Handle incoming WebSocket depth delta update continuously without freezing
    */
   handleDepthUpdate(update: DepthDeltaUpdate, adapter?: IExchangeAdapter, symbol?: string): void {
     this.lastEventTimestamp = update.eventTime;
 
     if (this.syncStatus === 'INITIALIZING' || this.syncStatus === 'BUFFERING' || this.syncStatus === 'RESYNCING') {
       this.bufferedUpdates.push(update);
-      // Keep buffer bounded
       if (this.bufferedUpdates.length > 500) {
         this.bufferedUpdates.shift();
       }
-      return;
-    }
-
-    if (this.syncStatus !== 'SYNCHRONIZED') {
-      return;
-    }
-
-    // Sequence check (Binance spot protocol):
-    // In continuous stream, update.firstUpdateId <= lastValidUpdateId + 1
-    // and update.finalUpdateId >= lastValidUpdateId + 1
-    if (update.finalUpdateId <= this.lastValidUpdateId) {
-      // Out of order / duplicate older update, drop it
-      return;
-    }
-
-    if (update.firstUpdateId > this.lastValidUpdateId + 1) {
-      // SEQUENCE GAP DETECTED!
-      console.warn(
-        `[OrderBookManager] Sequence gap detected! U=${update.firstUpdateId}, lastValid=${this.lastValidUpdateId}`
-      );
-      this.sequenceGapsDetected++;
-      this.resyncCount++;
-      this.syncStatus = 'DESYNCHRONIZED';
+      // Apply directly to book so COB never displays a frozen or empty ladder
+      this.applyUpdateDirect(update);
+      this.updateBestBidAsk();
       this.notifyListeners();
-
-      if (adapter && symbol) {
-        this.synchronize(adapter, symbol);
-      }
       return;
     }
 
-    // Valid update - apply
+    // Drop duplicate older updates
+    if (update.finalUpdateId <= this.lastValidUpdateId) {
+      return;
+    }
+
+    // Check sequence continuity
+    if (this.lastValidUpdateId > 0 && update.firstUpdateId > this.lastValidUpdateId + 1) {
+      this.sequenceGapsDetected++;
+      this.syncStatus = 'DESYNCHRONIZED';
+      // Reconcile snapshot in background if adapter provided
+      if (adapter && symbol && !this.isResyncing) {
+        const now = Date.now();
+        if (now - this.lastResyncAttemptTime > 5000) {
+          this.lastResyncAttemptTime = now;
+          adapter.fetchDepthSnapshot(symbol, 1000).then((snapshot) => {
+            for (const [p, q] of snapshot.bids) {
+              if (p > 10) {
+                const tick = Math.round(p * this.precisionMultiplier);
+                if (q > 0) this.bids.set(tick, q);
+                else this.bids.delete(tick);
+              }
+            }
+            for (const [p, q] of snapshot.asks) {
+              if (p > 10) {
+                const tick = Math.round(p * this.precisionMultiplier);
+                if (q > 0) this.asks.set(tick, q);
+                else this.asks.delete(tick);
+              }
+            }
+            this.lastValidUpdateId = Math.max(this.lastValidUpdateId, snapshot.lastUpdateId);
+            this.syncStatus = 'SYNCHRONIZED';
+            this.updateBestBidAsk();
+            this.notifyListeners();
+          }).catch(() => {});
+        }
+      }
+    } else {
+      this.syncStatus = 'SYNCHRONIZED';
+    }
+
+    // Apply live delta to resting book
     this.applyUpdateDirect(update);
+    this.updateBestBidAsk();
+    this.notifyListeners();
+  }
+
+  /**
+   * Consume resting limit liquidity when an aggressive market order executes.
+   * Market Buy consumes resting Asks; Market Sell consumes resting Bids.
+   * This drives the live COB ladder and causes the price to move dynamically!
+   */
+  consumeLiquidity(price: number, quantity: number, side: 'buy' | 'sell' | 'unknown'): void {
+    if (price <= 10 || quantity <= 0) return;
+    const tick = Math.round(price * this.precisionMultiplier);
+    const resolvedSide: 'buy' | 'sell' = side === 'unknown' 
+      ? (price >= (this.cachedBestAsk || price) ? 'buy' : 'sell') 
+      : side;
+    this.lastTradeHit = { price, quantity, side: resolvedSide, timestamp: Date.now() };
+
+    if (resolvedSide === 'buy') {
+      // Market buy hits resting limit asks
+      const cur = this.asks.get(tick);
+      if (cur !== undefined) {
+        const remaining = Math.max(0, cur - quantity);
+        if (remaining <= 0.001) {
+          this.asks.delete(tick);
+        } else {
+          this.asks.set(tick, remaining);
+        }
+      }
+    } else {
+      // Market sell hits resting limit bids
+      const cur = this.bids.get(tick);
+      if (cur !== undefined) {
+        const remaining = Math.max(0, cur - quantity);
+        if (remaining <= 0.001) {
+          this.bids.delete(tick);
+        } else {
+          this.bids.set(tick, remaining);
+        }
+      }
+    }
+
     this.updateBestBidAsk();
     this.notifyListeners();
   }
@@ -245,6 +307,7 @@ export class OrderBookManager {
 
     // Apply bids
     for (const [p, q] of update.bids) {
+      if (p <= 10) continue;
       const tick = Math.round(p * this.precisionMultiplier);
       if (q === 0) {
         this.bids.delete(tick);
@@ -255,6 +318,7 @@ export class OrderBookManager {
 
     // Apply asks
     for (const [p, q] of update.asks) {
+      if (p <= 10) continue;
       const tick = Math.round(p * this.precisionMultiplier);
       if (q === 0) {
         this.asks.delete(tick);

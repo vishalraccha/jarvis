@@ -136,8 +136,12 @@ export const DepthProfileCanvas: React.FC<DepthProfileCanvasProps> = ({
     const headerH = 26;
     const pTop = yToPrice(headerH);
     const pBottom = yToPrice(height);
-    const pMin = Math.min(pTop, pBottom);
-    const pMax = Math.max(pTop, pBottom);
+    const rawMin = Math.min(pTop, pBottom);
+    const rawMax = Math.max(pTop, pBottom);
+    // Clamp to realistic range around currentMid (+/- 30%) to prevent negative numbers or massive row explosions
+    const safeMid = currentMid > 0 ? currentMid : 4150.0;
+    const pMin = Math.max(safeMid * 0.7, Math.max(1, rawMin));
+    const pMax = Math.min(safeMid * 1.3, rawMax);
     const pDiff = Math.max(0.001, pMax - pMin);
     const pxPerDollar = Math.abs(height / pDiff);
 
@@ -222,6 +226,7 @@ export const DepthProfileCanvas: React.FC<DepthProfileCanvasProps> = ({
     const endPrice = Math.ceil(pMax / rowStep) * rowStep;
 
     for (let p = startPrice; p <= endPrice; p += rowStep) {
+      if (p <= 10) continue;
       const price = Number(p.toFixed(4));
       const y = priceToY(price);
       if (y >= headerH - 8 && y <= height + 8) {
@@ -296,13 +301,53 @@ export const DepthProfileCanvas: React.FC<DepthProfileCanvasProps> = ({
       if (r.cumQty > maxCumQty) maxCumQty = r.cumQty;
     }
 
-    // 7. Render Rows
+    // 6.5 Render Dual Column Header & Live Imbalance Meter
+    const totalBidVis = runningBidCum || 1;
+    const totalAskVis = runningAskCum || 1;
+    const bidPct = Math.round((totalBidVis / (totalBidVis + totalAskVis)) * 100);
+    const askPct = 100 - bidPct;
+
+    // Header Background
+    ctx.fillStyle = 'rgba(22, 30, 44, 0.98)';
+    ctx.fillRect(0, 0, profileWidth, headerH);
+
+    // Header Left: ORDERS + % Bids
+    ctx.fillStyle = '#cbd5e1';
+    ctx.font = 'bold 9px JetBrains Mono, monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(`ORDERS (${bidPct}%B)`, col1W / 2, headerH / 2 - 2);
+
+    // Header Right: CUMULATIVE + % Asks
+    ctx.fillText(`CUMULATIVE (${askPct}%A)`, col1W + col2W / 2, headerH / 2 - 2);
+
+    // Live Imbalance Meter Bar directly under header
+    ctx.fillStyle = '#00e676';
+    ctx.fillRect(0, headerH - 3, profileWidth * (bidPct / 100), 3);
+    ctx.fillStyle = '#ff2d55';
+    ctx.fillRect(profileWidth * (bidPct / 100), headerH - 3, profileWidth * (askPct / 100), 3);
+
+    // 7. Render Rows with Live Hit Flashes and Institutional Wall Highlighting
     const rowH = Math.max(12, Math.min(22, rowStep * pxPerDollar - 1));
+    const lastHit = orderBook.getLastTradeHit();
+    const now = Date.now();
 
     for (const row of allRows) {
       const yCenter = row.y;
       if (yCenter < headerH + 6 || yCenter > height - 6) continue;
       const rowTop = yCenter - rowH / 2;
+
+      // Detect recent market order hit at this price level
+      const isHit = lastHit && (now - lastHit.timestamp < 650) && Math.abs(row.price - lastHit.price) <= rowStep * 0.55;
+      if (isHit) {
+        const fade = Math.max(0, 1 - (now - lastHit.timestamp) / 650);
+        ctx.save();
+        ctx.fillStyle = lastHit.side === 'buy'
+          ? `rgba(255, 235, 59, ${0.45 * fade})`  // Neon Gold/Yellow flash for buyer hit on asks
+          : `rgba(0, 229, 255, ${0.45 * fade})`; // Neon Cyan flash for seller hit on bids
+        ctx.fillRect(0, rowTop, profileWidth, rowH);
+        ctx.restore();
+      }
 
       // Subtle row border
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
@@ -311,12 +356,15 @@ export const DepthProfileCanvas: React.FC<DepthProfileCanvasProps> = ({
       ctx.lineTo(profileWidth, rowTop + rowH);
       ctx.stroke();
 
+      // Detect Institutional Liquidity Walls (Major Order Walls where traders take trades)
+      const isInstitutionalWall = row.levelQty >= maxLevelQty * 0.40 && row.levelQty >= 5;
+
       // ==========================================
       // COLUMN 1: DIRECT ORDER BOOK (Price + Level Qty + Bar)
       // ==========================================
       // Price text (Left aligned)
-      ctx.fillStyle = '#94a3b8';
-      ctx.font = '10px JetBrains Mono, monospace';
+      ctx.fillStyle = isHit ? '#ffff00' : isInstitutionalWall ? '#ffd700' : '#94a3b8';
+      ctx.font = isInstitutionalWall ? 'bold 10px JetBrains Mono, monospace' : '10px JetBrains Mono, monospace';
       ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
       ctx.fillText(row.price.toFixed(decimalPlaces), 4, yCenter);
@@ -329,18 +377,27 @@ export const DepthProfileCanvas: React.FC<DepthProfileCanvasProps> = ({
 
         ctx.save();
         ctx.fillStyle = row.isAsk
-          ? 'rgba(235, 45, 75, 0.90)'   // Crimson Red for Asks
-          : 'rgba(0, 210, 106, 0.90)'; // Vibrant Emerald Green for Bids
+          ? (isInstitutionalWall ? 'rgba(255, 45, 85, 0.95)' : 'rgba(235, 45, 75, 0.85)')   // Crimson Red for Asks
+          : (isInstitutionalWall ? 'rgba(0, 230, 118, 0.95)' : 'rgba(0, 210, 106, 0.85)'); // Vibrant Emerald Green for Bids
         ctx.fillRect(barX, rowTop + 1, levelBarW, rowH - 2);
 
-        // Level Bar Outline
-        ctx.strokeStyle = row.isAsk ? 'rgba(255, 90, 115, 0.5)' : 'rgba(105, 240, 174, 0.5)';
-        ctx.lineWidth = 0.5;
-        ctx.strokeRect(barX, rowTop + 1, levelBarW, rowH - 2);
+        // Level Bar Outline & Institutional Wall Marker
+        if (isInstitutionalWall) {
+          ctx.strokeStyle = '#ffd700'; // Golden Wall Border for Major Institutional Orders
+          ctx.lineWidth = 1.2;
+          ctx.strokeRect(barX, rowTop + 1, levelBarW, rowH - 2);
+          // Gold bullet badge at price to indicate key trade zone
+          ctx.fillStyle = '#ffd700';
+          ctx.fillRect(1, rowTop + 2, 2, rowH - 4);
+        } else {
+          ctx.strokeStyle = row.isAsk ? 'rgba(255, 90, 115, 0.5)' : 'rgba(105, 240, 174, 0.5)';
+          ctx.lineWidth = 0.5;
+          ctx.strokeRect(barX, rowTop + 1, levelBarW, rowH - 2);
+        }
 
         // Level Quantity Text (Bold white, right-aligned in Column 1 - integer numbers)
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 9.5px JetBrains Mono, monospace';
+        ctx.fillStyle = isHit ? '#ffff00' : isInstitutionalWall ? '#ffffff' : '#f1f5f9';
+        ctx.font = isInstitutionalWall ? 'bold 10px JetBrains Mono, monospace' : 'bold 9.5px JetBrains Mono, monospace';
         ctx.textAlign = 'right';
         const levelQtyStr = formatOrderQty(row.levelQty);
         ctx.fillText(levelQtyStr, col1W - 4, yCenter);
@@ -427,6 +484,14 @@ export const DepthProfileCanvas: React.FC<DepthProfileCanvasProps> = ({
     };
   }, [render]);
 
+  // High-frequency 60ms ticker ensures hit flashes fade smoothly and real-time DOM updates automatically
+  useEffect(() => {
+    const timer = setInterval(() => {
+      isDirtyRef.current = true;
+    }, 60);
+    return () => clearInterval(timer);
+  }, []);
+
   useEffect(() => {
     const unsub = orderBook.subscribe(() => {
       isDirtyRef.current = true;
@@ -466,7 +531,7 @@ export const DepthProfileCanvas: React.FC<DepthProfileCanvasProps> = ({
       style={{
         position: 'absolute',
         top: 0,
-        right: 60, // Immediately adjacent to TradingView price axis
+        right: 65, // Immediately adjacent to TradingView price axis (65px fixed)
         width: `${profileWidth}px`,
         height: `${height}px`,
         zIndex: 10,

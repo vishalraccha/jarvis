@@ -3,7 +3,7 @@
  * JARVIS HEATMAP TERMINAL
  */
 
-export type ExchangeId = 'binance' | 'bybit' | 'goldprice_dev';
+export type ExchangeId = 'binance' | 'bybit' | 'comex' | 'goldprice_dev';
 
 export type MarketType = 'spot' | 'spot_otc' | 'linear_perpetual' | 'commodity_futures';
 

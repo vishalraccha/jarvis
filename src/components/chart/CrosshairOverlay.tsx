@@ -14,6 +14,7 @@ interface CrosshairOverlayProps {
   hoveredFootprintDebug?: FootprintDebugInfo | null;
   cursorX: number;
   cursorY: number;
+  symbol?: string;
 }
 
 export const CrosshairOverlay: React.FC<CrosshairOverlayProps> = ({
@@ -22,8 +23,20 @@ export const CrosshairOverlay: React.FC<CrosshairOverlayProps> = ({
   hoveredFootprintDebug,
   cursorX,
   cursorY,
+  symbol = 'XAUUSD',
 }) => {
   if (!hoveredBubble && !hoveredZone && !hoveredFootprintDebug) return null;
+
+  const symUpper = symbol.toUpperCase();
+  const unitLabel = symUpper.includes('XAU') || symUpper === 'GC'
+    ? 'oz'
+    : symUpper.includes('BTC')
+    ? 'BTC'
+    : symUpper.includes('ETH')
+    ? 'ETH'
+    : symUpper.includes('SOL')
+    ? 'SOL'
+    : 'contracts';
 
   // Position tooltip safely within screen bounds
   const left = Math.min(window.innerWidth - 300, cursorX + 16);
@@ -256,7 +269,7 @@ export const CrosshairOverlay: React.FC<CrosshairOverlayProps> = ({
 
         <div style={{ display: 'flex', justifyContent: 'space-between', color: '#cbd5e1', fontSize: 11, marginBottom: 2 }}>
           <span>Current Size:</span>
-          <span style={{ fontWeight: 600, color: '#38bdf8' }}>{hoveredZone.currentObservedQty.toFixed(2)} BTC</span>
+          <span style={{ fontWeight: 600, color: '#38bdf8' }}>{hoveredZone.currentObservedQty.toFixed(2)} {unitLabel}</span>
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', color: '#cbd5e1', fontSize: 11, marginBottom: 2 }}>
@@ -266,7 +279,7 @@ export const CrosshairOverlay: React.FC<CrosshairOverlayProps> = ({
 
         <div style={{ display: 'flex', justifyContent: 'space-between', color: '#cbd5e1', fontSize: 11, marginBottom: 2 }}>
           <span>Peak Size:</span>
-          <span>{hoveredZone.maxObservedQty.toFixed(2)} BTC</span>
+          <span>{hoveredZone.maxObservedQty.toFixed(2)} {unitLabel}</span>
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', color: '#cbd5e1', fontSize: 11, marginBottom: 2 }}>
@@ -304,16 +317,16 @@ export const CrosshairOverlay: React.FC<CrosshairOverlayProps> = ({
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
         <span style={{ color: '#94a3b8', fontSize: 10 }}>TRADE AGGREGATION</span>
-        <span style={{ color: '#00b4d8', fontWeight: 600 }}>BINANCE SPOT</span>
+        <span style={{ color: '#00b4d8', fontWeight: 600 }}>{symUpper}</span>
       </div>
 
       <div style={{ fontSize: 13, fontWeight: 700, color: '#f1f5f9', marginBottom: 4 }}>
-        {formatPrice(hoveredBubble.price)} USDT
+        {formatPrice(hoveredBubble.price)} USD
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', color: '#cbd5e1', fontSize: 11, marginBottom: 2 }}>
         <span>Total Volume:</span>
-        <span style={{ fontWeight: 600 }}>{formatQuantity(hoveredBubble.totalQty, 3)} BTC</span>
+        <span style={{ fontWeight: 600 }}>{formatQuantity(hoveredBubble.totalQty, 3)} {unitLabel}</span>
       </div>
 
       <div style={{ display: 'flex', justifyContent: 'space-between', color: '#cbd5e1', fontSize: 11, marginBottom: 2 }}>

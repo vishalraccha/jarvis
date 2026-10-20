@@ -133,7 +133,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
     return () => clearInterval(interval);
   }, []);
 
-  const currentInst = InstrumentRegistry.getInstrument(preferences.symbol);
+  const currentInst = InstrumentRegistry.getInstrument(preferences.symbol, preferences.exchange);
   const currentSession = MarketSessionService.getSessionInfo(currentInst.marketSchedule);
 
   const getStatusBadge = () => {
@@ -248,15 +248,21 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
           </span>
         </div>
 
-        {/* Pair Selection Dropdown */}
+        {/* Exchange Selector Dropdown */}
         <select
-          value={preferences.symbol}
+          value={preferences.exchange}
           onChange={(e) => {
-            const selected = e.target.value;
-            const inst = InstrumentRegistry.getInstrument(selected);
+            const newExchange = e.target.value as ExchangeId;
+            let newSymbol = preferences.symbol;
+            if (newExchange === 'binance') {
+              newSymbol = 'XAUUSD';
+            } else if (newExchange === 'comex') {
+              newSymbol = 'GC';
+            }
+            const inst = InstrumentRegistry.getInstrument(newSymbol, newExchange);
             const patch: Partial<TerminalPreferences> = {
+              exchange: newExchange,
               symbol: inst.symbol,
-              exchange: inst.providerId,
             };
             if (!inst.supportedIntervals.includes(preferences.timeframe)) {
               patch.timeframe = inst.defaultTimeframe;
@@ -264,43 +270,85 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
             onUpdatePreferences(patch);
           }}
           style={{
-            background: 'rgba(0, 180, 216, 0.08)',
-            border: '1px solid rgba(0, 180, 216, 0.3)',
+            background: 'rgba(245, 158, 11, 0.12)',
+            border: '1px solid rgba(245, 158, 11, 0.45)',
             borderRadius: 4,
-            color: '#38bdf8',
-            fontSize: 11.5,
-            fontWeight: 700,
+            color: '#fbbf24',
+            fontSize: 11,
+            fontWeight: 800,
             padding: '3px 8px',
             outline: 'none',
             cursor: 'pointer',
-            maxWidth: 195,
           }}
-          title="Active trading pair & instrument type"
+          title="Active Gold Trading Venue / Data Feed"
         >
-          <optgroup label="Gold & Metals" style={{ background: '#0b101b', color: '#fbbf24', fontWeight: 700 }}>
-            <option value="XAUUSD" style={{ background: '#0d121c', color: '#f1f5f9' }}>
-              XAUUSD Spot • GoldPrice.dev (OTC 1D)
+          <option value="binance" style={{ background: '#0d121c', color: '#fcd34d', fontWeight: 800 }}>
+            Spot Gold (OANDA & Vantage Benchmark)
+          </option>
+          <option value="comex" style={{ background: '#0d121c', color: '#fcd34d', fontWeight: 700 }}>
+            COMEX (CME Globex Gold Futures)
+          </option>
+        </select>
+
+        {/* Pair Selection Dropdown */}
+        <select
+          value={preferences.symbol}
+          onChange={(e) => {
+            const selected = e.target.value;
+            let targetExchange: ExchangeId = preferences.exchange;
+            let targetSymbol = selected;
+
+            if (selected === 'GC') {
+              targetSymbol = 'GC';
+              targetExchange = 'comex';
+            } else if (selected === 'XAUUSD' || selected === 'XAUUSD_VANTAGE') {
+              targetSymbol = selected;
+              targetExchange = 'binance';
+            } else {
+              const inst = InstrumentRegistry.getInstrument(selected);
+              targetSymbol = inst.symbol;
+              targetExchange = inst.providerId;
+            }
+
+            const inst = InstrumentRegistry.getInstrument(targetSymbol, targetExchange);
+            const patch: Partial<TerminalPreferences> = {
+              symbol: inst.symbol,
+              exchange: targetExchange,
+            };
+            if (!inst.supportedIntervals.includes(preferences.timeframe)) {
+              patch.timeframe = inst.defaultTimeframe;
+            }
+            onUpdatePreferences(patch);
+          }}
+          style={{
+            background: 'rgba(234, 179, 8, 0.08)',
+            border: '1px solid rgba(234, 179, 8, 0.35)',
+            borderRadius: 4,
+            color: '#facc15',
+            fontSize: 11.5,
+            fontWeight: 800,
+            padding: '3px 8px',
+            outline: 'none',
+            cursor: 'pointer',
+            maxWidth: 260,
+          }}
+          title="Active Gold Trading Instrument"
+        >
+          <optgroup label="🥇 Gold Benchmark Instruments (TradingView Real-Time)" style={{ background: '#0b101b', color: '#fbbf24', fontWeight: 800 }}>
+            <option value="XAUUSD" style={{ background: '#0d121c', color: '#fcd34d', fontWeight: 800 }}>
+              XAU/USD • OANDA (TradingView Spot Gold)
             </option>
-            <option value="XAUUSDT" style={{ background: '#0d121c', color: '#f1f5f9' }}>
-              XAUUSDT Perpetual • Binance Futures (24/7)
+            <option value="XAUUSD_VANTAGE" style={{ background: '#0d121c', color: '#fcd34d', fontWeight: 800 }}>
+              XAU/USD • Vantage (TradingView Spot Gold)
             </option>
-            <option value="GC" style={{ background: '#0d121c', color: '#94a3b8' }}>
-              GC Gold Futures • COMEX (Proxy 1D)
+            <option value="GC" style={{ background: '#0d121c', color: '#f59e0b', fontWeight: 700 }}>
+              GC • COMEX Gold Futures (CME Globex)
             </option>
           </optgroup>
-          <optgroup label="Crypto Spot (24/7 Live L2)" style={{ background: '#0b101b', color: '#38bdf8', fontWeight: 700 }}>
-            <option value="BTCUSDT" style={{ background: '#0d121c', color: '#f1f5f9' }}>
-              BTC/USDT Spot • Binance
-            </option>
-            <option value="ETHUSDT" style={{ background: '#0d121c', color: '#f1f5f9' }}>
-              ETH/USDT Spot • Binance
-            </option>
-            <option value="SOLUSDT" style={{ background: '#0d121c', color: '#f1f5f9' }}>
-              SOL/USDT Spot • Binance
-            </option>
-            <option value="BNBUSDT" style={{ background: '#0d121c', color: '#f1f5f9' }}>
-              BNB/USDT Spot • Binance
-            </option>
+          <optgroup label="⚡ Crypto Spot" style={{ background: '#0b101b', color: '#38bdf8', fontWeight: 800 }}>
+            <option value="BTCUSDT" style={{ background: '#0d121c', color: '#93c5fd' }}>BTC/USDT Spot</option>
+            <option value="ETHUSDT" style={{ background: '#0d121c', color: '#93c5fd' }}>ETH/USDT Spot</option>
+            <option value="SOLUSDT" style={{ background: '#0d121c', color: '#93c5fd' }}>SOL/USDT Spot</option>
           </optgroup>
         </select>
 
@@ -392,7 +440,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
                     } else if (mode === 'footprint') {
                       onUpdatePreferences({
                         chartMode: mode,
-                        showCandles: false,
+                        showCandles: true,
                         showHeatmap: false,
                         showFootprint: true,
                         showBubbles: preferences.showBubbles,
@@ -403,7 +451,7 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
                     } else if (mode === 'heatmap_footprint') {
                       onUpdatePreferences({
                         chartMode: mode,
-                        showCandles: false,
+                        showCandles: true,
                         showHeatmap: true,
                         showFootprint: true,
                         showBubbles: preferences.showBubbles,
@@ -480,6 +528,8 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
                   onUpdatePreferences({
                     showFootprint: next,
                     footprint: { ...preferences.footprint, enabled: next },
+                    showCandles: true,
+                    chartMode: next ? 'footprint' : (preferences.showHeatmap ? 'heatmap' : 'candles'),
                   });
                 }}
               >
@@ -1174,8 +1224,21 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
         {/* Quick Toggles: Candles | Heatmap | Footprint | COB | Bubbles */}
         <div className="toolbar-quick-toggles" style={{ display: 'flex', background: 'rgba(255, 255, 255, 0.03)', borderRadius: 4, padding: 1.5, gap: 1 }}>
           <button
-            className={`tool-btn ${preferences.showCandles ? 'active' : ''}`}
-            onClick={() => onUpdatePreferences({ showCandles: !preferences.showCandles })}
+            className={`tool-btn ${preferences.showCandles && !preferences.showFootprint ? 'active' : ''}`}
+            onClick={() => {
+              if (preferences.showFootprint) {
+                onUpdatePreferences({
+                  showCandles: true,
+                  showFootprint: false,
+                  footprint: { ...preferences.footprint, enabled: false },
+                  chartMode: preferences.showHeatmap ? 'heatmap' : 'candles',
+                });
+              } else {
+                onUpdatePreferences({
+                  showCandles: !preferences.showCandles,
+                });
+              }
+            }}
             title="Toggle Candles"
             style={{ height: 24, padding: '0 6px', fontSize: 11 }}
           >
@@ -1227,6 +1290,8 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
                 onUpdatePreferences({
                   showFootprint: next,
                   footprint: { ...preferences.footprint, enabled: next },
+                  showCandles: true,
+                  chartMode: next ? 'footprint' : (preferences.showHeatmap ? 'heatmap' : 'candles'),
                 });
               }}
               title="Toggle Footprint"
@@ -1438,8 +1503,15 @@ export const TopToolbar: React.FC<TopToolbarProps> = ({
             }}
           />
           <span>{badge.label}</span>
-          <span style={{ color: '#94a3b8', fontWeight: 400 }}>
-            {latencyMetrics.orderBookAgeMs > 0 ? `${latencyMetrics.orderBookAgeMs}ms` : '--'}
+          <span style={{
+            color: (latencyMetrics.orderBookAgeMs > 0 && latencyMetrics.orderBookAgeMs <= 120)
+              ? '#00e676'
+              : (latencyMetrics.orderBookAgeMs <= 250 ? '#ffb300' : '#f87171'),
+            fontWeight: 500,
+          }}>
+            {latencyMetrics.orderBookAgeMs > 0
+              ? `${latencyMetrics.orderBookAgeMs}ms`
+              : (latencyMetrics.wsPingMs > 0 ? `${latencyMetrics.wsPingMs}ms` : '--')}
           </span>
         </div>
 

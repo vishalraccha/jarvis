@@ -48,6 +48,9 @@ export class HeatmapEngine {
   // Active persistent resting liquidity levels (keyed by tick)
   private restingLevels: Map<number, { price: number; qty: number; initialQty: number; isBid: boolean; tick: number; isOutside?: boolean }> = new Map();
 
+  private cachedDynamicRange: { minQty: number; maxQty: number; timestamp: number } | null = null;
+  private cachedFilterThreshold: { threshold: number; timestamp: number } | null = null;
+
   private listeners: Set<HeatmapUpdateCallback> = new Set();
 
   constructor(samplingIntervalMs: number = 250) {
@@ -67,6 +70,17 @@ export class HeatmapEngine {
       this.slices = this.historicalSlices;
       return;
     }
+
+    // Ensure live slices are strictly newer than the historical candle series
+    const newestHist = this.historicalSlices[this.historicalSlices.length - 1].timestamp;
+    const activeLive = this.liveSlices.filter((s) => s.timestamp >= newestHist);
+    this.liveSlices = activeLive;
+
+    if (this.liveSlices.length === 0) {
+      this.slices = this.historicalSlices;
+      return;
+    }
+
     const oldestLive = this.liveSlices[0].timestamp;
     const histBeforeLive = this.historicalSlices.filter((s) => s.timestamp < oldestLive);
     this.slices = [...histBeforeLive, ...this.liveSlices];
@@ -203,6 +217,10 @@ export class HeatmapEngine {
         this.restingLevels.delete(tick);
       }
     }
+
+    if (this.slices.length > 0) {
+      this.notifyListeners(this.slices[this.slices.length - 1]);
+    }
   }
 
   subscribe(callback: HeatmapUpdateCallback): () => void {
@@ -251,6 +269,15 @@ export class HeatmapEngine {
       sliceMap.set(s.timestamp, s);
     }
     for (const s of slices) {
+      if (this.restingLevels.size > 0) {
+        for (const lvl of this.restingLevels.values()) {
+          if (!s.levels.has(lvl.price) && lvl.qty > 0) {
+            s.levels.set(lvl.price, lvl.qty);
+            if (lvl.isBid) s.bids.set(lvl.price, lvl.qty);
+            else s.asks.set(lvl.price, lvl.qty);
+          }
+        }
+      }
       sliceMap.set(s.timestamp, s);
     }
     this.historicalSlices = Array.from(sliceMap.values()).sort((a, b) => a.timestamp - b.timestamp);
@@ -577,7 +604,15 @@ export class HeatmapEngine {
       superRoundStep = 1.0;
     }
 
-    const qBase = this.minObservedQty > 0 ? this.minObservedQty : (midPrice >= 20000 ? 1.0 : 3.5);
+    const currentResting = this.getActiveRestingLevels();
+    let qBase = midPrice >= 20000 ? 1.0 : midPrice >= 1000 ? 4.5 : 2.5;
+    if (currentResting.length > 0) {
+      const restingQtys = currentResting.map((r) => r.qty).sort((a, b) => a - b);
+      const medianResting = restingQtys[Math.floor(restingQtys.length / 2)];
+      if (medianResting > 0) {
+        qBase = Math.max(qBase, medianResting * 0.45);
+      }
+    }
     const targetPeakQty = qBase * 7.5;
 
     // 1. Identify Structural Liquidity Levels across the entire chart history
@@ -840,7 +875,8 @@ export class HeatmapEngine {
     marketType: 'spot' | 'linear_perpetual' = 'spot',
     precisionMultiplier: number = 100
   ): HeatmapTimeSlice | null {
-    if (orderBook.getSyncStatus() !== 'SYNCHRONIZED') {
+    const stats = orderBook.getStats();
+    if (stats.bidLevelsCount === 0 && stats.askLevelsCount === 0) {
       return null;
     }
 
@@ -1217,6 +1253,11 @@ export class HeatmapEngine {
       };
     }
 
+    const now = Date.now();
+    if (this.cachedDynamicRange && now - this.cachedDynamicRange.timestamp < 350) {
+      return { minQty: this.cachedDynamicRange.minQty, maxQty: this.cachedDynamicRange.maxQty };
+    }
+
     const mode = settings.normalizationMode || 'visible_window';
 
     let populationSlices: HeatmapTimeSlice[];
@@ -1262,18 +1303,22 @@ export class HeatmapEngine {
       this.p10Qty = p10;
       this.p95Qty = p95;
       this.isCalibrated = true;
+      this.cachedDynamicRange = { minQty: targetMin, maxQty: targetMax, timestamp: now };
 
       return { minQty: targetMin, maxQty: targetMax };
     }
 
     if (this.isCalibrated && this.maxObservedQty > 0) {
+      this.cachedDynamicRange = { minQty: this.minObservedQty, maxQty: this.maxObservedQty, timestamp: now };
       return { minQty: this.minObservedQty, maxQty: this.maxObservedQty };
     }
 
-    return {
+    const fallback = {
       minQty: this.minObservedQty > 0 ? this.minObservedQty : 0.05,
       maxQty: this.maxObservedQty > 0 ? this.maxObservedQty : 25.0,
     };
+    this.cachedDynamicRange = { ...fallback, timestamp: now };
+    return fallback;
   }
 
   /**
@@ -1289,6 +1334,11 @@ export class HeatmapEngine {
     const pct = settings.liquidityFilterPercentile ?? settings.saturation ?? 0;
     if (pct <= 0) {
       return settings.minLiquidityQty || 0;
+    }
+
+    const now = Date.now();
+    if (this.cachedFilterThreshold && now - this.cachedFilterThreshold.timestamp < 350) {
+      return this.cachedFilterThreshold.threshold;
     }
 
     const sourceSlices = (visibleSlices && visibleSlices.length > 0)
@@ -1308,7 +1358,11 @@ export class HeatmapEngine {
       }
     }
 
-    if (qtys.length === 0) return settings.minLiquidityQty || 0;
+    if (qtys.length === 0) {
+      const def = settings.minLiquidityQty || 0;
+      this.cachedFilterThreshold = { threshold: def, timestamp: now };
+      return def;
+    }
 
     qtys.sort((a, b) => a - b);
     const clampedPct = Math.max(0, Math.min(99, pct));

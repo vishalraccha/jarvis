@@ -14,7 +14,7 @@ import { OrderBookDiagnosticsModal } from '../diagnostics/OrderBookDiagnosticsMo
 import { CacheSettingsModal } from '../settings/CacheSettingsModal';
 
 import { BinanceAdapter } from '../../services/exchange/BinanceAdapter';
-import { BybitAdapter } from '../../services/exchange/BybitAdapter';
+import { ComexAdapter } from '../../services/exchange/ComexAdapter';
 import { GoldPriceDevAdapter } from '../../services/exchange/GoldPriceDevAdapter';
 import { IExchangeAdapter } from '../../services/exchange/ExchangeAdapter';
 import { ExchangeId } from '../../types/market';
@@ -48,8 +48,9 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
   const [preferences, setPreferences] = useState<TerminalPreferences>(() => {
     try {
       const savedSymbol = localStorage.getItem('jarvis_last_symbol');
-      if (savedSymbol) {
-        return { ...DEFAULT_TERMINAL_PREFERENCES, symbol: savedSymbol };
+      if (savedSymbol && (savedSymbol === 'GC' || savedSymbol.startsWith('XAU'))) {
+        const inst = InstrumentRegistry.getInstrument(savedSymbol);
+        return { ...DEFAULT_TERMINAL_PREFERENCES, symbol: savedSymbol, exchange: inst.providerId };
       }
     } catch {}
     return DEFAULT_TERMINAL_PREFERENCES;
@@ -76,11 +77,11 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
 
   // Engine references
   const binanceAdapterRef = useRef<BinanceAdapter>(new BinanceAdapter());
-  const bybitAdapterRef = useRef<BybitAdapter>(new BybitAdapter());
+  const comexAdapterRef = useRef<ComexAdapter>(new ComexAdapter());
   const goldPriceDevAdapterRef = useRef<GoldPriceDevAdapter>(new GoldPriceDevAdapter());
 
   const getAdapter = useCallback((exchange: ExchangeId): IExchangeAdapter => {
-    if (exchange === 'bybit') return bybitAdapterRef.current;
+    if (exchange === 'comex') return comexAdapterRef.current;
     if (exchange === 'goldprice_dev') return goldPriceDevAdapterRef.current;
     return binanceAdapterRef.current;
   }, []);
@@ -116,9 +117,15 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         const bubblesActive = stored.showBubbles !== undefined
           ? stored.showBubbles
           : (stored.bubbles?.enabled ?? true);
+        const symbolIsGold = stored.symbol === 'GC' || (stored.symbol && stored.symbol.startsWith('XAU'));
+        const safeSymbol = symbolIsGold ? stored.symbol : 'GC';
+        const safeExchange = symbolIsGold && stored.exchange ? stored.exchange : 'comex';
+
         const activeDefaults: TerminalPreferences = {
           ...DEFAULT_TERMINAL_PREFERENCES,
           ...stored,
+          symbol: safeSymbol,
+          exchange: safeExchange,
           showBubbles: bubblesActive,
           showHeatmap: isFpMode ? false : (stored.showHeatmap ?? true),
           showDepthProfile: isFpMode ? false : true,
@@ -212,8 +219,35 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
   }, []);
 
   const latestCandlesRef = useRef<any[]>([]);
+  const currentInstrumentKeyRef = useRef<string>('');
 
-  // 2. Fetch Historical Candles (Instant Cache Render -> Async Fresh Sync -> Progressive Background Pagination)
+  const seedEngines = useCallback((candles: any[], symbol: string, timeframe: any, exchange: ExchangeId) => {
+    const instrument = InstrumentRegistry.getInstrument(symbol, exchange);
+
+    if (instrument.supportsBubbles) {
+      bubbleManagerRef.current.setTimeframe(timeframe);
+      bubbleManagerRef.current.seedFromCandles(candles);
+    } else {
+      bubbleManagerRef.current.clear();
+    }
+
+    if (instrument.supportsFootprint) {
+      footprintEngineRef.current.setTimeframe(timeframe);
+      footprintEngineRef.current.clear();
+      footprintEngineRef.current.seedFromCandles(candles, orderBookRef.current);
+    } else {
+      footprintEngineRef.current.clear();
+    }
+
+    if (instrument.supportsHeatmap) {
+      heatmapEngineRef.current.seedFromCandlesAndOrderBook(candles, orderBookRef.current);
+      heatmapEngineRef.current.seedHistoricalCandlesLiquidity(candles, symbol, exchange);
+    } else {
+      heatmapEngineRef.current.clear();
+    }
+  }, []);
+
+  // 2. Fetch Historical Candles (Instant RAM <1ms -> Instant DB <3ms -> Async Fresh Sync -> Progressive Background Pagination)
   const loadCandles = useCallback(async (symbol: string, timeframe: any, exchange: ExchangeId = preferencesRef.current.exchange) => {
     const cacheKey = `${exchange}_${symbol}_${timeframe}`;
     const adapter = getAdapter(exchange);
@@ -224,31 +258,64 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
       progressiveTimerRef.current = null;
     }
 
-    // Step 1 & 2: Read cached candles from IndexedDB and render IMMEDIATELY
-    try {
-      let cached = await indexedDBCache.loadCandles(symbol, timeframe);
-      if (cached && cached.length > 0) {
-        // Purge any rogue cross-symbol outliers
-        const sample = cached.slice(-30).map((c) => c.close).sort((a, b) => a - b);
-        const median = sample[Math.floor(sample.length / 2)];
-        if (median > 0) {
-          cached = cached.filter((c) => c.close >= median * 0.3 && c.close <= median * 3.0);
-        }
+    let hasRendered = false;
 
-        if (symbol === preferencesRef.current.symbol && exchange === preferencesRef.current.exchange) {
-          latestCandlesRef.current = cached;
-          chartRef.current?.updateCandles(cached);
-          bubbleManagerRef.current.setTimeframe(timeframe);
-          bubbleManagerRef.current.seedFromCandles(cached);
-          footprintEngineRef.current.setTimeframe(timeframe);
-          footprintEngineRef.current.clear();
-          footprintEngineRef.current.seedFromCandles(cached, orderBookRef.current);
-          heatmapEngineRef.current.seedFromCandlesAndOrderBook(cached, orderBookRef.current);
-        }
-      }
-    } catch (e) {
-      console.warn('[TradingTerminal] Local cache read error:', e);
+    // TIER 1: In-Memory RAM Cache (Instant 0ms MT5-speed)
+    const ramCandles = indexedDBCache.getCachedCandlesSync(symbol, timeframe, exchange);
+    if (ramCandles && ramCandles.length > 0 && symbol === preferencesRef.current.symbol && exchange === preferencesRef.current.exchange) {
+      latestCandlesRef.current = ramCandles;
+      chartRef.current?.updateCandles(ramCandles);
+      seedEngines(ramCandles, symbol, timeframe, exchange);
+      hasRendered = true;
     }
+
+    // TIER 2: IndexedDB Local Cache (< 3ms) if not already rendered from RAM
+    if (!hasRendered) {
+      try {
+        let dbCached = await indexedDBCache.loadCandles(symbol, timeframe, exchange);
+        const isGold = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase() === 'GC';
+        if (dbCached && dbCached.length > 0) {
+          // Purge any rogue cross-symbol outliers or invalid zero/negative prices
+          dbCached = dbCached.filter((c) =>
+            Number.isFinite(c.time) && c.time > 0 &&
+            Number.isFinite(c.open) && c.open > 10 &&
+            Number.isFinite(c.high) && c.high > 10 &&
+            Number.isFinite(c.low) && c.low > 10 &&
+            Number.isFinite(c.close) && c.close > 10 &&
+            c.low <= c.high
+          );
+          const sample = dbCached.slice(-30).map((c) => c.close).sort((a, b) => a - b);
+          const median = sample[Math.floor(sample.length / 2)];
+          if (median > 0) {
+            // Discard only true cross-symbol contamination (e.g. BTC prices in gold)
+            const isContaminated = isGold && (median > 15000 || median < 500);
+            if (!isContaminated) {
+              dbCached = dbCached.filter((c) =>
+                c.close >= median * 0.5 && c.close <= median * 2.0 &&
+                c.low >= median * 0.5 && c.high <= median * 2.0
+              );
+            } else {
+              dbCached = [];
+            }
+          }
+
+          if (dbCached.length > 0 && symbol === preferencesRef.current.symbol && exchange === preferencesRef.current.exchange) {
+            latestCandlesRef.current = dbCached;
+            chartRef.current?.updateCandles(dbCached);
+            seedEngines(dbCached, symbol, timeframe, exchange);
+            hasRendered = true;
+          }
+        }
+      } catch (e) {
+        console.warn('[TradingTerminal] Local cache read error:', e);
+      }
+    }
+
+    // Only clear if neither RAM nor DB had candles and instrument changed
+    if (!hasRendered && currentInstrumentKeyRef.current !== cacheKey) {
+      chartRef.current?.clearChart();
+    }
+    currentInstrumentKeyRef.current = cacheKey;
 
     // Deduplicate in-flight requests for same symbol/timeframe
     if (inFlightCandleLoadsRef.current.has(cacheKey)) {
@@ -265,112 +332,52 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
             return;
           }
 
-          // Filter out cross-symbol outliers
-          const sample = freshCandles.slice(-30).map((c) => c.close).sort((a, b) => a - b);
+          // Filter out cross-symbol outliers and zero/negative prices
+          const isGold = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase() === 'GC';
+          const validBars = freshCandles.filter((c) =>
+            Number.isFinite(c.time) && c.time > 0 &&
+            Number.isFinite(c.open) && c.open > 10 &&
+            Number.isFinite(c.high) && c.high > 10 &&
+            Number.isFinite(c.low) && c.low > 10 &&
+            Number.isFinite(c.close) && c.close > 10 &&
+            c.low <= c.high
+          );
+          const sample = validBars.slice(-30).map((c) => c.close).sort((a, b) => a - b);
           const median = sample[Math.floor(sample.length / 2)];
-          const validFresh = median > 0
-            ? freshCandles.filter((c) => c.close >= median * 0.3 && c.close <= median * 3.0)
-            : freshCandles;
 
-          // Step 4: Merge and deduplicate results
+          if (isGold && (median > 15000 || median < 500)) {
+            console.warn('[TradingTerminal] Rejecting invalid candles for Gold:', symbol, median);
+            return;
+          }
+
+          const validFresh = median > 0
+            ? validBars.filter((c) =>
+                c.close >= median * 0.5 && c.close <= median * 2.0 &&
+                c.low >= median * 0.5 && c.high <= median * 2.0
+              )
+            : validBars;
+
+          // Step 4: Seamlessly merge fresh candles with existing buffer (no flickering or jumping)
           const merged = mergeAndDeduplicateCandles(latestCandlesRef.current, validFresh);
           latestCandlesRef.current = merged;
 
-          // Step 5: Update the chart without resetting its entire time scale
+          // Step 5: Update the chart immediately with smooth auto-scaling
           chartRef.current?.updateCandles(merged);
-          indexedDBCache.saveCandles(symbol, timeframe, merged);
-
-          const instrument = InstrumentRegistry.getInstrument(symbol);
-
-          // Seed bubbles, footprint, and heatmap ONLY if supported by instrument
-          if (instrument.supportsBubbles) {
-            bubbleManagerRef.current.setTimeframe(timeframe);
-            bubbleManagerRef.current.seedFromCandles(merged);
-          } else {
-            bubbleManagerRef.current.clear();
-          }
-
-          if (instrument.supportsFootprint) {
-            footprintEngineRef.current.setTimeframe(timeframe);
-            footprintEngineRef.current.clear();
-            footprintEngineRef.current.seedFromCandles(merged, orderBookRef.current);
-          } else {
-            footprintEngineRef.current.clear();
-          }
-
-          if (instrument.supportsHeatmap) {
-            heatmapEngineRef.current.seedFromCandlesAndOrderBook(merged, orderBookRef.current);
-            heatmapEngineRef.current.seedHistoricalCandlesLiquidity(merged, symbol, exchange);
-          } else {
-            heatmapEngineRef.current.clear();
-          }
+          indexedDBCache.saveCandles(symbol, timeframe, merged, exchange);
+          seedEngines(merged, symbol, timeframe, exchange);
 
           // Ingest recent trades if supported
+          const instrument = InstrumentRegistry.getInstrument(symbol, exchange);
           if (instrument.supportsTrades) {
-            adapter.fetchRecentTrades(symbol, 1000).then((trades) => {
+            adapter.fetchRecentTrades(symbol, 500).then((trades) => {
               if (symbol !== preferencesRef.current.symbol) return;
               trades.forEach((t) => {
                 bubbleManagerRef.current.addTrade(t);
                 footprintEngineRef.current.addTrade(t);
               });
             }).catch(() => {});
-
-            // Fetch historical aggregate trades to populate recent historical footprints
-            if (adapter.fetchAggTrades) {
-              const oneHourAgo = Date.now() - 3600 * 1000;
-              adapter.fetchAggTrades(symbol, oneHourAgo, Date.now(), 1000).then((aggTrades) => {
-                if (symbol !== preferencesRef.current.symbol) return;
-                footprintEngineRef.current.ingestTrades(aggTrades);
-              }).catch(() => {});
-            }
           }
         }
-
-        // Step 7: Continue loading older history progressively in background (for intraday high-frequency streams)
-        if (adapter.id === 'goldprice_dev') {
-          return;
-        }
-
-        progressiveTimerRef.current = window.setTimeout(async () => {
-          let currentList = latestCandlesRef.current;
-          if (currentList.length === 0) return;
-          let oldestTime = currentList[0].time * 1000;
-          const oneMonthAgoMs = Date.now() - (30 * 24 * 3600 * 1000);
-          const maxChunks = 15;
-
-          for (let chunk = 0; chunk < maxChunks; chunk++) {
-            if (oldestTime <= oneMonthAgoMs) break;
-            if (symbol !== preferencesRef.current.symbol || exchange !== preferencesRef.current.exchange) break;
-            try {
-              // Yield thread between chunks to keep live stream silky smooth
-              await new Promise((r) => setTimeout(r, 150));
-              if (symbol !== preferencesRef.current.symbol || exchange !== preferencesRef.current.exchange) break;
-              const olderBatch = await adapter.fetchHistoricalCandles(
-                symbol,
-                timeframe,
-                undefined,
-                oldestTime - 1000,
-                1000
-              );
-              if (!olderBatch || olderBatch.length === 0) break;
-
-              oldestTime = olderBatch[0].time * 1000;
-              const mergedOlder = mergeAndDeduplicateCandles(olderBatch, latestCandlesRef.current);
-              if (symbol !== preferencesRef.current.symbol) break;
-              latestCandlesRef.current = mergedOlder;
-              indexedDBCache.saveCandles(symbol, timeframe, mergedOlder);
-              chartRef.current?.updateCandles(mergedOlder);
-            } catch (err) {
-              console.warn('[TradingTerminal] Progressive historical load finished or paused:', err);
-              break;
-            }
-          }
-
-          if (symbol === preferencesRef.current.symbol && latestCandlesRef.current.length > 0) {
-            heatmapEngineRef.current.seedFromCandlesAndOrderBook(latestCandlesRef.current, orderBookRef.current);
-            heatmapEngineRef.current.seedHistoricalCandlesLiquidity(latestCandlesRef.current, symbol, exchange);
-          }
-        }, 500);
 
       } catch (e) {
         console.warn('[TradingTerminal] Could not fetch remote klines:', e);
@@ -381,7 +388,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
 
     inFlightCandleLoadsRef.current.set(cacheKey, fetchPromise);
     return fetchPromise;
-  }, [getAdapter]);
+  }, [getAdapter, seedEngines]);
 
   // 3. Connect to live market data and coordinate pipelines
   useEffect(() => {
@@ -393,8 +400,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
     const bubbles = bubbleManagerRef.current;
     const shiftDetector = shiftDetectorRef.current;
 
-    // Reset previous candle buffer and in-flight loads so different symbols never cross-contaminate!
-    latestCandlesRef.current = [];
+    // Reset in-flight requests (do NOT clear chart to pitch black; loadCandles paints cached bars in 0ms)
     inFlightCandleLoadsRef.current.clear();
 
     // Reset book and engines on symbol/exchange/timeframe change
@@ -411,12 +417,12 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
     footprintEngineRef.current.updateSettings(preferences.footprint);
     prevSliceRef.current = null;
 
-    const instrument = InstrumentRegistry.getInstrument(symbol);
+    const instrument = InstrumentRegistry.getInstrument(symbol, exchange);
 
     // Set tick size from instrument definition
     orderBook.setTickSize(instrument.priceTick);
 
-    // Initial klines fetch for selected timeframe
+    // Initial klines fetch for selected timeframe (renders in 0-3ms from RAM/IDB cache)
     loadCandles(symbol, preferences.timeframe, exchange);
 
     // Start Order Book Snapshot and Sequence Synchronization ONLY if supported
@@ -428,9 +434,12 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
           heatmap.seedHistoricalCandlesLiquidity(latestCandlesRef.current, symbol, exchange);
         }
 
-        // Load genuine historical slices previously recorded for THIS symbol from IndexedDB
+        // Load genuine historical slices previously recorded for THIS symbol from IndexedDB (strictly within active window)
         try {
-          const cachedSlices = await indexedDBCache.loadSlices(symbol);
+          const oldestCandleMs = latestCandlesRef.current.length > 0
+            ? latestCandlesRef.current[0].time * 1000
+            : Date.now() - 3600000;
+          const cachedSlices = await indexedDBCache.loadSlices(symbol, oldestCandleMs, Date.now());
           if (cachedSlices.length > 0) {
             heatmap.loadHistoricalSlices(cachedSlices);
           }
@@ -452,8 +461,13 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         orderBook.handleDepthUpdate(update, adapter, symbol);
       },
       onTrade: (trade) => {
-        if (!instrument.supportsTrades) return;
-        if (trade.symbol && trade.symbol.toUpperCase() !== preferencesRef.current.symbol.toUpperCase()) return;
+        if (!instrument.supportsTrades || !trade || !Number.isFinite(trade.price) || trade.price <= 10) return;
+        const curSym = preferencesRef.current.symbol.toUpperCase().replace(/[-_/]/g, '');
+        const trSym = (trade.symbol || symbol).toUpperCase().replace(/[-_/]/g, '');
+        if (trSym !== curSym) return;
+
+        // Consume resting limit liquidity at the traded price so COB and prices move dynamically!
+        orderBook.consumeLiquidity(trade.price, trade.quantity, trade.side);
         bubbles.addTrade(trade);
         shiftDetector.recordTrade(trade);
         heatmap.recordTrade(trade);
@@ -461,7 +475,11 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         chartRef.current?.updateTickPrice(trade.price, trade.timestamp);
       },
       onKline: (candle) => {
-        if (symbol.toUpperCase() !== preferencesRef.current.symbol.toUpperCase()) return;
+        if (!candle || !Number.isFinite(candle.close) || candle.close <= 10) return;
+        const curSym = preferencesRef.current.symbol.toUpperCase().replace(/[-_/]/g, '');
+        const sSym = symbol.toUpperCase().replace(/[-_/]/g, '');
+        if (sSym !== curSym) return;
+
         chartRef.current?.updateLiveCandle(candle);
         if (instrument.supportsFootprint) {
           footprintEngineRef.current.updateLiveCandle(candle, orderBookRef.current);
@@ -481,8 +499,8 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
       },
     });
 
-    // Start periodic order-book sampling for Heatmap Time Slices (every 1000ms only when heatmap or shifts active)
-    samplingTimerRef.current = window.setInterval(() => {
+    // Start periodic order-book sampling for Heatmap Time Slices (every 250ms for buttery-smooth live edge)
+    samplingTimerRef.current = (setInterval as any)(() => {
       const prefs = preferencesRef.current;
       if (!prefs.showHeatmap && !prefs.showLiquidityShifts) {
         return; // Guard against unnecessary background CPU/memory load when heatmap is off
@@ -504,7 +522,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         }
         prevSliceRef.current = slice;
       }
-    }, 1000);
+    }, 250);
 
     return () => {
       if (samplingTimerRef.current) {

@@ -40,6 +40,7 @@ export interface JarvisChartHandles {
   zoomOut: () => void;
   resetView: () => void;
   jumpToLatest: () => void;
+  clearChart: () => void;
   updateCandles: (candles: Candle[]) => void;
   updateLiveCandle: (candle: Candle) => void;
   updateTickPrice: (price: number, timestamp?: number) => void;
@@ -175,6 +176,7 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
             bottom: 0.12,
           },
           autoScale: true,
+          minimumWidth: 65,
         },
         timeScale: {
           borderColor: 'rgba(255, 255, 255, 0.07)',
@@ -194,10 +196,10 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
           },
         },
         handleScroll: {
-          mouseWheel: true,
+          mouseWheel: false,
           pressedMouseMove: true,
           horzTouchDrag: true,
-          vertTouchDrag: true,
+          vertTouchDrag: false,
         },
         handleScale: {
           axisPressedMouseMove: {
@@ -247,14 +249,10 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
       };
     }, []);
 
-    const isFootprintActive =
-      preferences.showFootprint ||
-      preferences.chartMode === 'footprint' ||
-      preferences.chartMode === 'heatmap_footprint';
+    const isFootprintActive = preferences.showFootprint && preferences.footprint?.enabled !== false;
 
     const hasInitializedViewRef = useRef<boolean>(false);
     const lastSymbolTimeframeRef = useRef<string>(`${preferences.symbol}_${preferences.timeframe}`);
-    const lastChartModeRef = useRef<string>(preferences.chartMode);
 
     useEffect(() => {
       const key = `${preferences.symbol}_${preferences.timeframe}`;
@@ -264,16 +262,42 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
       }
     }, [preferences.symbol, preferences.timeframe]);
 
-    // Only auto-adjust bar spacing ONCE when transitioning into footprint mode from another mode
+    // Dynamic bar spacing & right margin: 72px for Footprint bid x ask stack, 12px for standard candlesticks
+    const prevFootprintActiveRef = useRef<boolean>(isFootprintActive);
     useEffect(() => {
       if (!chart) return;
-      const prevMode = lastChartModeRef.current;
-      lastChartModeRef.current = preferences.chartMode;
+      const targetSpacing = isFootprintActive ? 72 : 12;
+      const isCob = preferences.showDepthProfile && preferences.depthProfile?.enabled !== false;
+      const cobW = isCob ? (preferences.depthProfile?.widthPx || 220) : 0;
+      const rightOffset = isCob ? Math.ceil(cobW / targetSpacing) + 2 : (isFootprintActive ? 3 : 6);
+      chart.timeScale().applyOptions({
+        barSpacing: targetSpacing,
+        minBarSpacing: 0.5,
+        rightOffset,
+      });
 
-      if (prevMode !== preferences.chartMode && isFootprintActive) {
-        chart.timeScale().applyOptions({ barSpacing: 72, minBarSpacing: 0.5 });
+      // When switching between Footprint and standard candles, adjust visible logical range
+      // so standard candles are framed comfortably (~75 bars) and never look distant or stretched
+      if (prevFootprintActiveRef.current !== isFootprintActive) {
+        prevFootprintActiveRef.current = isFootprintActive;
+        const totalBars = allCandlesRef.current.length;
+        if (totalBars > 0) {
+          if (isFootprintActive) {
+            chart.timeScale().setVisibleLogicalRange({
+              from: Math.max(0, totalBars - 16),
+              to: totalBars + 2,
+            });
+          } else {
+            chart.timeScale().setVisibleLogicalRange({
+              from: Math.max(0, totalBars - 75),
+              to: totalBars + rightOffset,
+            });
+          }
+        }
+      } else if (preferences.autoScrollToLatest) {
+        chart.timeScale().scrollToRealTime();
       }
-    }, [chart, isFootprintActive, preferences.chartMode]);
+    }, [chart, isFootprintActive, preferences.showDepthProfile, preferences.depthProfile?.widthPx, preferences.depthProfile?.enabled, preferences.autoScrollToLatest]);
 
     const lastPriceLineColorRef = useRef<string>('#00e676');
 
@@ -304,9 +328,11 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
             priceLineStyle: 2,
             lastValueVisible: true,
           });
-        } else if (preferences.showCandles) {
+        } else {
+          // Standard candlestick mode (Works universally for Candles, Heatmap, Bubbles, DOM)
+          const candlesVisible = preferences.showCandles !== false;
           series.applyOptions({
-            visible: true,
+            visible: candlesVisible,
             upColor: '#00e676',
             downColor: '#ff2d55',
             borderVisible: true,
@@ -320,68 +346,14 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
             priceLineStyle: 2,
             lastValueVisible: true,
           });
-        } else {
-          // In Bookmap mode, keep series active for price scale & coordinates, but render bars transparent
-          series.applyOptions({
-            visible: true,
-            upColor: 'transparent',
-            downColor: 'transparent',
-            borderVisible: false,
-            borderUpColor: 'transparent',
-            borderDownColor: 'transparent',
-            wickUpColor: 'transparent',
-            wickDownColor: 'transparent',
-            priceLineVisible: preferences.showCurrentPriceLine !== false,
-            priceLineColor: curColor,
-            priceLineWidth: 1,
-            priceLineStyle: 2,
-            lastValueVisible: true,
-          });
         }
       }
     }, [series, preferences.showCandles, preferences.showCurrentPriceLine, isFootprintActive]);
-
-    // Sync reserved right margin for COB Depth Profile (Section 4: MAIN CHART | COB PROFILE | PRICE SCALE)
-    useEffect(() => {
-      if (!chart) return;
-      const isCob = preferences.showDepthProfile && preferences.depthProfile?.enabled !== false;
-      const cobW = isCob ? (preferences.depthProfile?.widthPx || 220) : 0;
-      const isFp = isFootprintActive;
-      const targetSpacing = isFp ? 72 : 14;
-      const rightOffset = isCob ? Math.ceil(cobW / targetSpacing) + 2 : (isFp ? 3 : 6);
-      chart.timeScale().applyOptions({ rightOffset });
-    }, [chart, preferences.showDepthProfile, preferences.depthProfile?.widthPx, preferences.depthProfile?.enabled, isFootprintActive]);
-
-    const pendingBarRef = useRef<CandlestickData | null>(null);
-    const rafIdRef = useRef<number | null>(null);
-
-    // Cancel RAF on unmount
-    useEffect(() => {
-      return () => {
-        if (rafIdRef.current !== null) {
-          cancelAnimationFrame(rafIdRef.current);
-          rafIdRef.current = null;
-        }
-      };
-    }, []);
 
     // Reset current candle on timeframe or symbol change
     useEffect(() => {
       currentCandleRef.current = null;
     }, [preferences.timeframe, preferences.symbol]);
-
-    const queueBarUpdate = (bar: CandlestickData) => {
-      pendingBarRef.current = bar;
-      if (rafIdRef.current === null) {
-        rafIdRef.current = requestAnimationFrame(() => {
-          rafIdRef.current = null;
-          if (pendingBarRef.current && series) {
-            series.update(pendingBarRef.current);
-            pendingBarRef.current = null;
-          }
-        });
-      }
-    };
 
     // 3. Expose chart manipulation methods to parent
     useImperativeHandle(ref, () => ({
@@ -409,6 +381,9 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
       },
       resetView: () => {
         if (!chart) return;
+        if (series) {
+          series.priceScale().applyOptions({ autoScale: true });
+        }
         chart.timeScale().fitContent();
       },
       jumpToLatest: () => {
@@ -421,19 +396,47 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
         chart.timeScale().applyOptions({ rightOffset, minBarSpacing: 0.5 });
         chart.timeScale().scrollToRealTime();
       },
+      clearChart: () => {
+        allCandlesRef.current = [];
+        currentCandleRef.current = null;
+        hasInitializedViewRef.current = false;
+        if (series) {
+          try {
+            series.setData([]);
+          } catch {}
+        }
+      },
       updateCandles: (candles: Candle[]) => {
-        if (!series || candles.length === 0) return;
+        if (!series) return;
+        if (!candles || candles.length === 0) {
+          allCandlesRef.current = [];
+          currentCandleRef.current = null;
+          series.setData([]);
+          return;
+        }
         allCandlesRef.current = candles;
 
-        // Clean out any contaminated cross-symbol outliers (e.g. BTC 81000 mixed into ETH 2400)
-        let cleanCandles = candles;
-        if (candles.length > 0) {
-          const sample = candles.slice(-50).map((c) => c.close).sort((a, b) => a - b);
-          const medianPrice = sample[Math.floor(sample.length / 2)];
-          if (medianPrice > 0) {
-            cleanCandles = candles.filter(
-              (c) => c.close >= medianPrice * 0.25 && c.close <= medianPrice * 3.0
-            );
+        // Clean out any contaminated, zero, negative, or outlier candles
+        let cleanCandles: Candle[] = [];
+        if (candles && candles.length > 0) {
+          const valid = candles.filter((c) =>
+            Number.isFinite(c.time) && c.time > 0 &&
+            Number.isFinite(c.open) && c.open > 10 &&
+            Number.isFinite(c.high) && c.high > 10 &&
+            Number.isFinite(c.low) && c.low > 10 &&
+            Number.isFinite(c.close) && c.close > 10 &&
+            c.low <= c.high
+          );
+          if (valid.length > 0) {
+            const sample = valid.slice(-50).map((c) => c.close).sort((a, b) => a - b);
+            const medianPrice = sample[Math.floor(sample.length / 2)];
+            if (medianPrice > 0) {
+              cleanCandles = valid.filter((c) =>
+                c.close >= medianPrice * 0.5 && c.close <= medianPrice * 2.0 &&
+                c.low >= medianPrice * 0.5 && c.high <= medianPrice * 2.0 &&
+                c.open >= medianPrice * 0.5 && c.open <= medianPrice * 2.0
+              );
+            }
           }
         }
 
@@ -459,9 +462,7 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
         }
 
         series.setData(tvData);
-        if (!hasInitializedViewRef.current) {
-          series.priceScale().applyOptions({ autoScale: true });
-        }
+        series.priceScale().applyOptions({ autoScale: true });
 
         if (tvData.length > 0) {
           const latest = tvData[tvData.length - 1];
@@ -500,63 +501,93 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
         }
       },
       updateLiveCandle: (candle: Candle) => {
-        if (!series) return;
+        if (!series || !candle) return;
+        if (!Number.isFinite(candle.close) || candle.close <= 10) return;
+
         const barTime = candle.time as UTCTimestamp;
         const cur = currentCandleRef.current;
+        const close = candle.close;
+        const open = Number.isFinite(candle.open) && candle.open > 10 ? candle.open : close;
+        let high = Number.isFinite(candle.high) && candle.high > 10 ? Math.max(candle.high, open, close) : Math.max(open, close);
+        let low = Number.isFinite(candle.low) && candle.low > 10 ? Math.min(candle.low, open, close) : Math.min(open, close);
+
+        // Stale timestamp guard: ignore past klines that arrive out of order
+        if (cur && barTime < (cur.time as number)) {
+          return;
+        }
 
         // Discard rogue outlier ticks from wrong stream or cross-symbol contamination
-        if (cur && cur.close > 0) {
-          const ratio = candle.close / cur.close;
-          if (ratio > 2.5 || ratio < 0.4) {
+        if (cur && cur.close > 10) {
+          const ratio = close / cur.close;
+          if (ratio > 1.35 || ratio < 0.65) {
             return;
           }
+          const minAllowed = cur.close * 0.75;
+          const maxAllowed = cur.close * 1.35;
+          if (low < minAllowed) low = Math.min(open, close);
+          if (high > maxAllowed) high = Math.max(open, close);
         }
 
         if (!cur || barTime > (cur.time as number)) {
           const newBar: CandlestickData = {
             time: barTime,
-            open: candle.open,
-            high: candle.high,
-            low: candle.low,
-            close: candle.close,
+            open,
+            high,
+            low,
+            close,
           };
           currentCandleRef.current = newBar;
-          syncPriceLineColor(newBar.close >= (newBar.open ?? newBar.close) ? '#00e676' : '#ff2d55');
-          series.update(newBar);
+          syncPriceLineColor(close >= open ? '#00e676' : '#ff2d55');
+          try {
+            series.update(newBar);
+          } catch (e) {
+            console.warn('[JarvisChart] updateLiveCandle newBar error:', e);
+          }
           if (preferences.autoScrollToLatest && chart) {
             chart.timeScale().scrollToRealTime();
           }
-        } else if (barTime === (cur.time as number)) {
+        } else {
+          // Kline update within active candle: High only expands up, Low only expands down
+          const barOpen = cur.open ?? open;
+          const kHigh = Math.max(cur.high, high, barOpen, close);
+          const kLow = Math.min(cur.low, low, barOpen, close);
           const bar: CandlestickData = {
-            time: barTime,
-            open: candle.open,
-            high: Math.max(cur.high, candle.high),
-            low: Math.min(cur.low, candle.low),
-            close: candle.close,
+            time: cur.time,
+            open: barOpen,
+            high: kHigh,
+            low: kLow,
+            close,
           };
           currentCandleRef.current = bar;
-          syncPriceLineColor(bar.close >= (bar.open ?? bar.close) ? '#00e676' : '#ff2d55');
-          series.update(bar);
+          syncPriceLineColor(close >= barOpen ? '#00e676' : '#ff2d55');
+          try {
+            series.update(bar);
+          } catch (e) {
+            console.warn('[JarvisChart] updateLiveCandle activeBar error:', e);
+          }
         }
       },
       updateTickPrice: (price: number, timestamp?: number) => {
-        if (!series || !Number.isFinite(price) || price <= 0) return;
+        if (!series || !Number.isFinite(price) || price <= 10) return;
         const cur = currentCandleRef.current;
 
-        // Discard cross-symbol outlier ticks (e.g. BTC 81000 arriving on ETH 2400)
-        if (cur && cur.close > 0) {
+        // Discard cross-symbol outlier ticks
+        if (cur && cur.close > 10) {
           const ratio = price / cur.close;
-          if (ratio > 2.5 || ratio < 0.4) {
+          if (ratio > 1.25 || ratio < 0.75) {
             return;
           }
         }
 
-        // Integrity: require authoritative trade timestamp; never synthesize new candles from browser clock!
-        if (!timestamp) return;
-
-        const tradeSec = Math.floor(timestamp / 1000);
-        const tfSec = TIMEFRAME_SECONDS[preferences.timeframe] || 300;
+        const effectiveTimestamp = timestamp || Date.now();
+        const tradeSec = Math.floor(effectiveTimestamp / 1000);
+        const tfSec = TIMEFRAME_SECONDS[preferences.timeframe] || 60;
         const barTime = (Math.floor(tradeSec / tfSec) * tfSec) as UTCTimestamp;
+
+        // Stale timestamp guard: ignore past ticks that arrive out of order
+        if (cur && barTime < (cur.time as number)) {
+          return;
+        }
 
         if (!cur || barTime > (cur.time as number)) {
           // A new candle boundary has elapsed! Immediately open the new bar
@@ -568,23 +599,36 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
             close: price,
           };
           currentCandleRef.current = newBar;
-          syncPriceLineColor(newBar.close >= (newBar.open ?? newBar.close) ? '#00e676' : '#ff2d55');
-          series.update(newBar);
-          if (preferences.autoScrollToLatest && chart) {
-            chart.timeScale().scrollToPosition(8, false);
+          syncPriceLineColor('#00e676');
+          try {
+            series.update(newBar);
+          } catch (e) {
+            console.warn('[JarvisChart] updateTickPrice newBar error:', e);
           }
-        } else if (barTime === (cur.time as number)) {
-          // Tick within active candle: batch to 60 FPS animation frame
+          if (preferences.autoScrollToLatest && chart) {
+            chart.timeScale().scrollToRealTime();
+          }
+        } else {
+          // Tick within active candle: High can only expand, Low can only decrease
+          const barOpen = cur.open ?? price;
+          const high = Math.max(cur.high, price, barOpen);
+          const low = Math.min(cur.low, price, barOpen);
+          const close = price;
+
           const updatedBar: CandlestickData = {
             time: cur.time,
-            open: cur.open,
-            high: Math.max(cur.high, price),
-            low: Math.min(cur.low, price),
-            close: price,
+            open: barOpen,
+            high,
+            low,
+            close,
           };
           currentCandleRef.current = updatedBar;
-          syncPriceLineColor(updatedBar.close >= (updatedBar.open ?? updatedBar.close) ? '#00e676' : '#ff2d55');
-          queueBarUpdate(updatedBar);
+          syncPriceLineColor(close >= barOpen ? '#00e676' : '#ff2d55');
+          try {
+            series.update(updatedBar);
+          } catch (e) {
+            console.warn('[JarvisChart] updateTickPrice activeBar error:', e);
+          }
         }
       },
     }));
@@ -594,6 +638,14 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
     }, []);
 
     const handleContainerMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+      // If mouse button is pressed (dragging/panning the chart), bypass hover hit-testing completely
+      // to keep drag interactions buttery smooth at 120 FPS without React re-render lag
+      if (e.buttons !== 0) {
+        if (hoveredZone.zone !== null) setHoveredZone({ zone: null, x: 0, y: 0 });
+        if (hoveredBubble.bubble !== null) setHoveredBubble({ bubble: null, x: 0, y: 0 });
+        return;
+      }
+
       const rect = containerRef.current?.getBoundingClientRect();
       if (!rect) return;
       const mouseX = e.clientX - rect.left;
@@ -701,6 +753,14 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
           handleHoverBubble(null, 0, 0);
           setHoveredZone({ zone: null, x: 0, y: 0 });
           setHoveredFootprintDebug({ debug: null, x: 0, y: 0 });
+        }}
+        onDoubleClick={() => {
+          if (series) {
+            series.priceScale().applyOptions({ autoScale: true });
+          }
+          if (chart) {
+            chart.timeScale().scrollToRealTime();
+          }
         }}
       >
         {/* Layer 1: Heatmap Canvas in the background (zIndex: 1) */}
@@ -840,6 +900,7 @@ export const JarvisChart = forwardRef<JarvisChartHandles, JarvisChartProps>(
               ? hoveredZone.y
               : hoveredFootprintDebug.y
           }
+          symbol={preferences.symbol}
         />
 
         {/* Real-time Countdown Timer on the Price Marker for Active Candle Finish */}

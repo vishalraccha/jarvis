@@ -125,9 +125,9 @@ export const DEFAULT_FOOTPRINT_SETTINGS: FootprintSettings = {
 
 export const DEFAULT_TERMINAL_PREFERENCES: TerminalPreferences = {
   exchange: 'binance',
-  symbol: 'BTCUSDT',
+  symbol: 'XAUUSD',
   timeframe: '1m',
-  chartMode: 'heatmap',
+  chartMode: 'candles',
   showHeatmap: true,
   showCandles: true,
   showBubbles: true,
