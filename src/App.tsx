@@ -6,6 +6,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { JarvisGatekeeper } from './components/auth/JarvisGatekeeper';
 import { TradingTerminal } from './components/terminal/TradingTerminal';
+import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { AuthService } from './services/auth/AuthService';
 
 export const App: React.FC = () => {
@@ -48,7 +49,11 @@ export const App: React.FC = () => {
     return <JarvisGatekeeper onAuthenticated={handleAuthenticated} />;
   }
 
-  return <TradingTerminal onLockTerminal={handleLockTerminal} />;
+  return (
+    <ErrorBoundary>
+      <TradingTerminal onLockTerminal={handleLockTerminal} />
+    </ErrorBoundary>
+  );
 };
 
 export default App;

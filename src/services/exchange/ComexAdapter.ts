@@ -309,8 +309,15 @@ export class ComexAdapter implements IExchangeAdapter {
     try {
       const binanceInterval = this.mapTimeframeToBinance(interval);
       const qs = `symbol=XAUUSDT&interval=${binanceInterval}&limit=1000`;
-      const res = await fetch(`/api/fapi/fapi/v1/klines?${qs}`, { signal: AbortSignal.timeout(2500) })
-        .catch(() => fetch(`https://fapi.binance.com/fapi/v1/klines?${qs}`, { signal: AbortSignal.timeout(3000) }));
+      let res: Response | null = null;
+      try {
+        res = await fetch(`/api/cache/klines?${qs}`, { signal: AbortSignal.timeout(1200) });
+      } catch {}
+      if (!res || !res.ok) {
+        try {
+          res = await fetch(`/api/fapi/fapi/v1/klines?${qs}`, { signal: AbortSignal.timeout(1500) });
+        } catch {}
+      }
       if (res && res.ok) {
         const raw = await res.json();
         if (Array.isArray(raw) && raw.length > 0) {
@@ -670,7 +677,7 @@ export class ComexAdapter implements IExchangeAdapter {
     const nowSec = Math.floor(Date.now() / 1000);
     const barsCount = 200;
 
-    const basePrice = this.lastQuotePrice > 100 ? this.lastQuotePrice : 4148.0;
+    const basePrice = this.lastQuotePrice > 100 ? this.lastQuotePrice : (4122.30 + this.comexBasis);
 
     for (let i = barsCount; i >= 0; i--) {
       const t = nowSec - i * intervalSec;

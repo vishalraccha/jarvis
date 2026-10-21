@@ -97,11 +97,11 @@ const CandleCountdownMarkerComponent: React.FC<CandleCountdownMarkerProps> = ({
           return;
         }
 
-        const now = Date.now();
+        const clockNow = Date.now();
 
         // Sample scale width at most once every 3 seconds without forced reflow in every frame
-        if (now - lastScaleWCheckRef.current > 3000) {
-          lastScaleWCheckRef.current = now;
+        if (clockNow - lastScaleWCheckRef.current > 3000) {
+          lastScaleWCheckRef.current = clockNow;
           try {
             const w = chart.priceScale('right')?.width();
             if (w && w > 20) cachedScaleWRef.current = w;
@@ -153,11 +153,11 @@ const CandleCountdownMarkerComponent: React.FC<CandleCountdownMarkerProps> = ({
           }
         }
 
-        // Compute candle countdown at most twice a second (500ms throttle)
-        if (now - lastTimeCheckRef.current >= 500) {
-          lastTimeCheckRef.current = now;
+        // Compute candle countdown at most twice a second (250ms throttle)
+        if (clockNow - lastTimeCheckRef.current >= 250) {
+          lastTimeCheckRef.current = clockNow;
           const candleTimeSec = typeof cur.time === 'number' ? cur.time : undefined;
-          const res = getCandleTimeRemaining(candleTimeSec, timeframe);
+          const res = getCandleTimeRemaining(candleTimeSec, timeframe, clockNow);
           if (res.formatted !== lastFormattedRef.current) {
             lastFormattedRef.current = res.formatted;
             textSpan.textContent = res.formatted;

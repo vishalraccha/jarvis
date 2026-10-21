@@ -170,10 +170,8 @@ export const HeatmapCanvas: React.FC<HeatmapCanvasProps> = ({
     // Dynamic price aggregation so cells fit cleanly as rich, solid liquidity bands
     const aggTicks = Math.max(1, heatmapSettings.priceAggregationTicks || 5);
     const tickStep = 0.01 * aggTicks;
-    let binDollar = tickStep;
-    while (binDollar * pxPerDollarAbs < 3.0 && binDollar < 50) {
-      binDollar += tickStep;
-    }
+    const requiredBins = pxPerDollarAbs > 0.0001 ? Math.ceil(3.0 / (tickStep * pxPerDollarAbs)) : 1;
+    const binDollar = Math.min(50, Math.max(tickStep, requiredBins * tickStep));
     const targetThicknessPx =
       heatmapSettings.zoneThickness === 'fine' ? 3.0 : heatmapSettings.zoneThickness === 'medium' ? 5.0 : 8.0;
     const binHeightPx = Math.max(targetThicknessPx, binDollar * pxPerDollarAbs);

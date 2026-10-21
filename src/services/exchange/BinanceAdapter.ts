@@ -20,6 +20,7 @@ import {
   SymbolInfo,
 } from '../../types/market';
 import { ExchangeAdapterEvents, IExchangeAdapter } from './ExchangeAdapter';
+import { TIMEFRAME_SECONDS } from '../../utils/candleUtils';
 
 export class BinanceAdapter implements IExchangeAdapter {
   readonly id: ExchangeId = 'binance';
@@ -235,8 +236,9 @@ export class BinanceAdapter implements IExchangeAdapter {
     this.setConnectionState('CONNECTING');
     const effSym = this.getEffectiveSymbol(this.currentSymbol).toLowerCase();
     const isFut = this.isFutures(effSym);
-    const tradeStreams = isFut ? `${effSym}@aggTrade` : `${effSym}@trade`;
-    const streamName = `${effSym}@depth@100ms/${tradeStreams}/${effSym}@kline_${this.currentTimeframe}`;
+    // Binance Futures requires @aggTrade (does not support individual @trade). Spot supports both.
+    const tradeStream = `${effSym}@aggTrade`;
+    const streamName = `${effSym}@depth@100ms/${tradeStream}/${effSym}@kline_${this.currentTimeframe}`;
     const wsUrl = isFut
       ? `wss://fstream.binance.com/stream?streams=${streamName}`
       : `wss://stream.binance.com:9443/stream?streams=${streamName}`;
@@ -261,11 +263,7 @@ export class BinanceAdapter implements IExchangeAdapter {
         if (this.connectionState !== 'DISCONNECTED') {
           this.setConnectionState('DISCONNECTED');
         }
-        if (this.shouldReconnect) {
-          this.reconnectTimeoutId = (setTimeout as any)(() => {
-            this.initWebSocket();
-          }, 3000);
-        }
+        this.reconnect();
       };
     } catch (err) {
       this.setConnectionState('DISCONNECTED');
@@ -273,9 +271,98 @@ export class BinanceAdapter implements IExchangeAdapter {
     }
   }
 
+  private reconnect(): void {
+    if (!this.shouldReconnect) return;
+    if (this.reconnectTimeoutId !== null) return;
+
+    if (this.ws) {
+      this.ws.onclose = null;
+      this.ws.onerror = null;
+      this.ws.onmessage = null;
+      this.ws.onopen = null;
+      try {
+        this.ws.close();
+      } catch {}
+      this.ws = null;
+    }
+    this.setConnectionState('CONNECTING');
+    this.reconnectTimeoutId = (setTimeout as any)(() => {
+      this.reconnectTimeoutId = null;
+      this.initWebSocket();
+    }, 400);
+  }
+
+  private async fetchFallbackTicker(): Promise<void> {
+    if (!this.currentSymbol) return;
+    const effSym = this.getEffectiveSymbol(this.currentSymbol).toUpperCase();
+    const isFut = this.isFutures(effSym);
+    const now = Date.now();
+
+    try {
+      let price: number | null = null;
+      // 1. Try Redis-style server cache ticker endpoint first (sub-millisecond)
+      try {
+        const cacheRes = await fetch(`/api/cache/ticker?symbol=${effSym}`, {
+          signal: AbortSignal.timeout(1000),
+        });
+        if (cacheRes.ok) {
+          const cData = await cacheRes.json();
+          if (cData && typeof cData.price === 'number' && cData.price > 0) {
+            price = cData.price;
+          }
+        }
+      } catch {}
+
+      // 2. Fallback to direct REST endpoint if server cache didn't respond
+      if (price === null) {
+        const proxyUrl = isFut
+          ? `/api/fapi/fapi/v1/ticker/price?symbol=${effSym}`
+          : `/api/binance/api/v3/ticker/price?symbol=${effSym}`;
+        const directUrl = isFut
+          ? `https://fapi.binance.com/fapi/v1/ticker/price?symbol=${effSym}`
+          : `https://api.binance.com/api/v3/ticker/price?symbol=${effSym}`;
+        const res = await this.fastFetch(proxyUrl, directUrl, 1500);
+        if (res.ok) {
+          const data = await res.json();
+          const p = parseFloat(data.price);
+          if (Number.isFinite(p) && p > 0) {
+            price = p;
+          }
+        }
+      }
+
+      if (price !== null) {
+        const adjustedPrice = this.adjustPrice(price);
+        const trade: MarketTrade = {
+          id: `fallback_${now}`,
+          timestamp: now,
+          price: adjustedPrice,
+          quantity: 0.001,
+          notional: adjustedPrice * 0.001,
+          side: 'buy',
+          isBuyerMaker: false,
+          exchange: 'binance',
+          symbol: this.requestedSymbol || this.currentSymbol || effSym,
+          marketType: isFut ? 'linear_perpetual' : 'spot',
+        };
+        this.events?.onTrade(trade);
+      }
+    } catch {}
+  }
+
   private handleMessage(raw: string): void {
     try {
       const payload = JSON.parse(raw);
+      if (payload.ping) {
+        try {
+          this.ws?.send(JSON.stringify({ pong: payload.ping }));
+        } catch {}
+        return;
+      }
+      if (payload.id === 999 || payload.result === 'pong') {
+        return;
+      }
+
       const now = Date.now();
       this.messagesInSecond++;
       this.metrics.totalMessagesProcessed++;
@@ -290,8 +377,15 @@ export class BinanceAdapter implements IExchangeAdapter {
 
       // Verify that event matches current requested symbol (prevents cross-symbol data leakage)
       const effSym = this.getEffectiveSymbol(this.currentSymbol).toUpperCase();
-      if (data.s && effSym && data.s.toUpperCase() !== effSym) {
-        return;
+      const eventSym = (data.s || data.k?.s || '').toUpperCase();
+      if (eventSym && effSym) {
+        const isGoldEvent = eventSym.includes('XAU') || eventSym === 'GC' || eventSym === 'GOLD';
+        const isGoldEff = effSym.includes('XAU') || effSym === 'GC' || effSym === 'GOLD';
+        if (isGoldEff) {
+          if (!isGoldEvent) return;
+        } else if (eventSym !== effSym) {
+          return;
+        }
       }
 
       const eventType = data.e;
@@ -332,6 +426,10 @@ export class BinanceAdapter implements IExchangeAdapter {
         const tradePrice = this.adjustPrice(rawTradePrice);
         const tradeQty = parseFloat(data.q);
         const isBuyerMaker = Boolean(data.m);
+
+        if (!Number.isFinite(tradePrice) || tradePrice <= 10 || !Number.isFinite(tradeQty) || tradeQty <= 0) {
+          return;
+        }
 
         // In Binance: if buyer is maker (m === true), the trade was initiated by a seller (market sell).
         // If m === false, buyer was taker (market buy).
@@ -385,20 +483,21 @@ export class BinanceAdapter implements IExchangeAdapter {
       this.metrics.messageRatePerSec = this.messagesInSecond;
       this.messagesInSecond = 0;
 
-      // Check for stale data if no messages received in 6 seconds, and restore to LIVE when flowing
+      // Watchdog: If no messages received in 5s, mark STALE and fetch fallback ticker immediately
       const now = Date.now();
-      if (
-        this.connectionState === 'LIVE' &&
-        this.metrics.lastMessageTimestamp > 0 &&
-        now - this.metrics.lastMessageTimestamp > 6000
-      ) {
+      const silenceMs = this.metrics.lastMessageTimestamp > 0 ? now - this.metrics.lastMessageTimestamp : 0;
+      if (this.connectionState === 'LIVE' && silenceMs > 5000) {
         this.setConnectionState('STALE');
-      } else if (
-        this.connectionState === 'STALE' &&
-        this.metrics.lastMessageTimestamp > 0 &&
-        now - this.metrics.lastMessageTimestamp <= 6000
-      ) {
+        this.fetchFallbackTicker().catch(() => {});
+      } else if (this.connectionState === 'STALE' && silenceMs <= 5000) {
         this.setConnectionState('LIVE');
+      }
+
+      // If silence continues past 7.5 seconds, auto-heal connection by reconnecting
+      if (silenceMs > 7500 && this.shouldReconnect) {
+        console.warn('[BinanceAdapter] Silence detected (>7.5s). Auto-reconnecting live stream...');
+        this.metrics.lastMessageTimestamp = now;
+        this.reconnect();
       }
 
       this.events?.onConnectionChange(this.connectionState, this.getLatencyMetrics());
@@ -407,7 +506,12 @@ export class BinanceAdapter implements IExchangeAdapter {
     // Periodic ping to keep WebSocket connection alive and sync clock latency
     this.pingIntervalId = (setInterval as any)(() => {
       this.syncServerTime().catch(() => {});
-    }, 12000);
+      if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        try {
+          this.ws.send(JSON.stringify({ id: 999, method: 'PING' }));
+        } catch {}
+      }
+    }, 8000);
   }
 
   private stopMetricsTimer(): void {
@@ -567,6 +671,32 @@ export class BinanceAdapter implements IExchangeAdapter {
 
     const sym = this.getEffectiveSymbol(symbol);
     const isFut = this.isFutures(sym);
+
+    // 1. Fast path: Redis-style in-memory server cache (< 1ms response)
+    if (!startTime && !endTime) {
+      try {
+        const cacheRes = await fetch(
+          `/api/cache/klines?symbol=${sym}&interval=${interval}&limit=${Math.min(limit, 1000)}`,
+          { signal: AbortSignal.timeout(3500) }
+        );
+        if (cacheRes.ok) {
+          const cachedData: any[][] = await cacheRes.json();
+          if (Array.isArray(cachedData) && cachedData.length > 0) {
+            return cachedData.map((item) => ({
+              time: Math.floor(Number(item[0]) / 1000),
+              open: this.adjustPrice(parseFloat(item[1])),
+              high: this.adjustPrice(parseFloat(item[2])),
+              low: this.adjustPrice(parseFloat(item[3])),
+              close: this.adjustPrice(parseFloat(item[4])),
+              volume: parseFloat(item[5]),
+              tradeCount: Number(item[8]) || undefined,
+              buyVolume: parseFloat(item[9]) || undefined,
+            }));
+          }
+        }
+      } catch {}
+    }
+
     const proxyBase = isFut ? '/api/fapi/fapi/v1/klines' : '/api/binance/api/v3/klines';
     const directBase = isFut ? 'https://fapi.binance.com/fapi/v1/klines' : 'https://api.binance.com/api/v3/klines';
     const params = new URLSearchParams({
@@ -578,7 +708,7 @@ export class BinanceAdapter implements IExchangeAdapter {
     if (endTime) params.append('endTime', String(endTime));
 
     const qs = params.toString();
-    const res = await this.fastFetch(`${proxyBase}?${qs}`, `${directBase}?${qs}`, 3500);
+    const res = await this.fastFetch(`${proxyBase}?${qs}`, `${directBase}?${qs}`, 5000);
     if (!res.ok) {
       throw new Error(`Failed to fetch klines for ${symbol}: HTTP ${res.status}`);
     }

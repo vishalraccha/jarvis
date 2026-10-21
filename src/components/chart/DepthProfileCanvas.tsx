@@ -102,16 +102,8 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
 
     if (pTopSample !== null && pBottomSample !== null && Math.abs(pBottomSample - pTopSample) > 0.001) {
       const pDiff = pBottomSample - pTopSample;
-      priceToY = (p: number) => {
-        const coord = series.priceToCoordinate(p);
-        if (coord !== null) return coord;
-        return ((p - pTopSample) / pDiff) * height;
-      };
-      yToPrice = (y: number) => {
-        const price = series.coordinateToPrice(y);
-        if (price !== null) return price;
-        return pTopSample + (y / height) * pDiff;
-      };
+      priceToY = (p: number) => ((p - pTopSample) / pDiff) * height;
+      yToPrice = (y: number) => pTopSample + (y / height) * pDiff;
     } else {
       let yMid = series.priceToCoordinate(currentMid);
       let yOffset = series.priceToCoordinate(currentMid + 100);
@@ -122,16 +114,8 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
         yMid = (height / 2) as any;
         pxPerDollar = -(height * 0.4) / Math.max(1, currentMid * 0.05);
       }
-      priceToY = (p: number) => {
-        const coord = series.priceToCoordinate(p);
-        if (coord !== null) return coord;
-        return yMid! + (p - currentMid) * pxPerDollar;
-      };
-      yToPrice = (y: number) => {
-        const price = series.coordinateToPrice(y);
-        if (price !== null) return price;
-        return currentMid + (y - yMid!) / pxPerDollar;
-      };
+      priceToY = (p: number) => yMid! + (p - currentMid) * pxPerDollar;
+      yToPrice = (y: number) => currentMid + (y - yMid!) / pxPerDollar;
     }
 
     const headerH = 26;
@@ -139,12 +123,13 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
     const pBottom = yToPrice(height);
     const rawMin = Math.min(pTop, pBottom);
     const rawMax = Math.max(pTop, pBottom);
-    // Clamp to realistic range around currentMid (+/- 30%) to prevent negative numbers or massive row explosions
+
     const safeMid = currentMid > 0 ? currentMid : 4150.0;
-    const pMin = Math.max(safeMid * 0.7, Math.max(1, rawMin));
-    const pMax = Math.min(safeMid * 1.3, rawMax);
-    const pDiff = Math.max(0.001, pMax - pMin);
-    const pxPerDollar = Math.abs(height / pDiff);
+    // Guard against NaN or inverse coordinates
+    const pMin = Number.isFinite(rawMin) && rawMin > 10 ? rawMin : safeMid * 0.98;
+    const pMax = Number.isFinite(rawMax) && rawMax > pMin ? rawMax : safeMid * 1.02;
+    const visibleSpread = Math.max(0.1, pMax - pMin);
+    const pxPerDollar = Math.abs((height - headerH) / visibleSpread);
 
     // 3. Dual Column Layout: ORDERS (resting limit depth) | CUMULATIVE (cumulative book depth)
     const col1W = Math.round(profileWidth * 0.53);
@@ -191,27 +176,33 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
       return;
     }
 
-    // 4. Calculate Optimal Discretization Step for Smooth Row Height (~16px)
-    const idealStep = 16 / pxPerDollar;
+    // 4. Calculate Optimal Discretization Step strictly bounded to visible screen rows (~18px per row, max 45 rows)
+    const targetRowCount = Math.max(12, Math.min(45, Math.floor((height - headerH) / 18)));
+    const targetStep = visibleSpread / targetRowCount;
     let rowStep = 0.5;
     let decimalPlaces = 1;
 
     if (currentMid >= 20000) {
       const btcSteps = [5, 10, 25, 50, 100, 250, 500, 1000];
-      rowStep = btcSteps.find((s) => s >= idealStep) || 250;
+      rowStep = btcSteps.find((s) => s >= targetStep) || Math.ceil(targetStep / 50) * 50;
       decimalPlaces = 0;
     } else if (currentMid >= 1000) {
       const ethSteps = [0.25, 0.5, 1.0, 2.0, 2.5, 5.0, 10.0, 25.0];
-      rowStep = ethSteps.find((s) => s >= idealStep) || 2.0;
+      rowStep = ethSteps.find((s) => s >= targetStep) || Math.ceil(targetStep);
       decimalPlaces = rowStep < 1 ? 2 : rowStep < 5 ? 1 : 0;
     } else if (currentMid >= 50) {
       const solSteps = [0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0];
-      rowStep = solSteps.find((s) => s >= idealStep) || 0.5;
+      rowStep = solSteps.find((s) => s >= targetStep) || Math.ceil(targetStep * 2) / 2;
       decimalPlaces = rowStep < 0.1 ? 2 : 1;
     } else {
       const pennySteps = [0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.25, 0.5];
-      rowStep = pennySteps.find((s) => s >= idealStep) || 0.01;
+      rowStep = pennySteps.find((s) => s >= targetStep) || 0.01;
       decimalPlaces = rowStep < 0.01 ? 4 : 2;
+    }
+
+    // Absolute hard safety cap: row count must never exceed 50 under any zoom level
+    if (visibleSpread / rowStep > 50) {
+      rowStep = Math.ceil((visibleSpread / 40) * 10) / 10;
     }
 
     interface CobRow {
@@ -226,7 +217,7 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
     const startPrice = Math.floor(pMin / rowStep) * rowStep;
     const endPrice = Math.ceil(pMax / rowStep) * rowStep;
 
-    for (let p = startPrice; p <= endPrice; p += rowStep) {
+    for (let p = startPrice; p <= endPrice && rowMap.size < 55; p += rowStep) {
       if (p <= 10) continue;
       const price = Math.round(p * 10000) / 10000;
       const y = priceToY(price);
@@ -475,8 +466,8 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
       const hasActiveHit = lastHit && (Date.now() - lastHit.timestamp < 700);
 
       if (isDirtyRef.current || hasActiveHit) {
-        // Cap rendering at 30ms (~33 FPS) to free up CPU budget for 60-120 FPS smooth chart drag/zoom
-        if (now - lastRenderTimeRef.current >= 30) {
+        // Cap rendering at 45ms (~22 FPS) to free up CPU budget for buttery-smooth 60-120 FPS chart drag/zoom
+        if (now - lastRenderTimeRef.current >= 45) {
           lastRenderTimeRef.current = now;
           render();
           isDirtyRef.current = false;

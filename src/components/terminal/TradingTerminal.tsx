@@ -18,7 +18,7 @@ import { BinanceAdapter } from '../../services/exchange/BinanceAdapter';
 import { ComexAdapter } from '../../services/exchange/ComexAdapter';
 import { GoldPriceDevAdapter } from '../../services/exchange/GoldPriceDevAdapter';
 import { IExchangeAdapter } from '../../services/exchange/ExchangeAdapter';
-import { ExchangeId } from '../../types/market';
+import { ExchangeId, Candle } from '../../types/market';
 import { InstrumentRegistry } from '../../services/market/InstrumentRegistry';
 import { MarketSessionService } from '../../services/market/MarketSessionService';
 import { OrderBookManager } from '../../services/orderbook/OrderBookManager';
@@ -119,9 +119,9 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         const bubblesActive = stored.showBubbles !== undefined
           ? stored.showBubbles
           : (stored.bubbles?.enabled ?? true);
-        const symbolIsGold = stored.symbol === 'GC' || (stored.symbol && stored.symbol.startsWith('XAU'));
-        const safeSymbol = symbolIsGold ? stored.symbol : 'GC';
-        const safeExchange = symbolIsGold && stored.exchange ? stored.exchange : 'comex';
+        const inst = stored.symbol ? InstrumentRegistry.getInstrument(stored.symbol, stored.exchange) : null;
+        const safeSymbol = inst ? inst.symbol : DEFAULT_TERMINAL_PREFERENCES.symbol;
+        const safeExchange = inst ? inst.providerId : DEFAULT_TERMINAL_PREFERENCES.exchange;
 
         const activeDefaults: TerminalPreferences = {
           ...DEFAULT_TERMINAL_PREFERENCES,
@@ -231,6 +231,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
   }, []);
 
   const latestCandlesRef = useRef<any[]>([]);
+  const [renderedCandles, setRenderedCandles] = useState<Candle[]>([]);
   const currentInstrumentKeyRef = useRef<string>('');
   const lastTickTimeRef = useRef<number>(0);
   const lastTickPriceRef = useRef<number>(0);
@@ -272,17 +273,22 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
       progressiveTimerRef.current = null;
     }
 
-    // Always clear previous candles when key changes so different timeframes are NEVER mixed!
+    // Check Tier 1 synchronous cache before clearing to avoid unnecessary blank flicker
+    const ramCandles = indexedDBCache.getCachedCandlesSync(symbol, timeframe, exchange);
+
+    // Switch instrument key
     if (currentInstrumentKeyRef.current !== cacheKey) {
       currentInstrumentKeyRef.current = cacheKey;
       latestCandlesRef.current = [];
-      chartRef.current?.clearChart();
+      setRenderedCandles([]);
+      if (!ramCandles || ramCandles.length === 0) {
+        chartRef.current?.clearChart();
+      }
     }
 
     let hasRendered = false;
 
-    // TIER 1: In-Memory RAM Cache (Instant 0ms MT5-speed)
-    const ramCandles = indexedDBCache.getCachedCandlesSync(symbol, timeframe, exchange);
+    // TIER 1: In-Memory RAM Cache or Local Snapshot (Instant 0ms MT5-speed)
     if (
       ramCandles &&
       ramCandles.length > 0 &&
@@ -291,6 +297,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
       timeframe === preferencesRef.current.timeframe
     ) {
       latestCandlesRef.current = ramCandles;
+      setRenderedCandles(ramCandles);
       chartRef.current?.updateCandles(ramCandles);
       seedEngines(ramCandles, symbol, timeframe, exchange);
       hasRendered = true;
@@ -343,6 +350,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
             timeframe === preferencesRef.current.timeframe
           ) {
             latestCandlesRef.current = dbCached;
+            setRenderedCandles(dbCached);
             chartRef.current?.updateCandles(dbCached);
             seedEngines(dbCached, symbol, timeframe, exchange);
             hasRendered = true;
@@ -401,9 +409,13 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
               )
             : validBars;
 
-          // Step 4: Seamlessly merge fresh candles with existing buffer (strictly aligned to timeframe)
-          const merged = mergeAndDeduplicateCandles(latestCandlesRef.current, validFresh, timeframe);
+          // Step 4: Seamlessly merge fresh candles with existing buffer
+          const merged = latestCandlesRef.current.length > 0
+            ? mergeAndDeduplicateCandles(latestCandlesRef.current, validFresh, timeframe)
+            : validFresh;
+
           latestCandlesRef.current = merged;
+          setRenderedCandles(merged);
 
           // Step 5: Update the chart immediately with smooth auto-scaling
           chartRef.current?.updateCandles(merged);
@@ -449,6 +461,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
     if (currentInstrumentKeyRef.current !== currentKey) {
       currentInstrumentKeyRef.current = currentKey;
       latestCandlesRef.current = [];
+      setRenderedCandles([]);
       chartRef.current?.clearChart();
     }
 
@@ -515,9 +528,16 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
       },
       onTrade: (trade) => {
         if (!instrument.supportsTrades || !trade || !Number.isFinite(trade.price) || trade.price <= 10) return;
-        const curSym = preferencesRef.current.symbol.toUpperCase().replace(/[-_/]/g, '');
+        const targetSym = preferencesRef.current.symbol.toUpperCase().replace(/[-_/]/g, '');
+        const isGoldTarget = targetSym.includes('XAU') || targetSym === 'GC' || targetSym === 'GOLD';
         const trSym = (trade.symbol || symbol).toUpperCase().replace(/[-_/]/g, '');
-        if (trSym !== curSym) return;
+        const isGoldTrade = trSym.includes('XAU') || trSym === 'GC' || trSym === 'GOLD';
+
+        if (isGoldTarget) {
+          if (!isGoldTrade) return;
+        } else if (trSym !== targetSym) {
+          return;
+        }
 
         const prefs = preferencesRef.current;
         // Consume resting limit liquidity at the traded price so COB and prices move dynamically!
@@ -531,8 +551,8 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
 
         const now = performance.now();
         if (
-          now - lastTickTimeRef.current >= 40 ||
-          Math.abs(trade.price - lastTickPriceRef.current) >= instrument.priceTick
+          now - lastTickTimeRef.current >= 16 ||
+          trade.price !== lastTickPriceRef.current
         ) {
           lastTickTimeRef.current = now;
           lastTickPriceRef.current = trade.price;
@@ -541,9 +561,16 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
       },
       onKline: (candle) => {
         if (!candle || !Number.isFinite(candle.close) || candle.close <= 10) return;
-        const curSym = preferencesRef.current.symbol.toUpperCase().replace(/[-_/]/g, '');
+        const targetSym = preferencesRef.current.symbol.toUpperCase().replace(/[-_/]/g, '');
+        const isGoldTarget = targetSym.includes('XAU') || targetSym === 'GC' || targetSym === 'GOLD';
         const sSym = symbol.toUpperCase().replace(/[-_/]/g, '');
-        if (sSym !== curSym) return;
+        const isGoldKline = sSym.includes('XAU') || sSym === 'GC' || sSym === 'GOLD';
+
+        if (isGoldTarget) {
+          if (!isGoldKline) return;
+        } else if (sSym !== targetSym) {
+          return;
+        }
 
         // Verify candle matches current timeframe interval and align
         const tfSec = TIMEFRAME_SECONDS[preferencesRef.current.timeframe] || 60;
@@ -665,6 +692,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
       <main style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
         <JarvisChart
           ref={chartRef}
+          candles={renderedCandles}
           preferences={preferences}
           orderBook={orderBookRef.current}
           heatmapEngine={heatmapEngineRef.current}

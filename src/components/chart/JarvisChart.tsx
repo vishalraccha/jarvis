@@ -62,6 +62,7 @@ const TIMEFRAME_SECONDS: Record<string, number> = {
 };
 
 interface JarvisChartProps {
+  candles?: Candle[];
   preferences: TerminalPreferences;
   orderBook: OrderBookManager;
   heatmapEngine: HeatmapEngine;
@@ -77,6 +78,7 @@ interface JarvisChartProps {
 const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
   (
     {
+      candles,
       preferences,
       orderBook,
       heatmapEngine,
@@ -94,6 +96,9 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
     const chartHostRef = useRef<HTMLDivElement | null>(null);
     const [chart, setChart] = useState<IChartApi | null>(null);
     const [series, setSeries] = useState<ISeriesApi<'Candlestick'> | null>(null);
+    const chartRef = useRef<IChartApi | null>(null);
+    const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+    const pendingCandlesRef = useRef<Candle[] | null>(null);
 
     const [dimensions, setDimensions] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
     const [hoveredBubble, setHoveredBubble] = useState<{ bubble: TradeBubble | null; x: number; y: number }>({
@@ -118,6 +123,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
 
     const currentCandleRef = useRef<CandlestickData | null>(null);
     const allCandlesRef = useRef<Candle[]>([]);
+    const lastAppliedCandlesKeyRef = useRef<string>('');
     const visibleBubblesCoordsRef = useRef<
       Array<{ bubble: TradeBubble; cx: number; cy: number; radius: number }>
     >([]);
@@ -302,8 +308,15 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
       upper2SeriesRef.current = upper2Series;
       lower2SeriesRef.current = lower2Series;
 
+      chartRef.current = tvChart;
+      seriesRef.current = candleSeries;
       setChart(tvChart);
       setSeries(candleSeries);
+
+      // Immediately render any pending candles that arrived before the chart was mounted
+      if (pendingCandlesRef.current && pendingCandlesRef.current.length > 0) {
+        applyCandles(pendingCandlesRef.current, candleSeries, tvChart);
+      }
 
       // Resize Observer
       const resizeObserver = new ResizeObserver((entries) => {
@@ -324,6 +337,8 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         lower1SeriesRef.current = null;
         upper2SeriesRef.current = null;
         lower2SeriesRef.current = null;
+        chartRef.current = null;
+        seriesRef.current = null;
         tvChart.remove();
       };
     }, []);
@@ -400,9 +415,10 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
       tickRafRef.current = requestAnimationFrame(() => {
         tickRafRef.current = null;
         const b = pendingTickBarRef.current;
-        if (b && series) {
+        const activeSeries = seriesRef.current || series;
+        if (b && activeSeries) {
           try {
-            series.update(b);
+            activeSeries.update(b);
           } catch (e) {
             console.warn('[JarvisChart] updateTickPrice error:', e);
           }
@@ -420,18 +436,21 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
     }, []);
 
     const syncPriceLineColor = useCallback((color: string) => {
-      if (!series || lastPriceLineColorRef.current === color) return;
+      const activeSeries = seriesRef.current || series;
+      if (!activeSeries || lastPriceLineColorRef.current === color) return;
       lastPriceLineColorRef.current = color;
-      series.applyOptions({ priceLineColor: color });
+      activeSeries.applyOptions({ priceLineColor: color });
     }, [series]);
 
     // 2. Sync visibility options with preferences (keep series active so price scale & coordinate conversions never break)
     useEffect(() => {
-      if (series) {
+      const activeSeries = seriesRef.current || series;
+      if (activeSeries) {
         const curColor = lastPriceLineColorRef.current || '#00e676';
-        if (isFootprintActive) {
-          // In Footprint mode, FootprintCanvas renders custom crisp wicks & outlines with internal bid x ask ladder
-          series.applyOptions({
+        const isDedicatedFootprint = preferences.chartMode === 'footprint';
+        if (isDedicatedFootprint) {
+          // In Dedicated Footprint mode, FootprintCanvas renders custom crisp wicks & outlines with internal bid x ask ladder
+          activeSeries.applyOptions({
             visible: true,
             upColor: 'transparent',
             downColor: 'transparent',
@@ -447,9 +466,9 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
             lastValueVisible: true,
           });
         } else {
-          // Standard candlestick mode (Works universally for Candles, Heatmap, Bubbles, DOM)
+          // Standard candlestick mode (Works universally for Candles, Heatmap, Bubbles, DOM, and Footprint Overlay)
           const candlesVisible = preferences.showCandles !== false;
-          series.applyOptions({
+          activeSeries.applyOptions({
             visible: candlesVisible,
             upColor: '#00e676',
             downColor: '#ff2d55',
@@ -466,7 +485,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
           });
         }
       }
-    }, [series, preferences.showCandles, preferences.showCurrentPriceLine, isFootprintActive]);
+    }, [series, preferences.showCandles, preferences.showCurrentPriceLine, preferences.chartMode]);
 
     // Reset current candle on timeframe or symbol change
     useEffect(() => {
@@ -547,88 +566,51 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
       refreshVwap(allCandlesRef.current);
     }, [refreshVwap]);
 
-    // 3. Expose chart manipulation methods to parent
-    useImperativeHandle(ref, () => ({
-      zoomIn: () => {
-        if (!chart) return;
-        const logicalRange = chart.timeScale().getVisibleLogicalRange();
-        if (logicalRange) {
-          const delta = (logicalRange.to - logicalRange.from) * 0.2;
-          chart.timeScale().setVisibleLogicalRange({
-            from: logicalRange.from + delta,
-            to: logicalRange.to - delta,
-          });
-        }
-      },
-      zoomOut: () => {
-        if (!chart) return;
-        const logicalRange = chart.timeScale().getVisibleLogicalRange();
-        if (logicalRange) {
-          const delta = (logicalRange.to - logicalRange.from) * 0.25;
-          chart.timeScale().setVisibleLogicalRange({
-            from: logicalRange.from - delta,
-            to: logicalRange.to + delta,
-          });
-        }
-      },
-      resetView: () => {
-        if (!chart) return;
-        if (series) {
-          series.priceScale().applyOptions({ autoScale: true });
-        }
-        chart.timeScale().fitContent();
-      },
-      jumpToLatest: () => {
-        if (!chart) return;
-        const isCob = preferences.showDepthProfile && preferences.depthProfile?.enabled !== false;
-        const cobW = isCob ? (preferences.depthProfile?.widthPx || 220) : 0;
-        const isFp = isFootprintActive;
-        const targetSpacing = isFp ? 72 : 14;
-        const rightOffset = isCob ? Math.ceil(cobW / targetSpacing) + 2 : (isFp ? 3 : 6);
-        chart.timeScale().applyOptions({ rightOffset, minBarSpacing: 0.5 });
-        chart.timeScale().scrollToRealTime();
-      },
-      clearChart: () => {
-        allCandlesRef.current = [];
-        currentCandleRef.current = null;
-        hasInitializedViewRef.current = false;
-        if (series) {
-          try {
-            series.setData([]);
-          } catch {}
-        }
-        vwapSeriesRef.current?.setData([]);
-        upper1SeriesRef.current?.setData([]);
-        lower1SeriesRef.current?.setData([]);
-        upper2SeriesRef.current?.setData([]);
-        lower2SeriesRef.current?.setData([]);
-      },
-      updateCandles: (candles: Candle[]) => {
-        if (!series) return;
-        if (!candles || candles.length === 0) {
+    // Core robust candle application logic
+    const applyCandles = useCallback(
+      (candlesToApply: Candle[], targetSeries?: ISeriesApi<'Candlestick'> | null, targetChart?: IChartApi | null) => {
+        const activeSeries = targetSeries || seriesRef.current || series;
+        const activeChart = targetChart || chartRef.current || chart;
+
+        if (!candlesToApply || candlesToApply.length === 0) {
           allCandlesRef.current = [];
+          pendingCandlesRef.current = null;
           currentCandleRef.current = null;
-          series.setData([]);
+          if (activeSeries) {
+            try {
+              activeSeries.setData([]);
+            } catch {}
+          }
+          refreshVwap([]);
           return;
         }
-        allCandlesRef.current = candles;
+
+        allCandlesRef.current = candlesToApply;
+        pendingCandlesRef.current = candlesToApply;
+
+        if (!activeSeries) {
+          // Series not mounted yet: will be rendered as soon as useEffect finishes
+          return;
+        }
 
         const tfSec = TIMEFRAME_SECONDS[preferences.timeframe] || 60;
 
         // Clean out any contaminated, zero, negative, or outlier candles, aligning to timeframe grid
         let cleanCandles: Candle[] = [];
-        if (candles && candles.length > 0) {
-          const valid = candles.filter((c) =>
-            Number.isFinite(c.time) && c.time > 0 &&
-            Number.isFinite(c.open) && c.open > 10 &&
-            Number.isFinite(c.high) && c.high > 10 &&
-            Number.isFinite(c.low) && c.low > 10 &&
-            Number.isFinite(c.close) && c.close > 10 &&
-            c.low <= c.high
-          ).map((c) => ({
-            ...c,
-            time: (Math.floor(c.time / tfSec) * tfSec) as any,
-          }));
+        if (candlesToApply && candlesToApply.length > 0) {
+          const valid = candlesToApply
+            .filter((c) =>
+              Number.isFinite(c.time) && c.time > 0 &&
+              Number.isFinite(c.open) && c.open > 10 &&
+              Number.isFinite(c.high) && c.high > 10 &&
+              Number.isFinite(c.low) && c.low > 10 &&
+              Number.isFinite(c.close) && c.close > 10 &&
+              c.low <= c.high
+            )
+            .map((c) => ({
+              ...c,
+              time: (Math.floor(c.time / tfSec) * tfSec) as any,
+            }));
           if (valid.length > 0) {
             const sample = valid.slice(-50).map((c) => c.close).sort((a, b) => a - b);
             const medianPrice = sample[Math.floor(sample.length / 2)];
@@ -663,98 +645,219 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
           }
         }
 
-        series.setData(tvData);
-        series.priceScale().applyOptions({ autoScale: true });
+        try {
+          activeSeries.setData(tvData);
+          activeSeries.priceScale().applyOptions({ autoScale: true });
+        } catch (err) {
+          console.warn('[JarvisChart] setData error, recovering:', err);
+        }
 
         if (tvData.length > 0) {
           const latest = tvData[tvData.length - 1];
+          // Preserve live tick price expansion if active bar is currently ticking
+          if (currentCandleRef.current && currentCandleRef.current.time === latest.time) {
+            latest.high = Math.max(latest.high, currentCandleRef.current.high);
+            latest.low = Math.min(latest.low, currentCandleRef.current.low);
+            latest.close = currentCandleRef.current.close;
+          }
           currentCandleRef.current = latest;
           const isUp = latest.close >= (latest.open ?? latest.close);
           syncPriceLineColor(isUp ? '#00e676' : '#ff2d55');
 
-          // Set focused view range with breathing room on right for live order book
-          if (chart) {
+          if (activeChart) {
             const isCob = preferences.showDepthProfile && preferences.depthProfile?.enabled !== false;
             const cobW = isCob ? (preferences.depthProfile?.widthPx || 220) : 0;
             const isFp = isFootprintActive;
             const targetSpacing = isFp ? 72 : 14;
             const rightOffset = isCob ? Math.ceil(cobW / targetSpacing) + 2 : (isFp ? 3 : 6);
 
-            // On initial view for symbol/timeframe, establish default baseline spacing and visible range.
-            // On subsequent candle merges, preserve user's custom zoom level and do not limit zoom out!
+            activeChart.timeScale().applyOptions({
+              rightOffset,
+              barSpacing: targetSpacing,
+              minBarSpacing: 0.5,
+            });
+
             if (!hasInitializedViewRef.current) {
-              chart.timeScale().applyOptions({
-                rightOffset,
-                barSpacing: targetSpacing,
-                minBarSpacing: 0.5,
-              });
               const visibleCount = isFp ? 16 : 75;
-              chart.timeScale().setVisibleLogicalRange({
+              activeChart.timeScale().setVisibleLogicalRange({
                 from: Math.max(0, tvData.length - visibleCount),
                 to: tvData.length + rightOffset,
               });
               hasInitializedViewRef.current = true;
-            } else {
-              chart.timeScale().applyOptions({
-                rightOffset,
-                minBarSpacing: 0.5,
-              });
-              if (preferences.autoScrollToLatest) {
-                chart.timeScale().scrollToRealTime();
-              }
+            }
+
+            if (preferences.autoScrollToLatest) {
+              activeChart.timeScale().scrollToRealTime();
             }
           }
         }
 
         refreshVwap(cleanCandles);
       },
+      [
+        chart,
+        series,
+        preferences.timeframe,
+        preferences.showDepthProfile,
+        preferences.depthProfile?.widthPx,
+        preferences.depthProfile?.enabled,
+        preferences.autoScrollToLatest,
+        isFootprintActive,
+        syncPriceLineColor,
+        refreshVwap,
+      ]
+    );
+
+    // Synchronize candles when passed directly via prop (ONLY if the dataset has actually changed)
+    useEffect(() => {
+      if (!candles || candles.length === 0) return;
+      const firstT = candles[0]?.time ?? 0;
+      const lastT = candles[candles.length - 1]?.time ?? 0;
+      const key = `${preferences.exchange}_${preferences.symbol}_${preferences.timeframe}_${candles.length}_${firstT}_${lastT}`;
+      if (lastAppliedCandlesKeyRef.current === key) {
+        return;
+      }
+      lastAppliedCandlesKeyRef.current = key;
+      applyCandles(candles);
+    }, [candles, preferences.exchange, preferences.symbol, preferences.timeframe, applyCandles]);
+
+    // 3. Expose chart manipulation methods to parent
+    useImperativeHandle(ref, () => ({
+      zoomIn: () => {
+        const activeChart = chartRef.current || chart;
+        if (!activeChart) return;
+        const logicalRange = activeChart.timeScale().getVisibleLogicalRange();
+        if (logicalRange) {
+          const delta = (logicalRange.to - logicalRange.from) * 0.2;
+          activeChart.timeScale().setVisibleLogicalRange({
+            from: logicalRange.from + delta,
+            to: logicalRange.to - delta,
+          });
+        }
+      },
+      zoomOut: () => {
+        const activeChart = chartRef.current || chart;
+        if (!activeChart) return;
+        const logicalRange = activeChart.timeScale().getVisibleLogicalRange();
+        if (logicalRange) {
+          const delta = (logicalRange.to - logicalRange.from) * 0.25;
+          activeChart.timeScale().setVisibleLogicalRange({
+            from: logicalRange.from - delta,
+            to: logicalRange.to + delta,
+          });
+        }
+      },
+      resetView: () => {
+        const activeChart = chartRef.current || chart;
+        const activeSeries = seriesRef.current || series;
+        if (!activeChart) return;
+        if (activeSeries) {
+          activeSeries.priceScale().applyOptions({ autoScale: true });
+        }
+        activeChart.timeScale().fitContent();
+      },
+      jumpToLatest: () => {
+        const activeChart = chartRef.current || chart;
+        if (!activeChart) return;
+        const isCob = preferences.showDepthProfile && preferences.depthProfile?.enabled !== false;
+        const cobW = isCob ? (preferences.depthProfile?.widthPx || 220) : 0;
+        const isFp = isFootprintActive;
+        const targetSpacing = isFp ? 72 : 14;
+        const rightOffset = isCob ? Math.ceil(cobW / targetSpacing) + 2 : (isFp ? 3 : 6);
+        activeChart.timeScale().applyOptions({ rightOffset, minBarSpacing: 0.5 });
+        activeChart.timeScale().scrollToRealTime();
+      },
+      clearChart: () => {
+        allCandlesRef.current = [];
+        pendingCandlesRef.current = null;
+        currentCandleRef.current = null;
+        lastAppliedCandlesKeyRef.current = '';
+        hasInitializedViewRef.current = false;
+        const activeSeries = seriesRef.current || series;
+        if (activeSeries) {
+          try {
+            activeSeries.setData([]);
+          } catch {}
+        }
+        vwapSeriesRef.current?.setData([]);
+        upper1SeriesRef.current?.setData([]);
+        lower1SeriesRef.current?.setData([]);
+        upper2SeriesRef.current?.setData([]);
+        lower2SeriesRef.current?.setData([]);
+      },
+      updateCandles: (candlesToUpdate: Candle[]) => {
+        if (candlesToUpdate && candlesToUpdate.length > 0) {
+          const firstT = candlesToUpdate[0]?.time ?? 0;
+          const lastT = candlesToUpdate[candlesToUpdate.length - 1]?.time ?? 0;
+          lastAppliedCandlesKeyRef.current = `${preferences.exchange}_${preferences.symbol}_${preferences.timeframe}_${candlesToUpdate.length}_${firstT}_${lastT}`;
+        }
+        applyCandles(candlesToUpdate);
+      },
       updateLiveCandle: (candle: Candle) => {
-        if (!series || !candle) return;
+        const activeSeries = seriesRef.current || series;
+        if (!activeSeries || !candle) return;
         if (!Number.isFinite(candle.close) || candle.close <= 10) return;
 
         const tfSec = TIMEFRAME_SECONDS[preferences.timeframe] || 60;
         const barTime = (Math.floor(candle.time / tfSec) * tfSec) as UTCTimestamp;
         let cur = currentCandleRef.current;
 
+        if (!cur && allCandlesRef.current.length > 0) {
+          const lastC = allCandlesRef.current[allCandlesRef.current.length - 1];
+          cur = {
+            time: lastC.time as UTCTimestamp,
+            open: lastC.open,
+            high: lastC.high,
+            low: lastC.low,
+            close: lastC.close,
+          };
+          currentCandleRef.current = cur;
+        }
+
         const close = candle.close;
         const open = Number.isFinite(candle.open) && candle.open > 10 ? candle.open : close;
         let high = Number.isFinite(candle.high) && candle.high > 10 ? Math.max(candle.high, open, close) : Math.max(open, close);
         let low = Number.isFinite(candle.low) && candle.low > 10 ? Math.min(candle.low, open, close) : Math.min(open, close);
 
-        // Stale timestamp guard: ignore past klines that arrive out of order
-        if (cur && barTime < (cur.time as number)) {
-          return;
-        }
-
         // Discard rogue outlier ticks from wrong stream or cross-symbol contamination
         if (cur && cur.close > 10) {
           const ratio = close / cur.close;
-          if (ratio > 1.35 || ratio < 0.65) {
+          if (ratio > 1.5 || ratio < 0.5) {
             return;
           }
-          const minAllowed = cur.close * 0.75;
-          const maxAllowed = cur.close * 1.35;
+          const minAllowed = cur.close * 0.5;
+          const maxAllowed = cur.close * 1.5;
           if (low < minAllowed) low = Math.min(open, close);
           if (high > maxAllowed) high = Math.max(open, close);
         }
 
         if (!cur || barTime > (cur.time as number)) {
+          const newTime = cur && barTime <= (cur.time as number)
+            ? (((cur.time as number) + tfSec) as UTCTimestamp)
+            : barTime;
+
           const newBar: CandlestickData = {
-            time: barTime,
+            time: newTime,
             open,
             high,
             low,
             close,
           };
           currentCandleRef.current = newBar;
-          syncPriceLineColor(close >= open ? '#00e676' : '#ff2d55');
+          allCandlesRef.current.push({
+            time: newTime,
+            open,
+            high,
+            low,
+            close,
+            volume: candle.volume || 0,
+          });
+          const isUp = close >= open;
+          syncPriceLineColor(isUp ? '#00e676' : '#ff2d55');
           try {
-            series.update(newBar);
+            activeSeries.update(newBar);
           } catch (e) {
             console.warn('[JarvisChart] updateLiveCandle newBar error:', e);
-          }
-          if (preferences.autoScrollToLatest && chart) {
-            chart.timeScale().scrollToRealTime();
           }
         } else {
           // Kline update within active candle: High only expands up, Low only expands down
@@ -769,23 +872,45 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
             close,
           };
           currentCandleRef.current = bar;
-          syncPriceLineColor(close >= barOpen ? '#00e676' : '#ff2d55');
+          if (allCandlesRef.current.length > 0) {
+            const lastCandle = allCandlesRef.current[allCandlesRef.current.length - 1];
+            if (lastCandle.time === cur.time) {
+              lastCandle.high = kHigh;
+              lastCandle.low = kLow;
+              lastCandle.close = close;
+            }
+          }
+          const isUp = close >= barOpen;
+          syncPriceLineColor(isUp ? '#00e676' : '#ff2d55');
           try {
-            series.update(bar);
+            activeSeries.update(bar);
           } catch (e) {
-            console.warn('[JarvisChart] updateLiveCandle activeBar error:', e);
+            console.warn('[JarvisChart] updateLiveCandle update error:', e);
           }
         }
       },
       updateTickPrice: (price: number, timestamp?: number) => {
-        if (!series || !Number.isFinite(price) || price <= 10) return;
+        const activeSeries = seriesRef.current || series;
+        if (!activeSeries || !Number.isFinite(price) || price <= 10) return;
         const tfSec = TIMEFRAME_SECONDS[preferences.timeframe] || 60;
         let cur = currentCandleRef.current;
 
-        // Discard cross-symbol outlier ticks
+        if (!cur && allCandlesRef.current.length > 0) {
+          const lastC = allCandlesRef.current[allCandlesRef.current.length - 1];
+          cur = {
+            time: lastC.time as UTCTimestamp,
+            open: lastC.open,
+            high: lastC.high,
+            low: lastC.low,
+            close: lastC.close,
+          };
+          currentCandleRef.current = cur;
+        }
+
+        // Discard extreme cross-symbol outlier ticks
         if (cur && cur.close > 10) {
           const ratio = price / cur.close;
-          if (ratio > 1.25 || ratio < 0.75) {
+          if (ratio > 1.5 || ratio < 0.5) {
             return;
           }
         }
@@ -794,29 +919,33 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         const tradeSec = Math.floor(effectiveTimestamp / 1000);
         const barTime = (Math.floor(tradeSec / tfSec) * tfSec) as UTCTimestamp;
 
-        // Stale timestamp guard: ignore past ticks that arrive out of order
-        if (cur && barTime < (cur.time as number)) {
-          return;
-        }
-
         if (!cur || barTime > (cur.time as number)) {
           // A new candle boundary has elapsed! Immediately open the new bar
+          const newTime = cur && barTime <= (cur.time as number)
+            ? (((cur.time as number) + tfSec) as UTCTimestamp)
+            : barTime;
+
           const newBar: CandlestickData = {
-            time: barTime,
+            time: newTime,
             open: price,
             high: price,
             low: price,
             close: price,
           };
           currentCandleRef.current = newBar;
+          allCandlesRef.current.push({
+            time: newTime,
+            open: price,
+            high: price,
+            low: price,
+            close: price,
+            volume: 0,
+          });
           syncPriceLineColor('#00e676');
           try {
-            series.update(newBar);
+            activeSeries.update(newBar);
           } catch (e) {
             console.warn('[JarvisChart] updateTickPrice newBar error:', e);
-          }
-          if (preferences.autoScrollToLatest && chart) {
-            chart.timeScale().scrollToRealTime();
           }
         } else {
           // Tick within active candle: High can only expand, Low can only decrease
@@ -833,7 +962,16 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
             close,
           };
           currentCandleRef.current = updatedBar;
-          syncPriceLineColor(close >= barOpen ? '#00e676' : '#ff2d55');
+          if (allCandlesRef.current.length > 0) {
+            const lastCandle = allCandlesRef.current[allCandlesRef.current.length - 1];
+            if (lastCandle.time === cur.time) {
+              lastCandle.high = high;
+              lastCandle.low = low;
+              lastCandle.close = close;
+            }
+          }
+          const isUp = close >= barOpen;
+          syncPriceLineColor(isUp ? '#00e676' : '#ff2d55');
           scheduleTickUpdate(updatedBar);
         }
       },
