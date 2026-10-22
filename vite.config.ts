@@ -107,6 +107,8 @@ function redisFastCandleCachePlugin(): Plugin {
         const symbol = (url.searchParams.get('symbol') || 'XAUUSDT').toUpperCase();
         const interval = url.searchParams.get('interval') || '1m';
         const isFutures = !url.searchParams.has('spot');
+        const limitParam = url.searchParams.get('limit');
+        const limit = limitParam ? parseInt(limitParam, 10) : 0;
         const key = `${symbol}_${interval}`;
 
         const cached = memoryCache.get(key);
@@ -116,6 +118,18 @@ function redisFastCandleCachePlugin(): Plugin {
         if (cached) {
           res.setHeader('Content-Type', 'application/json');
           res.setHeader('X-Cache-Status', (now - cached.timestamp < 3000) ? 'HIT-RAM-0MS' : 'HIT-STALE-REVALIDATING');
+          if (limit > 0 && limit < 1000) {
+            try {
+              const list = JSON.parse(cached.data);
+              if (Array.isArray(list)) {
+                res.end(JSON.stringify(list.slice(-limit)));
+                if (now - cached.timestamp >= 2000) {
+                  fetchAndCache(symbol, interval, isFutures).catch(() => {});
+                }
+                return;
+              }
+            } catch {}
+          }
           res.end(cached.data);
           // Background non-blocking refresh if older than 2s
           if (now - cached.timestamp >= 2000) {
@@ -129,6 +143,15 @@ function redisFastCandleCachePlugin(): Plugin {
         if (fresh) {
           res.setHeader('Content-Type', 'application/json');
           res.setHeader('X-Cache-Status', 'MISS-FETCHED');
+          if (limit > 0 && limit < 1000) {
+            try {
+              const list = JSON.parse(fresh);
+              if (Array.isArray(list)) {
+                res.end(JSON.stringify(list.slice(-limit)));
+                return;
+              }
+            } catch {}
+          }
           res.end(fresh);
           return;
         }

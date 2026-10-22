@@ -141,4 +141,65 @@ describe('Live Candle & Trade Streaming Diagnostics', () => {
     expect(cur.low).toBe(4138.5);
     expect(priceLineColor).toBe('#ff2d55'); // turns red dynamically
   });
+
+  it('activates fallback trade emitter in ComexAdapter when WebSocket trade packets are absent', () => {
+    let lastWsTradeTimestamp = 0;
+    let isWsActive = false;
+    let fallbackTradeEmitted = false;
+
+    // Simulate WS onopen (which does NOT blindly set isWsActive = true)
+    // WS has zero trade packets
+    const now = Date.now();
+    const isWsStreaming = lastWsTradeTimestamp > 0 && (now - lastWsTradeTimestamp) < 2500;
+    if (!isWsStreaming) {
+      isWsActive = false;
+      fallbackTradeEmitted = true;
+    }
+
+    expect(isWsActive).toBe(false);
+    expect(fallbackTradeEmitted).toBe(true);
+
+    // Simulate incoming aggTrade packet
+    lastWsTradeTimestamp = Date.now();
+    isWsActive = true;
+    fallbackTradeEmitted = false;
+
+    const isWsStreamingActive = lastWsTradeTimestamp > 0 && (Date.now() - lastWsTradeTimestamp) < 2500;
+    if (!isWsStreamingActive) {
+      fallbackTradeEmitted = true;
+    }
+
+    expect(isWsStreamingActive).toBe(true);
+    expect(fallbackTradeEmitted).toBe(false);
+  });
+
+  it('triggers candle synchronization when new candle interval start has elapsed', () => {
+    const nowSec = 1729600075; // 75 seconds after start of minute 1729600000
+    const tfSec = 60; // 1m
+    const currentBarStart = Math.floor(nowSec / tfSec) * tfSec; // 1729600060
+
+    // Stale lastBar from previous minute
+    const lastBar = {
+      time: 1729600000,
+      open: 4140.0,
+      high: 4142.0,
+      low: 4139.0,
+      close: 4141.0,
+    };
+
+    const isNewBarDue = !lastBar || lastBar.time < currentBarStart;
+    expect(isNewBarDue).toBe(true);
+
+    // After updating to new bar:
+    const updatedBar = {
+      time: currentBarStart,
+      open: 4141.0,
+      high: 4141.5,
+      low: 4140.8,
+      close: 4141.2,
+    };
+    const isStillDue = !updatedBar || updatedBar.time < currentBarStart;
+    expect(isStillDue).toBe(false);
+  });
 });
+

@@ -95,6 +95,7 @@ export class ComexAdapter implements IExchangeAdapter {
 
   private ws: WebSocket | null = null;
   private isWsActive: boolean = false;
+  private lastWsTradeTimestamp: number = 0;
 
   getConnectionState(): ConnectionState {
     return this.connectionState;
@@ -138,12 +139,15 @@ export class ComexAdapter implements IExchangeAdapter {
       this.emitIncrementalDepthDelta();
     }, 150);
 
-    // 4. Backup trade emitter (only triggers if WebSocket is disconnected or in reconnect)
+    // 4. Reliable trade emitter: runs whenever WebSocket has delivered zero trades in last 2.5s
     this.tradeStreamIntervalId = (setInterval as any)(() => {
-      if (!this.isWsActive) {
+      const now = Date.now();
+      const isWsStreaming = this.lastWsTradeTimestamp > 0 && (now - this.lastWsTradeTimestamp) < 2500;
+      if (!isWsStreaming) {
+        this.isWsActive = false;
         this.emitLiveMarketTrade();
       }
-    }, 320);
+    }, 200);
 
     // 5. Track message throughput
     this.metricsTimerId = (setInterval as any)(() => {
@@ -155,15 +159,16 @@ export class ComexAdapter implements IExchangeAdapter {
 
   private initTradeWebSocket(): void {
     try {
-      this.ws = new WebSocket('wss://fstream.binance.com/ws/xauusdt@trade');
+      this.ws = new WebSocket('wss://dstream.binance.com/ws/xauusdt@aggTrade');
       this.ws.onopen = () => {
-        this.isWsActive = true;
-        this.setConnectionState('LIVE');
+        // TCP connected; will switch isWsActive to true upon receiving first actual trade packet
       };
       this.ws.onmessage = (event: MessageEvent) => {
         try {
           const data = JSON.parse(event.data);
-          if (data.e === 'trade' && data.p) {
+          if ((data.e === 'trade' || data.e === 'aggTrade') && data.p) {
+            this.lastWsTradeTimestamp = Date.now();
+            this.isWsActive = true;
             if (this.connectionState === 'STALE' || this.connectionState === 'CONNECTING') {
               const session = MarketSessionService.getSessionInfo('cme_futures');
               if (session.isOpen) {
@@ -180,7 +185,7 @@ export class ComexAdapter implements IExchangeAdapter {
             this.lastQuoteTimestamp = tradeTime;
 
             const trade: MarketTrade = {
-              id: `gc_${data.t || tradeTime}`,
+              id: `gc_${data.t || data.a || tradeTime}`,
               timestamp: tradeTime,
               price: comexPrice,
               quantity: qty,
@@ -308,7 +313,8 @@ export class ComexAdapter implements IExchangeAdapter {
     // This guarantees sub-second synchronization with live trade WebSocket, zero gaps, and zero delay.
     try {
       const binanceInterval = this.mapTimeframeToBinance(interval);
-      const qs = `symbol=XAUUSDT&interval=${binanceInterval}&limit=1000`;
+      const limitVal = Math.min(_limit || 1000, 1000);
+      const qs = `symbol=XAUUSDT&interval=${binanceInterval}&limit=${limitVal}`;
       let res: Response | null = null;
       try {
         res = await fetch(`/api/cache/klines?${qs}`, { signal: AbortSignal.timeout(1200) });

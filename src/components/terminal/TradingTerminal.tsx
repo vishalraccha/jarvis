@@ -106,6 +106,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
   const prevSliceRef = useRef<HeatmapTimeSlice | null>(null);
   const samplingTimerRef = useRef<number | null>(null);
   const progressiveTimerRef = useRef<number | null>(null);
+  const candleSyncTimerRef = useRef<number | null>(null);
   const inFlightCandleLoadsRef = useRef<Map<string, Promise<void>>>(new Map());
   const preferencesRef = useRef(preferences);
   preferencesRef.current = preferences;
@@ -549,15 +550,29 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
           footprintEngineRef.current.addTrade(trade);
         }
 
-        const now = performance.now();
-        if (
-          now - lastTickTimeRef.current >= 16 ||
-          trade.price !== lastTickPriceRef.current
-        ) {
-          lastTickTimeRef.current = now;
-          lastTickPriceRef.current = trade.price;
-          chartRef.current?.updateTickPrice(trade.price, trade.timestamp);
+        // Keep latestCandlesRef synchronized on every tick
+        const tfSec = TIMEFRAME_SECONDS[preferencesRef.current.timeframe] || 60;
+        const tradeSec = Math.floor((trade.timestamp || Date.now()) / 1000);
+        const barTime = Math.floor(tradeSec / tfSec) * tfSec;
+        if (latestCandlesRef.current.length > 0) {
+          const last = latestCandlesRef.current[latestCandlesRef.current.length - 1];
+          if (last.time === barTime) {
+            last.high = Math.max(last.high, trade.price);
+            last.low = Math.min(last.low, trade.price);
+            last.close = trade.price;
+          } else if (last.time < barTime) {
+            latestCandlesRef.current.push({
+              time: barTime,
+              open: trade.price,
+              high: trade.price,
+              low: trade.price,
+              close: trade.price,
+              volume: trade.quantity || 0,
+            });
+          }
         }
+
+        chartRef.current?.updateTickPrice(trade.price, trade.timestamp);
       },
       onKline: (candle) => {
         if (!candle || !Number.isFinite(candle.close) || candle.close <= 10) return;
@@ -575,6 +590,19 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         // Verify candle matches current timeframe interval and align
         const tfSec = TIMEFRAME_SECONDS[preferencesRef.current.timeframe] || 60;
         const alignedCandle = { ...candle, time: Math.floor(candle.time / tfSec) * tfSec };
+
+        // Keep latestCandlesRef synchronized on klines
+        if (latestCandlesRef.current.length > 0) {
+          const last = latestCandlesRef.current[latestCandlesRef.current.length - 1];
+          if (last.time === alignedCandle.time) {
+            last.high = Math.max(last.high, alignedCandle.high);
+            last.low = Math.min(last.low, alignedCandle.low);
+            last.close = alignedCandle.close;
+            if (alignedCandle.volume) last.volume = alignedCandle.volume;
+          } else if (last.time < alignedCandle.time) {
+            latestCandlesRef.current.push(alignedCandle);
+          }
+        }
 
         chartRef.current?.updateLiveCandle(alignedCandle);
         if (instrument.supportsFootprint) {
@@ -594,6 +622,69 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         console.warn('[TradingTerminal] Adapter error:', err);
       },
     });
+
+    // Background Candle Watchdog (guarantees new candles form and advance every 2.5s)
+    let syncTickCount = 0;
+    candleSyncTimerRef.current = (setInterval as any)(async () => {
+      const curExchange = preferencesRef.current.exchange;
+      const curSymbol = preferencesRef.current.symbol;
+      const curTf = preferencesRef.current.timeframe;
+      if (curExchange !== exchange || curSymbol !== symbol) return;
+
+      syncTickCount++;
+      const nowSec = Math.floor(Date.now() / 1000);
+      const tfSec = TIMEFRAME_SECONDS[curTf] || 60;
+      const currentBarStart = Math.floor(nowSec / tfSec) * tfSec;
+      const lastBar = latestCandlesRef.current[latestCandlesRef.current.length - 1];
+
+      // Re-sync when new candle interval has elapsed or periodically every 15s
+      const isNewBarDue = !lastBar || lastBar.time < currentBarStart;
+      const isPeriodicSync = syncTickCount % 6 === 0;
+
+      if (isNewBarDue || isPeriodicSync) {
+        try {
+          const freshBars = await adapter.fetchHistoricalCandles(curSymbol, curTf, undefined, undefined, 5);
+          if (
+            curSymbol !== preferencesRef.current.symbol ||
+            curExchange !== preferencesRef.current.exchange ||
+            curTf !== preferencesRef.current.timeframe
+          ) {
+            return;
+          }
+          if (freshBars && freshBars.length > 0) {
+            const valid = freshBars.filter((c) =>
+              Number.isFinite(c.time) && c.time > 0 &&
+              Number.isFinite(c.open) && c.open > 10 &&
+              Number.isFinite(c.high) && c.high > 10 &&
+              Number.isFinite(c.low) && c.low > 10 &&
+              Number.isFinite(c.close) && c.close > 10 &&
+              c.low <= c.high
+            ).map((c) => ({
+              ...c,
+              time: (Math.floor(c.time / tfSec) * tfSec) as any,
+            }));
+
+            if (valid.length > 0) {
+              const merged = mergeAndDeduplicateCandles(latestCandlesRef.current, valid, curTf);
+              if (merged.length > 0) {
+                latestCandlesRef.current = merged;
+                // Incremental in-place bar update - NEVER reload or wipe the whole chart!
+                chartRef.current?.incrementalUpdateCandles(valid);
+                indexedDBCache.saveCandles(curSymbol, curTf, merged, curExchange);
+              }
+            }
+          }
+        } catch {}
+      }
+    }, 2500);
+
+    // Re-sync candles immediately when tab comes back into focus
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        loadCandles(preferencesRef.current.symbol, preferencesRef.current.timeframe, preferencesRef.current.exchange);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
     // Start periodic order-book sampling for Heatmap Time Slices (every 250ms for buttery-smooth live edge)
     samplingTimerRef.current = (setInterval as any)(() => {
@@ -621,6 +712,11 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
     }, 250);
 
     return () => {
+      if (candleSyncTimerRef.current) {
+        clearInterval(candleSyncTimerRef.current);
+        candleSyncTimerRef.current = null;
+      }
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       if (samplingTimerRef.current) {
         clearInterval(samplingTimerRef.current);
         samplingTimerRef.current = null;

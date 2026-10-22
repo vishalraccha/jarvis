@@ -45,6 +45,7 @@ export interface JarvisChartHandles {
   jumpToLatest: () => void;
   clearChart: () => void;
   updateCandles: (candles: Candle[]) => void;
+  incrementalUpdateCandles: (candles: Candle[]) => void;
   updateLiveCandle: (candle: Candle) => void;
   updateTickPrice: (price: number, timestamp?: number) => void;
 }
@@ -122,6 +123,18 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
     });
 
     const currentCandleRef = useRef<CandlestickData | null>(null);
+    const prevSymbolRef = useRef<string>(preferences.symbol);
+    const prevTimeframeRef = useRef<string>(preferences.timeframe);
+
+    if (
+      prevSymbolRef.current !== preferences.symbol ||
+      prevTimeframeRef.current !== preferences.timeframe
+    ) {
+      prevSymbolRef.current = preferences.symbol;
+      prevTimeframeRef.current = preferences.timeframe;
+      currentCandleRef.current = null;
+    }
+
     const allCandlesRef = useRef<Candle[]>([]);
     const lastAppliedCandlesKeyRef = useRef<string>('');
     const visibleBubblesCoordsRef = useRef<
@@ -406,34 +419,6 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
     }, [chart, isFootprintActive, preferences.showDepthProfile, preferences.depthProfile?.widthPx, preferences.depthProfile?.enabled, preferences.autoScrollToLatest]);
 
     const lastPriceLineColorRef = useRef<string>('#00e676');
-    const tickRafRef = useRef<number | null>(null);
-    const pendingTickBarRef = useRef<CandlestickData | null>(null);
-
-    const scheduleTickUpdate = useCallback((bar: CandlestickData) => {
-      pendingTickBarRef.current = bar;
-      if (tickRafRef.current !== null) return;
-      tickRafRef.current = requestAnimationFrame(() => {
-        tickRafRef.current = null;
-        const b = pendingTickBarRef.current;
-        const activeSeries = seriesRef.current || series;
-        if (b && activeSeries) {
-          try {
-            activeSeries.update(b);
-          } catch (e) {
-            console.warn('[JarvisChart] updateTickPrice error:', e);
-          }
-        }
-      });
-    }, [series]);
-
-    useEffect(() => {
-      return () => {
-        if (tickRafRef.current !== null) {
-          cancelAnimationFrame(tickRafRef.current);
-          tickRafRef.current = null;
-        }
-      };
-    }, []);
 
     const syncPriceLineColor = useCallback((color: string) => {
       const activeSeries = seriesRef.current || series;
@@ -684,10 +669,9 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
                 to: tvData.length + rightOffset,
               });
               hasInitializedViewRef.current = true;
-            }
-
-            if (preferences.autoScrollToLatest) {
-              activeChart.timeScale().scrollToRealTime();
+              if (preferences.autoScrollToLatest) {
+                activeChart.timeScale().scrollToRealTime();
+              }
             }
           }
         }
@@ -793,6 +777,66 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         }
         applyCandles(candlesToUpdate);
       },
+      incrementalUpdateCandles: (candlesToUpdate: Candle[]) => {
+        const activeSeries = seriesRef.current || series;
+        if (!activeSeries || !candlesToUpdate || candlesToUpdate.length === 0) return;
+        const tfSec = TIMEFRAME_SECONDS[preferences.timeframe] || 60;
+
+        for (const c of candlesToUpdate) {
+          if (!Number.isFinite(c.close) || c.close <= 10) continue;
+          const barTime = (Math.floor(c.time / tfSec) * tfSec) as UTCTimestamp;
+          let cur = currentCandleRef.current;
+          if (cur && barTime < (cur.time as number)) continue;
+
+          const close = c.close;
+          const open = Number.isFinite(c.open) && c.open > 10 ? c.open : close;
+          const high = Number.isFinite(c.high) && c.high > 10 ? Math.max(c.high, open, close) : Math.max(open, close);
+          const low = Number.isFinite(c.low) && c.low > 10 ? Math.min(c.low, open, close) : Math.min(open, close);
+
+          if (!cur || barTime > (cur.time as number)) {
+            const newBar: CandlestickData = { time: barTime, open, high, low, close };
+            currentCandleRef.current = newBar;
+            if (allCandlesRef.current.length > 0) {
+              const lastCandle = allCandlesRef.current[allCandlesRef.current.length - 1];
+              if (lastCandle.time === barTime) {
+                lastCandle.high = Math.max(lastCandle.high, high);
+                lastCandle.low = Math.min(lastCandle.low, low);
+                lastCandle.close = close;
+              } else if (lastCandle.time < barTime) {
+                allCandlesRef.current.push({ time: barTime, open, high, low, close, volume: c.volume || 0 });
+              }
+            }
+            const isUp = close >= open;
+            syncPriceLineColor(isUp ? '#00e676' : '#ff2d55');
+            try {
+              activeSeries.update(newBar);
+            } catch (e) {
+              console.warn('[JarvisChart] incrementalUpdateCandles newBar error:', e);
+            }
+          } else {
+            const barOpen = cur.open ?? open;
+            const kHigh = Math.max(cur.high, high, barOpen, close);
+            const kLow = Math.min(cur.low, low, barOpen, close);
+            const bar: CandlestickData = { time: cur.time, open: barOpen, high: kHigh, low: kLow, close };
+            currentCandleRef.current = bar;
+            if (allCandlesRef.current.length > 0) {
+              const lastCandle = allCandlesRef.current[allCandlesRef.current.length - 1];
+              if (lastCandle.time === cur.time) {
+                lastCandle.high = kHigh;
+                lastCandle.low = kLow;
+                lastCandle.close = close;
+              }
+            }
+            const isUp = close >= barOpen;
+            syncPriceLineColor(isUp ? '#00e676' : '#ff2d55');
+            try {
+              activeSeries.update(bar);
+            } catch (e) {
+              console.warn('[JarvisChart] incrementalUpdateCandles update error:', e);
+            }
+          }
+        }
+      },
       updateLiveCandle: (candle: Candle) => {
         const activeSeries = seriesRef.current || series;
         if (!activeSeries || !candle) return;
@@ -819,39 +863,49 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         let high = Number.isFinite(candle.high) && candle.high > 10 ? Math.max(candle.high, open, close) : Math.max(open, close);
         let low = Number.isFinite(candle.low) && candle.low > 10 ? Math.min(candle.low, open, close) : Math.min(open, close);
 
+        // Stale timestamp guard: ignore past klines that arrive out of order
+        if (cur && barTime < (cur.time as number)) {
+          return;
+        }
+
         // Discard rogue outlier ticks from wrong stream or cross-symbol contamination
         if (cur && cur.close > 10) {
           const ratio = close / cur.close;
-          if (ratio > 1.5 || ratio < 0.5) {
+          if (ratio > 1.35 || ratio < 0.65) {
             return;
           }
-          const minAllowed = cur.close * 0.5;
-          const maxAllowed = cur.close * 1.5;
+          const minAllowed = cur.close * 0.75;
+          const maxAllowed = cur.close * 1.35;
           if (low < minAllowed) low = Math.min(open, close);
           if (high > maxAllowed) high = Math.max(open, close);
         }
 
         if (!cur || barTime > (cur.time as number)) {
-          const newTime = cur && barTime <= (cur.time as number)
-            ? (((cur.time as number) + tfSec) as UTCTimestamp)
-            : barTime;
-
           const newBar: CandlestickData = {
-            time: newTime,
+            time: barTime,
             open,
             high,
             low,
             close,
           };
           currentCandleRef.current = newBar;
-          allCandlesRef.current.push({
-            time: newTime,
-            open,
-            high,
-            low,
-            close,
-            volume: candle.volume || 0,
-          });
+          if (allCandlesRef.current.length > 0) {
+            const lastCandle = allCandlesRef.current[allCandlesRef.current.length - 1];
+            if (lastCandle.time === barTime) {
+              lastCandle.high = Math.max(lastCandle.high, high);
+              lastCandle.low = Math.min(lastCandle.low, low);
+              lastCandle.close = close;
+            } else if (lastCandle.time < barTime) {
+              allCandlesRef.current.push({
+                time: barTime,
+                open,
+                high,
+                low,
+                close,
+                volume: candle.volume || 0,
+              });
+            }
+          }
           const isUp = close >= open;
           syncPriceLineColor(isUp ? '#00e676' : '#ff2d55');
           try {
@@ -891,9 +945,16 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
       },
       updateTickPrice: (price: number, timestamp?: number) => {
         const activeSeries = seriesRef.current || series;
+        const activeChart = chartRef.current || chart;
         if (!activeSeries || !Number.isFinite(price) || price <= 10) return;
         const tfSec = TIMEFRAME_SECONDS[preferences.timeframe] || 60;
         let cur = currentCandleRef.current;
+
+        // Discard previous candle if it belonged to a different timeframe
+        if (cur && (cur.time as number) % tfSec !== 0) {
+          cur = null;
+          currentCandleRef.current = null;
+        }
 
         if (!cur && allCandlesRef.current.length > 0) {
           const lastC = allCandlesRef.current[allCandlesRef.current.length - 1];
@@ -910,38 +971,49 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         // Discard extreme cross-symbol outlier ticks
         if (cur && cur.close > 10) {
           const ratio = price / cur.close;
-          if (ratio > 1.5 || ratio < 0.5) {
+          if (ratio > 1.35 || ratio < 0.65) {
             return;
           }
         }
 
-        const effectiveTimestamp = timestamp || Date.now();
+        const effectiveTimestamp = timestamp && timestamp > 1e11 ? timestamp : (timestamp && timestamp > 1e8 ? timestamp * 1000 : Date.now());
         const tradeSec = Math.floor(effectiveTimestamp / 1000);
         const barTime = (Math.floor(tradeSec / tfSec) * tfSec) as UTCTimestamp;
 
+        // Stale timestamp guard: ignore ticks older than the current bar
+        if (cur && barTime < (cur.time as number)) {
+          return;
+        }
+
         if (!cur || barTime > (cur.time as number)) {
           // A new candle boundary has elapsed! Immediately open the new bar
-          const newTime = cur && barTime <= (cur.time as number)
-            ? (((cur.time as number) + tfSec) as UTCTimestamp)
-            : barTime;
-
           const newBar: CandlestickData = {
-            time: newTime,
+            time: barTime,
             open: price,
             high: price,
             low: price,
             close: price,
           };
+          const isUp = cur ? price >= cur.close : true;
           currentCandleRef.current = newBar;
-          allCandlesRef.current.push({
-            time: newTime,
-            open: price,
-            high: price,
-            low: price,
-            close: price,
-            volume: 0,
-          });
-          syncPriceLineColor('#00e676');
+          if (allCandlesRef.current.length > 0) {
+            const lastCandle = allCandlesRef.current[allCandlesRef.current.length - 1];
+            if (lastCandle.time === barTime) {
+              lastCandle.high = Math.max(lastCandle.high, price);
+              lastCandle.low = Math.min(lastCandle.low, price);
+              lastCandle.close = price;
+            } else if (lastCandle.time < barTime) {
+              allCandlesRef.current.push({
+                time: barTime,
+                open: price,
+                high: price,
+                low: price,
+                close: price,
+                volume: 0,
+              });
+            }
+          }
+          syncPriceLineColor(isUp ? '#00e676' : '#ff2d55');
           try {
             activeSeries.update(newBar);
           } catch (e) {
@@ -972,7 +1044,11 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
           }
           const isUp = close >= barOpen;
           syncPriceLineColor(isUp ? '#00e676' : '#ff2d55');
-          scheduleTickUpdate(updatedBar);
+          try {
+            activeSeries.update(updatedBar);
+          } catch (e) {
+            console.warn('[JarvisChart] updateTickPrice activeBar error:', e);
+          }
         }
       },
     }));
