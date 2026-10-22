@@ -55,7 +55,11 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
   const isDirtyRef = useRef<boolean>(true);
   const lastRenderTimeRef = useRef<number>(0);
 
-  const profileWidth = Math.max(160, Math.min(320, settings.widthPx || 210));
+  const isMobile = width < 600;
+  const maxAllowedWidth = isMobile ? Math.min(145, Math.floor(width * 0.38)) : 320;
+  const minAllowedWidth = isMobile ? 100 : 160;
+  const baseWidth = isMobile ? Math.min(settings.widthPx || 210, maxAllowedWidth) : (settings.widthPx || 210);
+  const profileWidth = Math.max(minAllowedWidth, Math.min(maxAllowedWidth, baseWidth));
 
   const render = useCallback(() => {
     const canvas = canvasRef.current;

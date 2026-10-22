@@ -74,6 +74,7 @@ const ChartHeaderOverlayComponent: React.FC<ChartHeaderOverlayProps> = ({
 
   return (
     <div
+      className="chart-header-overlay-container"
       style={{
         position: 'absolute',
         top: 10,
@@ -87,6 +88,7 @@ const ChartHeaderOverlayComponent: React.FC<ChartHeaderOverlayProps> = ({
     >
       {/* Primary Instrument Header Pill */}
       <div
+        className="chart-header-pill"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -107,6 +109,7 @@ const ChartHeaderOverlayComponent: React.FC<ChartHeaderOverlayProps> = ({
 
         {/* Contract Type Badge */}
         <span
+          className="chart-overlay-secondary"
           style={{
             fontSize: 9.5,
             fontWeight: 700,
@@ -124,6 +127,7 @@ const ChartHeaderOverlayComponent: React.FC<ChartHeaderOverlayProps> = ({
 
         {/* Provider Provenance Badge */}
         <span
+          className="chart-overlay-secondary"
           style={{
             fontSize: 9.5,
             fontWeight: 600,
@@ -184,6 +188,7 @@ const ChartHeaderOverlayComponent: React.FC<ChartHeaderOverlayProps> = ({
         {/* Timestamp of last quote or settlement */}
         {lastQuoteTime && lastQuoteTime > 0 && (
           <span
+            className="chart-overlay-secondary"
             style={{
               fontSize: 9,
               color: '#64748b',

@@ -387,6 +387,99 @@ body {
   .toolbar-clock-container {
     display: none !important;
   }
+
+  /* Full responsive dropdown sheets on mobile */
+  .terminal-dropdown-menu {
+    position: fixed !important;
+    top: 44px !important;
+    left: 8px !important;
+    right: 8px !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: calc(100vw - 16px) !important;
+    max-height: calc(100dvh - 54px) !important;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.95), 0 0 0 1px rgba(255, 255, 255, 0.16) !important;
+    border-radius: 8px !important;
+    z-index: 100000 !important;
+  }
+
+  /* Compact Chart Header Overlay on phones */
+  .chart-header-overlay-container {
+    top: 6px !important;
+    left: 6px !important;
+  }
+
+  .chart-header-pill {
+    padding: 3px 6px !important;
+    gap: 5px !important;
+  }
+
+  .chart-overlay-secondary {
+    display: none !important;
+  }
+
+  /* Adaptive modals on mobile */
+  .modal-content {
+    width: 95% !important;
+    max-width: calc(100vw - 16px) !important;
+    max-height: 88dvh !important;
+    margin: 8px !important;
+    padding: 14px !important;
+  }
+
+  /* Compact Bottom Volume Delta Panel */
+  .bottom-panel-badge,
+  .bottom-panel-presets {
+    display: none !important;
+  }
+
+  .bottom-panel-title {
+    font-size: 10px !important;
+  }
 }
+
+@media (max-width: 480px) {
+  .terminal-top-toolbar {
+    height: 38px !important;
+    padding: 0 6px !important;
+    gap: 4px !important;
+  }
+
+  .toolbar-symbol-btn {
+    max-width: 105px !important;
+    font-size: 10px !important;
+    padding: 0 5px !important;
+  }
+
+  .terminal-dropdown-btn {
+    font-size: 10.5px !important;
+    padding: 0 5px !important;
+  }
+
+  .toolbar-status-pill {
+    padding: 2px 5px !important;
+    font-size: 9px !important;
+    gap: 3px !important;
+  }
+}
+
+@media (max-width: 360px) {
+  .toolbar-symbol-btn {
+    max-width: 82px !important;
+  }
+
+  .toolbar-status-label {
+    display: none !important;
+  }
+}
+
+/* Touch responsiveness: prevent accidental pull-to-refresh or tap delay */
+.jarvis-chart-container,
+.jarvis-trading-terminal,
+canvas {
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
 
 

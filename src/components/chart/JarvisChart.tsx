@@ -227,7 +227,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
           mouseWheel: true,
           pressedMouseMove: true,
           horzTouchDrag: true,
-          vertTouchDrag: false,
+          vertTouchDrag: true,
         },
         handleScale: {
           axisPressedMouseMove: {
@@ -387,7 +387,8 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
       if (!chart) return;
       const targetSpacing = isFootprintActive ? 72 : 12;
       const isCob = preferences.showDepthProfile && preferences.depthProfile?.enabled !== false;
-      const cobW = isCob ? (preferences.depthProfile?.widthPx || 220) : 0;
+      const baseCobW = preferences.depthProfile?.widthPx || 220;
+      const cobW = isCob ? (dimensions.width > 0 && dimensions.width < 600 ? Math.min(baseCobW, 140) : baseCobW) : 0;
       const rightOffset = isCob ? Math.ceil(cobW / targetSpacing) + 2 : (isFootprintActive ? 3 : 6);
       chart.timeScale().applyOptions({
         barSpacing: targetSpacing,
@@ -651,7 +652,8 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
 
           if (activeChart) {
             const isCob = preferences.showDepthProfile && preferences.depthProfile?.enabled !== false;
-            const cobW = isCob ? (preferences.depthProfile?.widthPx || 220) : 0;
+            const baseCobW = preferences.depthProfile?.widthPx || 220;
+            const cobW = isCob ? (dimensions.width > 0 && dimensions.width < 600 ? Math.min(baseCobW, 140) : baseCobW) : 0;
             const isFp = isFootprintActive;
             const targetSpacing = isFp ? 72 : 14;
             const rightOffset = isCob ? Math.ceil(cobW / targetSpacing) + 2 : (isFp ? 3 : 6);
@@ -744,7 +746,8 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         const activeChart = chartRef.current || chart;
         if (!activeChart) return;
         const isCob = preferences.showDepthProfile && preferences.depthProfile?.enabled !== false;
-        const cobW = isCob ? (preferences.depthProfile?.widthPx || 220) : 0;
+        const baseCobW = preferences.depthProfile?.widthPx || 220;
+        const cobW = isCob ? (dimensions.width > 0 && dimensions.width < 600 ? Math.min(baseCobW, 140) : baseCobW) : 0;
         const isFp = isFootprintActive;
         const targetSpacing = isFp ? 72 : 14;
         const rightOffset = isCob ? Math.ceil(cobW / targetSpacing) + 2 : (isFp ? 3 : 6);
@@ -1211,12 +1214,14 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
     return (
       <div
         ref={containerRef}
+        className="jarvis-chart-container"
         style={{
           position: 'relative',
           width: '100%',
           height: '100%',
           overflow: 'hidden',
           background: '#080b11',
+          touchAction: 'none',
         }}
         onMouseMove={handleContainerMouseMove}
         onMouseLeave={() => {
@@ -1246,7 +1251,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
             showHeatmap={preferences.showHeatmap}
             showBestBidAsk={preferences.showBestBidAskLines}
             showDepthProfile={preferences.showDepthProfile && preferences.depthProfile?.enabled !== false}
-            depthProfileWidth={preferences.depthProfile?.widthPx || 220}
+            depthProfileWidth={dimensions.width > 0 && dimensions.width < 600 ? Math.min(preferences.depthProfile?.widthPx || 220, 140) : (preferences.depthProfile?.widthPx || 220)}
             showCandles={preferences.showCandles}
             width={dimensions.width}
             height={dimensions.height}
@@ -1264,6 +1269,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
             height: '100%',
             zIndex: 2,
             pointerEvents: 'auto',
+            touchAction: 'none',
           }}
         />
 

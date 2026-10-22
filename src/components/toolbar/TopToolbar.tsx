@@ -390,7 +390,7 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
         {/* Small Symbol / Pair Selector Dropdown */}
         <div style={{ position: 'relative' }}>
           <button
-            className={`terminal-dropdown-btn ${openMenu === 'symbol' ? 'open' : ''}`}
+            className={`terminal-dropdown-btn toolbar-symbol-btn ${openMenu === 'symbol' ? 'open' : ''}`}
             onClick={() => toggleMenu('symbol')}
             style={{
               height: 26,
@@ -919,6 +919,7 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
 
         {/* Live Status Pill with Latency */}
         <div
+          className="toolbar-status-pill"
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -944,7 +945,7 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
               boxShadow: `0 0 5px ${badge.color}`,
             }}
           />
-          <span>{badge.label}</span>
+          <span className="toolbar-status-label">{badge.label}</span>
           <span
             style={{
               color:

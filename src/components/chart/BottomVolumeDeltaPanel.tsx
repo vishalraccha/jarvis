@@ -281,12 +281,13 @@ const BottomVolumeDeltaPanelComponent: React.FC<BottomVolumeDeltaPanelProps> = (
           borderBottom: isMinimized ? 'none' : '1px solid rgba(255, 255, 255, 0.05)',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <Activity size={13} color="#00b4d8" />
-          <span style={{ fontSize: 11, fontWeight: 700, color: '#f8fafc', letterSpacing: '0.02em' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden' }}>
+          <Activity size={13} color="#00b4d8" style={{ flexShrink: 0 }} />
+          <span className="bottom-panel-title" style={{ fontSize: 11, fontWeight: 700, color: '#f8fafc', letterSpacing: '0.02em', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
             ORDER FLOW DELTA & VOLUME
           </span>
           <span
+            className="bottom-panel-badge"
             style={{
               fontSize: 10,
               padding: '1px 6px',
@@ -294,16 +295,17 @@ const BottomVolumeDeltaPanelComponent: React.FC<BottomVolumeDeltaPanelProps> = (
               background: 'rgba(0, 180, 216, 0.15)',
               color: '#38bdf8',
               fontWeight: 600,
+              flexShrink: 0,
             }}
           >
             REAL TRADES
           </span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
           {/* Height adjustment presets */}
           {!isMinimized && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginRight: 8 }}>
+            <div className="bottom-panel-presets" style={{ display: 'flex', alignItems: 'center', gap: 2, marginRight: 8 }}>
               {[90, 130, 180].map((h) => (
                 <button
                   key={h}
