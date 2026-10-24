@@ -159,7 +159,7 @@ export class ComexAdapter implements IExchangeAdapter {
 
   private initTradeWebSocket(): void {
     try {
-      this.ws = new WebSocket('wss://dstream.binance.com/ws/xauusdt@aggTrade');
+      this.ws = new WebSocket('wss://fstream.binance.com/ws/xauusdt@aggTrade');
       this.ws.onopen = () => {
         // TCP connected; will switch isWsActive to true upon receiving first actual trade packet
       };

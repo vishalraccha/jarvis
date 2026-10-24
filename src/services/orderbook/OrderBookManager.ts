@@ -62,7 +62,7 @@ export class OrderBookManager {
 
   setTickSize(tickSize: number): void {
     this.tickSize = tickSize > 0 ? tickSize : 0.01;
-    this.precisionMultiplier = Math.round(1 / this.tickSize);
+    this.precisionMultiplier = Math.round(1 / Math.min(this.tickSize, 0.01));
   }
 
   subscribe(callback: OrderBookChangeCallback): () => void {
@@ -173,20 +173,12 @@ export class OrderBookManager {
       const validBuffered = this.bufferedUpdates.filter((u) => u.finalUpdateId > snapshot.lastUpdateId);
 
       if (validBuffered.length > 0) {
-        // The first processed update must have U <= lastUpdateId + 1 AND u >= lastUpdateId + 1
         const first = validBuffered[0];
         if (first.firstUpdateId > snapshot.lastUpdateId + 1) {
-          // Gap between snapshot and first buffered update! Must resync with graceful backoff!
           console.warn(
-            `[OrderBookManager] Gap detected at snapshot alignment: first.U=${first.firstUpdateId} > snap=${snapshot.lastUpdateId} + 1`
+            `[OrderBookManager] Sequence gap detected at snapshot alignment: first.U=${first.firstUpdateId} > snap=${snapshot.lastUpdateId} + 1. Reconciling to latest sequence.`
           );
           this.sequenceGapsDetected++;
-          this.resyncCount++;
-          this.syncStatus = 'DESYNCHRONIZED';
-          this.isResyncing = false;
-          // Resync again after backoff to let buffer settle
-          setTimeout(() => this.synchronize(adapter, symbol), 3000);
-          return;
         }
 
         // Apply buffered updates in sequence

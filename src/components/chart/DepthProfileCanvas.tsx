@@ -182,34 +182,23 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
       return;
     }
 
-    // 4. Calculate Optimal Discretization Step strictly bounded to visible screen rows (~18px per row, max 45 rows)
-    const targetRowCount = Math.max(12, Math.min(45, Math.floor((height - headerH) / 18)));
+    // 4. Calculate Optimal Discretization Step strictly bounded to visible screen rows (~18px per row, max 42 rows)
+    const availableH = height - headerH;
+    const targetRowCount = Math.max(14, Math.min(42, Math.floor(availableH / 19)));
     const targetStep = visibleSpread / targetRowCount;
-    let rowStep = 1.0;
-    let decimalPlaces = 0;
+    const minTick = orderBook.getTickSize() || 0.01;
 
-    if (currentMid >= 20000) {
-      const btcSteps = [5, 10, 25, 50, 100, 250, 500, 1000];
-      rowStep = btcSteps.find((s) => s >= targetStep) || Math.ceil(targetStep / 50) * 50;
-      decimalPlaces = 0;
-    } else if (currentMid >= 1000) {
-      const ethSteps = [1.0, 2.0, 5.0, 10.0, 25.0, 50.0];
-      rowStep = ethSteps.find((s) => s >= targetStep) || Math.ceil(targetStep);
-      decimalPlaces = 0;
-    } else if (currentMid >= 50) {
-      const solSteps = [1.0, 2.0, 5.0, 10.0];
-      rowStep = solSteps.find((s) => s >= targetStep) || Math.ceil(targetStep);
-      decimalPlaces = 0;
-    } else {
-      const pennySteps = [0.01, 0.05, 0.1, 0.25, 0.5, 1.0];
-      rowStep = pennySteps.find((s) => s >= targetStep) || 0.01;
-      decimalPlaces = rowStep < 0.1 ? 2 : rowStep < 1 ? 1 : 0;
-    }
+    const STANDARD_STEPS = [
+      0.01, 0.02, 0.05, 0.1, 0.2, 0.25, 0.5,
+      1.0, 2.0, 2.5, 5.0, 10.0, 20.0, 25.0, 50.0,
+      100.0, 200.0, 250.0, 500.0, 1000.0, 2500.0, 5000.0,
+    ];
 
-    // Absolute hard safety cap: row count must never exceed 50 under any zoom level
-    if (visibleSpread / rowStep > 50) {
-      rowStep = Math.ceil((visibleSpread / 40) * 10) / 10;
+    let rowStep = STANDARD_STEPS.find((s) => s >= targetStep && s >= minTick) || Math.ceil(targetStep);
+    if (visibleSpread / rowStep > 45) {
+      rowStep = STANDARD_STEPS.find((s) => visibleSpread / s <= 45 && s >= minTick) || rowStep * 2;
     }
+    const decimalPlaces = rowStep < 0.1 ? 2 : rowStep < 1 ? 1 : 0;
 
     interface CobRow {
       price: number;
@@ -220,66 +209,62 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
     }
 
     const rowMap = new Map<number, CobRow>();
-    const startPrice = Math.floor(pMin / rowStep) * rowStep;
-    const endPrice = Math.ceil(pMax / rowStep) * rowStep;
+    const kMin = Math.floor(pMin / rowStep);
+    const kMax = Math.ceil(pMax / rowStep);
 
-    for (let p = startPrice; p <= endPrice && rowMap.size < 55; p += rowStep) {
-      if (p <= 10) continue;
-      const price = Math.round(p * 10000) / 10000;
-      const y = priceToY(price);
-      if (y >= headerH - 8 && y <= height + 8) {
-        rowMap.set(price, {
+    for (let k = kMin; k <= kMax; k++) {
+      const price = Math.round(k * rowStep * 100000) / 100000;
+      if (price <= 0.001) continue;
+      const directY = series.priceToCoordinate(price);
+      const y = directY !== null && Number.isFinite(directY) ? directY : priceToY(price);
+      if (y >= headerH - 10 && y <= height + 10) {
+        const isAsk = bestAsk > 0 ? price >= bestAsk : price >= currentMid;
+        rowMap.set(k, {
           price,
           y,
-          isAsk: price >= currentMid,
+          isAsk,
           levelQty: 0,
           cumQty: 0,
         });
       }
     }
 
-    // 5. Query Order Book Level Quantities
+    // 5. Query Order Book Level Quantities (Strictly 100% Genuine Exchange Depth)
     if (pMin > 0 && pMax > pMin) {
-      const bookRange = orderBook.getLevelsInRange(pMin - rowStep, pMax + rowStep);
+      const bookRange = orderBook.getLevelsInRange(pMin - rowStep * 2, pMax + rowStep * 2);
 
       for (const a of bookRange.asks) {
         if (a.quantity <= 0) continue;
-        const bucketPrice = Math.round(Math.round(a.price / rowStep) * rowStep * 10000) / 10000;
-        const row = rowMap.get(bucketPrice);
-        if (row) {
+        const k = Math.round(a.price / rowStep);
+        let row = rowMap.get(k);
+        // Ensure authentic ask orders stay strictly on the ask side (above spread)
+        if (row && !row.isAsk) {
+          row = rowMap.get(k + 1);
+        }
+        if (row && row.isAsk) {
           row.levelQty += a.quantity;
         }
       }
 
       for (const b of bookRange.bids) {
         if (b.quantity <= 0) continue;
-        const bucketPrice = Math.round(Math.round(b.price / rowStep) * rowStep * 10000) / 10000;
-        const row = rowMap.get(bucketPrice);
-        if (row) {
+        const k = Math.round(b.price / rowStep);
+        let row = rowMap.get(k);
+        // Ensure authentic bid orders stay strictly on the bid side (below spread)
+        if (row && row.isAsk) {
+          row = rowMap.get(k - 1);
+        }
+        if (row && !row.isAsk) {
           row.levelQty += b.quantity;
         }
       }
     }
 
-    // Augment with Heatmap Engine resting levels (BSL, SSL, Round Numbers) if available
-    if (heatmapEngine) {
-      const resting = heatmapEngine.getActiveRestingLevels();
-      for (const lvl of resting) {
-        if (lvl.price >= pMin && lvl.price <= pMax && lvl.qty > 0) {
-          const bucketPrice = Math.round(Math.round(lvl.price / rowStep) * rowStep * 10000) / 10000;
-          const row = rowMap.get(bucketPrice);
-          if (row) {
-            row.levelQty = Math.max(row.levelQty, lvl.qty);
-          }
-        }
-      }
-    }
-
     const allRows = Array.from(rowMap.values());
-    const askRows = allRows.filter((r) => r.isAsk).sort((a, b) => a.price - b.price); // ascending from mid
-    const bidRows = allRows.filter((r) => !r.isAsk).sort((a, b) => b.price - a.price); // descending from mid
+    const askRows = allRows.filter((r) => r.isAsk).sort((a, b) => a.price - b.price); // ascending from inside ask outwards
+    const bidRows = allRows.filter((r) => !r.isAsk).sort((a, b) => b.price - a.price); // descending from inside bid outwards
 
-    // 6. Calculate Cumulative Order Book (Summing outward from Mid Price)
+    // 6. Calculate Cumulative Order Book (Summing outward from Mid Price / Spread)
     let runningAskCum = 0;
     for (const r of askRows) {
       runningAskCum += r.levelQty;
@@ -428,7 +413,8 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
     }
 
     // 8. Inside Spread / Current Mid Price Indicator
-    const midY = priceToY(currentMid);
+    const directMidY = series.priceToCoordinate(currentMid);
+    const midY = directMidY !== null && Number.isFinite(directMidY) ? directMidY : priceToY(currentMid);
     if (midY >= headerH && midY <= height - 5) {
       ctx.save();
       ctx.strokeStyle = '#00f0ff';

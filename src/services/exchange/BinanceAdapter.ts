@@ -248,9 +248,9 @@ export class BinanceAdapter implements IExchangeAdapter {
     // Binance Futures requires @aggTrade (does not support individual @trade). Spot supports both.
     const tradeStream = `${effSym}@aggTrade`;
     const streamName = `${effSym}@depth@100ms/${tradeStream}/${effSym}@kline_${this.currentTimeframe}`;
-    // Use dstream.binance.com (official global futures mirror) and data-stream.binance.vision (spot mirror)
+    // Use fstream.binance.com for USD-M Perpetual futures (XAUUSDT, etc.) and data-stream.binance.vision for spot
     const wsUrl = isFut
-      ? `wss://dstream.binance.com/stream?streams=${streamName}`
+      ? `wss://fstream.binance.com/stream?streams=${streamName}`
       : `wss://data-stream.binance.vision/stream?streams=${streamName}`;
 
     try {
@@ -362,26 +362,7 @@ export class BinanceAdapter implements IExchangeAdapter {
 
         this.messagesInSecond++;
         this.metrics.totalMessagesProcessed++;
-        this.metrics.lastMessageTimestamp = now;
-
         this.events?.onTrade(trade);
-
-        // Keep Order Book / DOM ladder animated around the live price if order book is silent
-        const tick = this.isGoldSpot(effSym) ? 0.05 : 0.1;
-        const bids: [number, number][] = [];
-        const asks: [number, number][] = [];
-        for (let i = 1; i <= 25; i++) {
-          bids.push([Math.round((adjustedPrice - i * tick) * 100) / 100, Math.round(5 + Math.random() * 30)]);
-          asks.push([Math.round((adjustedPrice + i * tick) * 100) / 100, Math.round(5 + Math.random() * 30)]);
-        }
-        this.events?.onDepthUpdate?.({
-          firstUpdateId: now,
-          finalUpdateId: now + 1,
-          prevFinalUpdateId: now - 1,
-          eventTime: now,
-          bids,
-          asks,
-        });
       }
     } catch {}
   }
