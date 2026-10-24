@@ -29,6 +29,7 @@ import { FootprintEngine, getSymbolDefaultFootprintTick } from '../../services/f
 import { colorMapEngine } from '../../services/heatmap/ColorMap';
 import { indexedDBCache } from '../../services/storage/IndexedDBCache';
 import { mergeAndDeduplicateCandles, TIMEFRAME_SECONDS } from '../../utils/candleUtils';
+import { FEATURES, shouldUseBackendStorage } from '../../config/features';
 
 import {
   DEFAULT_TERMINAL_PREFERENCES,
@@ -108,6 +109,8 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
   const progressiveTimerRef = useRef<number | null>(null);
   const candleSyncTimerRef = useRef<number | null>(null);
   const inFlightCandleLoadsRef = useRef<Map<string, Promise<void>>>(new Map());
+  const isLoadingMoreHistoryRef = useRef<boolean>(false);
+  const hasReachedEarliestHistoryRef = useRef<boolean>(false);
   const preferencesRef = useRef(preferences);
   preferencesRef.current = preferences;
 
@@ -280,6 +283,8 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
     // Switch instrument key
     if (currentInstrumentKeyRef.current !== cacheKey) {
       currentInstrumentKeyRef.current = cacheKey;
+      hasReachedEarliestHistoryRef.current = false;
+      isLoadingMoreHistoryRef.current = false;
       latestCandlesRef.current = [];
       setRenderedCandles([]);
       if (!ramCandles || ramCandles.length === 0) {
@@ -288,6 +293,37 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
     }
 
     let hasRendered = false;
+
+    // TIER 0: Cloud Backend Fast Path (SQLite + Redis Hot Cache)
+    const useBackend = await shouldUseBackendStorage();
+    if (useBackend) {
+      try {
+        const limit = FEATURES.activeWorkingSetSize;
+        const res = await fetch(
+          `/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=${limit}`,
+          { signal: AbortSignal.timeout(3000) }
+        );
+        if (res.ok) {
+          const backendCandles: Candle[] = await res.json();
+          if (
+            Array.isArray(backendCandles) &&
+            backendCandles.length > 0 &&
+            symbol === preferencesRef.current.symbol &&
+            exchange === preferencesRef.current.exchange &&
+            timeframe === preferencesRef.current.timeframe
+          ) {
+            latestCandlesRef.current = backendCandles;
+            setRenderedCandles(backendCandles);
+            chartRef.current?.updateCandles(backendCandles);
+            seedEngines(backendCandles, symbol, timeframe, exchange);
+            indexedDBCache.saveCandles(symbol, timeframe, backendCandles, exchange);
+            return;
+          }
+        }
+      } catch (err) {
+        console.warn('[TradingTerminal] Cloud backend query failed, falling back to client cache:', err);
+      }
+    }
 
     // TIER 1: In-Memory RAM Cache or Local Snapshot (Instant 0ms MT5-speed)
     if (
@@ -447,6 +483,42 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
     return fetchPromise;
   }, [getAdapter, seedEngines]);
 
+  // Reverse scroll historical pagination: fetches older candles from backend
+  const handleLoadMoreHistory = useCallback(async () => {
+    if (isLoadingMoreHistoryRef.current || hasReachedEarliestHistoryRef.current) return;
+    const currentBars = latestCandlesRef.current;
+    if (!currentBars || currentBars.length === 0) return;
+
+    const oldest = currentBars[0];
+    if (!oldest || !oldest.time) return;
+
+    const symbol = preferencesRef.current.symbol;
+    const timeframe = preferencesRef.current.timeframe;
+    const endTime = Math.floor(oldest.time) - 1;
+
+    isLoadingMoreHistoryRef.current = true;
+    try {
+      const res = await fetch(
+        `/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&endTime=${endTime}&limit=200`,
+        { signal: AbortSignal.timeout(4000) }
+      );
+      if (res.ok) {
+        const olderCandles: Candle[] = await res.json();
+        if (Array.isArray(olderCandles) && olderCandles.length > 0) {
+          latestCandlesRef.current = [...olderCandles, ...latestCandlesRef.current];
+          setRenderedCandles(latestCandlesRef.current);
+          chartRef.current?.prependOlderCandles(olderCandles);
+        } else {
+          hasReachedEarliestHistoryRef.current = true;
+        }
+      }
+    } catch (err) {
+      console.warn('[TradingTerminal] Failed to fetch older candles:', err);
+    } finally {
+      isLoadingMoreHistoryRef.current = false;
+    }
+  }, []);
+
   // 3. Connect to live market data and coordinate pipelines
   useEffect(() => {
     const exchange = preferences.exchange;
@@ -461,6 +533,8 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
     const currentKey = `${exchange}_${symbol}_${preferences.timeframe}`;
     if (currentInstrumentKeyRef.current !== currentKey) {
       currentInstrumentKeyRef.current = currentKey;
+      hasReachedEarliestHistoryRef.current = false;
+      isLoadingMoreHistoryRef.current = false;
       latestCandlesRef.current = [];
       setRenderedCandles([]);
       chartRef.current?.clearChart();
@@ -700,8 +774,10 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
       const marketType = isFutures ? 'linear_perpetual' : 'spot';
       const slice = heatmap.sampleOrderBook(orderBook, symbol, exchange, marketType, 100);
       if (slice) {
-        // Asynchronously queue to IndexedDB cache
-        indexedDBCache.queueSlice(symbol, slice);
+        // Asynchronously queue to IndexedDB cache only if enabled
+        if (FEATURES.enableIdbSliceDumping) {
+          indexedDBCache.queueSlice(symbol, slice);
+        }
 
         // Detect liquidity shifts
         if (prefs.showLiquidityShifts && prevSliceRef.current) {
@@ -801,6 +877,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
           footprintEngine={footprintEngineRef.current}
           onUpdatePreferences={handleUpdatePreferences}
           connectionState={connectionState}
+          onLoadMoreHistory={handleLoadMoreHistory}
         />
       </main>
 

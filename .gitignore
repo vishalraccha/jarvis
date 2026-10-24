@@ -20,5 +20,11 @@ dist-ssr
 *.suo
 *.ntvs*
 *.njsproj
-*.sln
 *.sw?
+
+# SQLite & Data
+data/
+*.db
+*.db-journal
+*.db.tmp
+

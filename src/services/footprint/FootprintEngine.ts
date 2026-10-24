@@ -52,7 +52,7 @@ export class FootprintEngine {
   // Trade deduplication set: keeps recent trade IDs to prevent double counting
   private seenTradeIds: Set<string> = new Set();
   private tradeIdOrder: string[] = [];
-  private readonly MAX_SEEN_TRADES = 50000;
+  private readonly MAX_SEEN_TRADES = 5000;
 
   // Track earliest trade timestamp processed
   private earliestTradeTimeMs: number | null = null;

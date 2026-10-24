@@ -64,7 +64,7 @@ const BottomVolumeDeltaPanelComponent: React.FC<BottomVolumeDeltaPanelProps> = (
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2.0);
     const drawHeight = panelHeight - 28; // minus header
     if (canvas.width !== width * dpr || canvas.height !== drawHeight * dpr) {
       canvas.width = width * dpr;

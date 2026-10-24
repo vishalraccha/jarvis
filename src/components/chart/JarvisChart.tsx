@@ -45,6 +45,7 @@ export interface JarvisChartHandles {
   jumpToLatest: () => void;
   clearChart: () => void;
   updateCandles: (candles: Candle[]) => void;
+  prependOlderCandles: (candles: Candle[]) => void;
   incrementalUpdateCandles: (candles: Candle[]) => void;
   updateLiveCandle: (candle: Candle) => void;
   updateTickPrice: (price: number, timestamp?: number) => void;
@@ -74,6 +75,7 @@ interface JarvisChartProps {
   onUpdatePreferences?: (patch: Partial<TerminalPreferences>) => void;
   connectionState?: string;
   lastQuoteTime?: number;
+  onLoadMoreHistory?: () => void;
 }
 
 const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
@@ -90,9 +92,13 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
       onUpdatePreferences,
       connectionState,
       lastQuoteTime,
+      onLoadMoreHistory,
     },
     ref
   ) => {
+    const onLoadMoreHistoryRef = useRef(onLoadMoreHistory);
+    onLoadMoreHistoryRef.current = onLoadMoreHistory;
+
     const containerRef = useRef<HTMLDivElement | null>(null);
     const chartHostRef = useRef<HTMLDivElement | null>(null);
     const [chart, setChart] = useState<IChartApi | null>(null);
@@ -341,9 +347,19 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         }
       });
 
-      resizeObserver.observe(containerRef.current);
+      // Infinite reverse scroll listener: when user scrolls near the earliest bar
+      let lastRequestedTime = 0;
+      const handleLogicalRangeChange = (range: { from: number; to: number } | null) => {
+        if (!range || !onLoadMoreHistoryRef.current) return;
+        if (range.from < 15 && Date.now() - lastRequestedTime > 1200) {
+          lastRequestedTime = Date.now();
+          onLoadMoreHistoryRef.current();
+        }
+      };
+      tvChart.timeScale().subscribeVisibleLogicalRangeChange(handleLogicalRangeChange);
 
       return () => {
+        tvChart.timeScale().unsubscribeVisibleLogicalRangeChange(handleLogicalRangeChange);
         resizeObserver.disconnect();
         vwapSeriesRef.current = null;
         upper1SeriesRef.current = null;
@@ -779,6 +795,54 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
           lastAppliedCandlesKeyRef.current = `${preferences.exchange}_${preferences.symbol}_${preferences.timeframe}_${candlesToUpdate.length}_${firstT}_${lastT}`;
         }
         applyCandles(candlesToUpdate);
+      },
+      prependOlderCandles: (olderCandles: Candle[]) => {
+        const activeSeries = seriesRef.current || series;
+        const activeChart = chartRef.current || chart;
+        if (!activeSeries || !activeChart || !olderCandles || olderCandles.length === 0) return;
+
+        const currentBars = allCandlesRef.current;
+        const oldestExistingTime = currentBars.length > 0 ? currentBars[0].time : Infinity;
+
+        // Filter out any candles that overlap with existing data or are invalid
+        const strictlyOlder = olderCandles.filter(
+          (c) => Number.isFinite(c.time) && c.time < oldestExistingTime && Number.isFinite(c.close) && c.close > 0
+        );
+
+        if (strictlyOlder.length === 0) return;
+
+        // Capture visible logical range before updating data
+        const visibleRange = activeChart.timeScale().getVisibleLogicalRange();
+
+        // Merge: older first, then current
+        const mergedCandles = [...strictlyOlder, ...currentBars];
+        allCandlesRef.current = mergedCandles;
+
+        // Convert to TV candlestick data
+        const tvData: CandlestickData[] = mergedCandles.map((c) => ({
+          time: c.time as UTCTimestamp,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
+        }));
+
+        try {
+          activeSeries.setData(tvData);
+        } catch (e) {
+          console.warn('[JarvisChart] prepend setData error:', e);
+        }
+
+        // Restore view offset so user feels zero jump
+        if (visibleRange) {
+          const shift = strictlyOlder.length;
+          activeChart.timeScale().setVisibleLogicalRange({
+            from: visibleRange.from + shift,
+            to: visibleRange.to + shift,
+          });
+        }
+
+        refreshVwap(mergedCandles);
       },
       incrementalUpdateCandles: (candlesToUpdate: Candle[]) => {
         const activeSeries = seriesRef.current || series;

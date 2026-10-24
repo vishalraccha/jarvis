@@ -68,7 +68,7 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2.0);
     if (canvas.width !== profileWidth * dpr || canvas.height !== height * dpr) {
       canvas.width = profileWidth * dpr;
       canvas.height = height * dpr;

@@ -27,9 +27,9 @@ export type HeatmapUpdateCallback = (slice: HeatmapTimeSlice) => void;
 export class HeatmapEngine {
   private historicalSlices: HeatmapTimeSlice[] = [];
   private liveSlices: HeatmapTimeSlice[] = [];
-  private maxLiveSlices: number = 3000; // Real-time high-frequency buffer
+  private maxLiveSlices: number = 800; // High-resolution active sliding window (~3.5 minutes)
   private slices: HeatmapTimeSlice[] = [];
-  private maxSlices: number = 5000;
+  private maxSlices: number = 1500;
   private samplingIntervalMs: number = 250;
   private lastSampleTimestamp: number = 0;
 

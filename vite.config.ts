@@ -167,6 +167,14 @@ export default defineConfig({
   plugins: [react(), redisFastCandleCachePlugin()],
   server: {
     proxy: {
+      '/api/candles': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+      },
+      '/api/health': {
+        target: 'http://localhost:3001',
+        changeOrigin: true,
+      },
       '/api/yahoo': {
         target: 'https://query1.finance.yahoo.com',
         changeOrigin: true,

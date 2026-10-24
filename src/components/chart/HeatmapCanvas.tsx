@@ -73,8 +73,8 @@ export const HeatmapCanvas: React.FC<HeatmapCanvasProps> = ({
     const ctx = canvas.getContext('2d', { alpha: true });
     if (!ctx) return;
 
-    // High-DPI support
-    const dpr = window.devicePixelRatio || 1;
+    // High-DPI support with mobile GPU texture memory clamp
+    const dpr = Math.min(window.devicePixelRatio || 1, 2.0);
     if (canvas.width !== width * dpr || canvas.height !== height * dpr) {
       canvas.width = width * dpr;
       canvas.height = height * dpr;
