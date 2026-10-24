@@ -51,6 +51,51 @@ function redisFastCandleCachePlugin(): Plugin {
     name: 'redis-fast-candle-cache',
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
+        if (req.url?.startsWith('/api/health')) {
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ status: 'ok', mode: 'vite-dev-server' }));
+          return;
+        }
+
+        if (req.url?.startsWith('/api/candles')) {
+          const url = new URL(req.url, 'http://localhost');
+          const symbol = (url.searchParams.get('symbol') || 'XAUUSDT').toUpperCase();
+          const interval = url.searchParams.get('timeframe') || url.searchParams.get('interval') || '1m';
+          const isFutures = !url.searchParams.has('spot');
+          const limitParam = url.searchParams.get('limit');
+          const limit = limitParam ? parseInt(limitParam, 10) : 300;
+          const key = `${symbol}_${interval}`;
+
+          let rawText = memoryCache.get(key)?.data;
+          if (!rawText) {
+            rawText = await fetchAndCache(symbol, interval, isFutures);
+          }
+
+          if (rawText) {
+            try {
+              const list = JSON.parse(rawText);
+              if (Array.isArray(list)) {
+                const sliced = limit > 0 ? list.slice(-limit) : list;
+                const formatted = sliced.map((k: any) => ({
+                  time: Math.floor(Number(k[0]) / 1000),
+                  open: parseFloat(k[1]),
+                  high: parseFloat(k[2]),
+                  low: parseFloat(k[3]),
+                  close: parseFloat(k[4]),
+                  volume: parseFloat(k[5]),
+                }));
+                res.setHeader('Content-Type', 'application/json');
+                res.setHeader('X-Cache-Status', 'HIT-RAM-0MS');
+                res.end(JSON.stringify(formatted));
+                return;
+              }
+            } catch {}
+          }
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify([]));
+          return;
+        }
+
         if (req.url?.startsWith('/api/cache/ticker')) {
           const url = new URL(req.url, 'http://localhost');
           const symbol = (url.searchParams.get('symbol') || 'XAUUSDT').toUpperCase();
@@ -167,14 +212,6 @@ export default defineConfig({
   plugins: [react(), redisFastCandleCachePlugin()],
   server: {
     proxy: {
-      '/api/candles': {
-        target: 'http://localhost:3001',
-        changeOrigin: true,
-      },
-      '/api/health': {
-        target: 'http://localhost:3001',
-        changeOrigin: true,
-      },
       '/api/yahoo': {
         target: 'https://query1.finance.yahoo.com',
         changeOrigin: true,
