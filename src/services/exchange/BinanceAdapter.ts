@@ -440,6 +440,20 @@ export class BinanceAdapter implements IExchangeAdapter {
         if (tickCount % 3 === 0) {
           this.fetchFallbackKline().catch(() => {});
         }
+
+        // Live real depth reconciliation from exchange depth snapshot every ~2s (every 6 ticks)
+        if (tickCount % 6 === 0 && this.currentSymbol) {
+          const effSym = this.getEffectiveSymbol(this.currentSymbol).toUpperCase();
+          this.fetchDepthSnapshot(effSym, 100).then((snapshot) => {
+            this.events?.onDepthUpdate({
+              firstUpdateId: snapshot.lastUpdateId,
+              finalUpdateId: snapshot.lastUpdateId,
+              eventTime: snapshot.timestamp,
+              bids: snapshot.bids,
+              asks: snapshot.asks,
+            });
+          }).catch(() => {});
+        }
       }
     }, 350);
   }
