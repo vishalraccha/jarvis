@@ -17,16 +17,18 @@ import { Candle } from '../../types/market';
 
 function formatOrderQty(qty: number): string {
   if (isNaN(qty) || qty <= 0) return '0';
-  if (qty >= 1_000_000) {
-    return (qty / 1_000_000).toFixed(1) + 'M';
+  const intQty = Math.round(qty);
+  if (intQty === 0 && qty > 0) return '1';
+  if (intQty >= 10_000_000) {
+    return `${Math.round(intQty / 1_000_000)}M`;
   }
-  if (qty >= 1000) {
-    return (qty / 1000).toFixed(1) + 'K';
+  if (intQty >= 1_000_000) {
+    return `${Math.round(intQty / 1_000_000)}M`;
   }
-  if (qty >= 1) {
-    return `${Math.round(qty)}`;
+  if (intQty >= 100_000) {
+    return `${Math.round(intQty / 1000)}K`;
   }
-  return qty.toFixed(2);
+  return intQty.toLocaleString('en-US');
 }
 
 interface DepthProfileCanvasProps {
@@ -183,25 +185,25 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
     // 4. Calculate Optimal Discretization Step strictly bounded to visible screen rows (~18px per row, max 45 rows)
     const targetRowCount = Math.max(12, Math.min(45, Math.floor((height - headerH) / 18)));
     const targetStep = visibleSpread / targetRowCount;
-    let rowStep = 0.5;
-    let decimalPlaces = 1;
+    let rowStep = 1.0;
+    let decimalPlaces = 0;
 
     if (currentMid >= 20000) {
       const btcSteps = [5, 10, 25, 50, 100, 250, 500, 1000];
       rowStep = btcSteps.find((s) => s >= targetStep) || Math.ceil(targetStep / 50) * 50;
       decimalPlaces = 0;
     } else if (currentMid >= 1000) {
-      const ethSteps = [0.25, 0.5, 1.0, 2.0, 2.5, 5.0, 10.0, 25.0];
+      const ethSteps = [1.0, 2.0, 5.0, 10.0, 25.0, 50.0];
       rowStep = ethSteps.find((s) => s >= targetStep) || Math.ceil(targetStep);
-      decimalPlaces = rowStep < 1 ? 2 : rowStep < 5 ? 1 : 0;
+      decimalPlaces = 0;
     } else if (currentMid >= 50) {
-      const solSteps = [0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0];
-      rowStep = solSteps.find((s) => s >= targetStep) || Math.ceil(targetStep * 2) / 2;
-      decimalPlaces = rowStep < 0.1 ? 2 : 1;
+      const solSteps = [1.0, 2.0, 5.0, 10.0];
+      rowStep = solSteps.find((s) => s >= targetStep) || Math.ceil(targetStep);
+      decimalPlaces = 0;
     } else {
-      const pennySteps = [0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.25, 0.5];
+      const pennySteps = [0.01, 0.05, 0.1, 0.25, 0.5, 1.0];
       rowStep = pennySteps.find((s) => s >= targetStep) || 0.01;
-      decimalPlaces = rowStep < 0.01 ? 4 : 2;
+      decimalPlaces = rowStep < 0.1 ? 2 : rowStep < 1 ? 1 : 0;
     }
 
     // Absolute hard safety cap: row count must never exceed 50 under any zoom level
@@ -362,8 +364,7 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
       ctx.fillStyle = isHit ? '#ffff00' : isInstitutionalWall ? '#ffd700' : '#94a3b8';
       ctx.font = isInstitutionalWall ? 'bold 10px JetBrains Mono, monospace' : '10px JetBrains Mono, monospace';
       ctx.textAlign = 'left';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(row.price.toFixed(decimalPlaces), 4, yCenter);
+      ctx.fillText(decimalPlaces === 0 ? Math.round(row.price).toString() : row.price.toFixed(decimalPlaces), 4, yCenter);
 
       if (row.levelQty > 0) {
         // Horizontal Level Bar (Filled from right of Column 1 towards center)
@@ -489,8 +490,13 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
   }, [render, orderBook]);
 
   useEffect(() => {
+    let lastBookTime = 0;
     const unsub = orderBook.subscribe(() => {
-      isDirtyRef.current = true;
+      const now = performance.now();
+      if (now - lastBookTime >= 80) {
+        lastBookTime = now;
+        isDirtyRef.current = true;
+      }
     });
     return unsub;
   }, [orderBook]);

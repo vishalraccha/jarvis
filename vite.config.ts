@@ -66,7 +66,7 @@ function redisFastCandleCachePlugin(): Plugin {
           const limit = limitParam ? parseInt(limitParam, 10) : 300;
           const key = `${symbol}_${interval}`;
 
-          let rawText = memoryCache.get(key)?.data;
+          let rawText: string | null | undefined = memoryCache.get(key)?.data;
           if (!rawText) {
             rawText = await fetchAndCache(symbol, interval, isFutures);
           }

@@ -171,7 +171,7 @@ export const OrderBookDiagnosticsModal: React.FC<OrderBookDiagnosticsModalProps>
                 {asks.slice(0, 8).map((a, i) => (
                   <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, fontFamily: 'JetBrains Mono', color: '#ff8fa3', lineHeight: '18px' }}>
                     <span>{formatPrice(a.price)}</span>
-                    <span>{formatQuantity(a.quantity, 4)}</span>
+                    <span>{formatQuantity(a.quantity, 0)}</span>
                   </div>
                 ))}
               </div>
@@ -185,7 +185,7 @@ export const OrderBookDiagnosticsModal: React.FC<OrderBookDiagnosticsModalProps>
                 {bids.slice(0, 8).map((b, i) => (
                   <div key={i} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, fontFamily: 'JetBrains Mono', color: '#69f0ae', lineHeight: '18px' }}>
                     <span>{formatPrice(b.price)}</span>
-                    <span>{formatQuantity(b.quantity, 4)}</span>
+                    <span>{formatQuantity(b.quantity, 0)}</span>
                   </div>
                 ))}
               </div>

@@ -12,7 +12,20 @@ export function formatPrice(price: number, decimals: number = 2): string {
 }
 
 export function formatQuantity(qty: number, decimals: number = 2): string {
-  if (isNaN(qty) || qty === 0) return '0.00';
+  if (isNaN(qty) || qty === 0) return decimals === 0 ? '0' : '0.00';
+  if (decimals === 0) {
+    const intVal = Math.round(qty);
+    if (intVal >= 10_000_000) {
+      return `${Math.round(intVal / 1_000_000)}M`;
+    }
+    if (intVal >= 1_000_000) {
+      return `${Math.round(intVal / 1_000_000)}M`;
+    }
+    if (intVal >= 100_000) {
+      return `${Math.round(intVal / 1000)}K`;
+    }
+    return intVal.toLocaleString('en-US');
+  }
   if (qty >= 1_000_000) {
     return (qty / 1_000_000).toFixed(2) + 'M';
   }

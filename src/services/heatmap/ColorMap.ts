@@ -22,6 +22,8 @@ export class ColorMapEngine {
   private currentColorSaturation: number = 1.0;
   private currentBrightness: number = 1.0;
   private currentOpacity: number = 0.95;
+  private colorCache: (RGBA & { hex: string })[] = [];
+  private transparentColor: RGBA & { hex: string } = { r: 9, g: 13, b: 22, a: 0, hex: 'transparent' };
 
   constructor() {
     this.rebuildLut();
@@ -43,6 +45,7 @@ export class ColorMapEngine {
     this.currentOpacity = opacity;
 
     const size = ColorMapEngine.LUT_SIZE;
+    this.colorCache = new Array(size);
 
     for (let i = 0; i < size; i++) {
       const t = i / (size - 1); // 0.0 to 1.0
@@ -61,7 +64,17 @@ export class ColorMapEngine {
       this.lut[offset] = adjusted.r;
       this.lut[offset + 1] = adjusted.g;
       this.lut[offset + 2] = adjusted.b;
-      this.lut[offset + 3] = Math.round(opacity * 255);
+      const alphaInt = Math.round(opacity * 255);
+      this.lut[offset + 3] = alphaInt;
+
+      const alphaStr = (opacity).toFixed(2);
+      this.colorCache[i] = {
+        r: adjusted.r,
+        g: adjusted.g,
+        b: adjusted.b,
+        a: alphaInt,
+        hex: `rgba(${adjusted.r}, ${adjusted.g}, ${adjusted.b}, ${alphaStr})`,
+      };
     }
   }
 
@@ -179,7 +192,7 @@ export class ColorMapEngine {
   ): RGBA & { hex: string } {
     // 1. Empty check
     if (!quantity || quantity <= 0 || !isFinite(quantity)) {
-      return { r: 9, g: 13, b: 22, a: 0, hex: 'transparent' };
+      return this.transparentColor;
     }
 
     // 2. Liquidity Filter: Hide cells below threshold without changing colors of surviving cells
@@ -192,11 +205,11 @@ export class ColorMapEngine {
           : 0;
 
     if (activeThreshold > 0 && quantity < activeThreshold) {
-      return { r: 9, g: 13, b: 22, a: 0, hex: 'transparent' };
+      return this.transparentColor;
     }
 
     if (settings.lowerCutoffAbsolute > 0 && quantity < settings.lowerCutoffAbsolute) {
-      return { r: 9, g: 13, b: 22, a: 0, hex: 'transparent' };
+      return this.transparentColor;
     }
 
     let effectiveVal = quantity;
@@ -228,20 +241,8 @@ export class ColorMapEngine {
       0,
       Math.min(ColorMapEngine.LUT_SIZE - 1, Math.floor(norm * (ColorMapEngine.LUT_SIZE - 1)))
     );
-    const offset = index * 4;
 
-    const r = this.lut[offset];
-    const g = this.lut[offset + 1];
-    const b = this.lut[offset + 2];
-    const a = this.lut[offset + 3];
-
-    return {
-      r,
-      g,
-      b,
-      a,
-      hex: `rgba(${r}, ${g}, ${b}, ${(a / 255).toFixed(2)})`,
-    };
+    return this.colorCache[index] || this.transparentColor;
   }
 
   /**
