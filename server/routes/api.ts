@@ -105,3 +105,40 @@ apiRouter.get('/health', (_req: Request, res: Response) => {
     timestamp: Date.now(),
   });
 });
+
+/**
+ * Binance Spot & Vision Proxy for Production
+ * GET /api/binance/*
+ */
+apiRouter.use('/binance', async (req: Request, res: Response) => {
+  try {
+    const targetUrl = `https://data-api.binance.vision${req.url}`;
+    const upstream = await fetch(targetUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(4000),
+    });
+    const data = await upstream.text();
+    res.status(upstream.status).type('application/json').send(data);
+  } catch (err: any) {
+    res.status(502).json({ error: 'Upstream gateway error', message: err.message });
+  }
+});
+
+/**
+ * Binance Futures Proxy for Production
+ * GET /api/fapi/*
+ */
+apiRouter.use('/fapi', async (req: Request, res: Response) => {
+  try {
+    const targetUrl = `https://fapi.binance.me${req.url}`;
+    const upstream = await fetch(targetUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      signal: AbortSignal.timeout(4000),
+    });
+    const data = await upstream.text();
+    res.status(upstream.status).type('application/json').send(data);
+  } catch (err: any) {
+    res.status(502).json({ error: 'Upstream gateway error', message: err.message });
+  }
+});
+

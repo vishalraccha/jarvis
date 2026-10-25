@@ -864,32 +864,84 @@ export class BinanceAdapter implements IExchangeAdapter {
       } catch {}
     }
 
-    const proxyBase = isFut ? '/api/fapi/fapi/v1/klines' : '/api/binance/api/v3/klines';
-    const directBase = isFut ? 'https://fapi.binance.me/fapi/v1/klines' : 'https://data-api.binance.vision/api/v3/klines';
-    const params = new URLSearchParams({
-      symbol: sym,
-      interval,
-      limit: String(Math.min(limit, 1000)),
-    });
-    if (startTime) params.append('startTime', String(startTime));
-    if (endTime) params.append('endTime', String(endTime));
-
-    const qs = params.toString();
-    const res = await this.fastFetch(`${proxyBase}?${qs}`, `${directBase}?${qs}`, 5000);
-    if (!res.ok) {
-      throw new Error(`Failed to fetch klines for ${symbol}: HTTP ${res.status}`);
+    // 2. Direct browser fallback: Coinbase USD Spot (CORS enabled for all origins, authentic MT5 USD spot)
+    const baseCrypto = (this.requestedSymbol || sym).toUpperCase().replace(/[-_/]/g, '').replace(/USDT$/, '').replace(/USD$/, '');
+    if ((baseCrypto === 'BTC' || baseCrypto === 'ETH' || baseCrypto === 'SOL') && !startTime && !endTime) {
+      try {
+        const gran = interval === '1d' ? 86400 : interval === '1h' ? 3600 : interval === '15m' ? 900 : interval === '5m' ? 300 : 60;
+        const cbRes = await fetch(`https://api.exchange.coinbase.com/products/${baseCrypto}-USD/candles?granularity=${gran}`, {
+          signal: AbortSignal.timeout(4000),
+        });
+        if (cbRes.ok) {
+          const cbList: any = await cbRes.json();
+          if (Array.isArray(cbList) && cbList.length > 0) {
+            const sorted = [...cbList].sort((a: any, b: any) => a[0] - b[0]);
+            return sorted.map((k: any) => ({
+              time: k[0],
+              low: parseFloat(k[1]),
+              high: parseFloat(k[2]),
+              open: parseFloat(k[3]),
+              close: parseFloat(k[4]),
+              volume: parseFloat(k[5] || 0),
+            }));
+          }
+        }
+      } catch {}
     }
 
-    const data: any[][] = await res.json();
-    return (data || []).map((item) => ({
-      time: Math.floor(Number(item[0]) / 1000), // TradingView Lightweight Charts uses seconds
-      open: this.adjustPrice(parseFloat(item[1]), this.requestedSymbol),
-      high: this.adjustPrice(parseFloat(item[2]), this.requestedSymbol),
-      low: this.adjustPrice(parseFloat(item[3]), this.requestedSymbol),
-      close: this.adjustPrice(parseFloat(item[4]), this.requestedSymbol),
-      volume: parseFloat(item[5]),
-      tradeCount: Number(item[8]) || undefined,
-      buyVolume: parseFloat(item[9]) || undefined,
-    }));
+    // 3. Direct browser fallback: Bybit Spot
+    if (baseCrypto === 'BNB' && !startTime && !endTime) {
+      try {
+        const byInterval = interval === '1d' ? 'D' : interval === '1h' ? '60' : interval === '15m' ? '15' : interval === '5m' ? '5' : '1';
+        const bbRes = await fetch(`https://api.bybit.com/v5/market/kline?category=spot&symbol=BNBUSDT&interval=${byInterval}&limit=${Math.min(limit, 300)}`, {
+          signal: AbortSignal.timeout(4000),
+        });
+        if (bbRes.ok) {
+          const json: any = await bbRes.json();
+          const bbList = json?.result?.list;
+          if (Array.isArray(bbList) && bbList.length > 0) {
+            const sorted = [...bbList].sort((a: any, b: any) => Number(a[0]) - Number(b[0]));
+            return sorted.map((k: any) => ({
+              time: Math.floor(Number(k[0]) / 1000),
+              open: parseFloat(k[1]),
+              high: parseFloat(k[2]),
+              low: parseFloat(k[3]),
+              close: parseFloat(k[4]),
+              volume: parseFloat(k[5] || 0),
+            }));
+          }
+        }
+      } catch {}
+    }
+
+    try {
+      const proxyBase = isFut ? '/api/fapi/fapi/v1/klines' : '/api/binance/api/v3/klines';
+      const directBase = isFut ? 'https://fapi.binance.me/fapi/v1/klines' : 'https://data-api.binance.vision/api/v3/klines';
+      const params = new URLSearchParams({
+        symbol: sym,
+        interval,
+        limit: String(Math.min(limit, 1000)),
+      });
+      if (startTime) params.append('startTime', String(startTime));
+      if (endTime) params.append('endTime', String(endTime));
+
+      const qs = params.toString();
+      const res = await this.fastFetch(`${proxyBase}?${qs}`, `${directBase}?${qs}`, 5000);
+      if (res.ok) {
+        const data: any[][] = await res.json();
+        return (data || []).map((item) => ({
+          time: Math.floor(Number(item[0]) / 1000), // TradingView Lightweight Charts uses seconds
+          open: this.adjustPrice(parseFloat(item[1]), this.requestedSymbol),
+          high: this.adjustPrice(parseFloat(item[2]), this.requestedSymbol),
+          low: this.adjustPrice(parseFloat(item[3]), this.requestedSymbol),
+          close: this.adjustPrice(parseFloat(item[4]), this.requestedSymbol),
+          volume: parseFloat(item[5]),
+          tradeCount: Number(item[8]) || undefined,
+          buyVolume: parseFloat(item[9]) || undefined,
+        }));
+      }
+    } catch {}
+
+    return [];
   }
 }
