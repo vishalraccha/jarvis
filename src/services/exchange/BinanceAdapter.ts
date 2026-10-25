@@ -132,9 +132,6 @@ export class BinanceAdapter implements IExchangeAdapter {
   adjustPrice(price: number, symbol?: string): number {
     const s = (symbol || this.requestedSymbol || this.currentSymbol || '').toUpperCase().replace(/[-_/]/g, '');
     const cleanSym = s.replace('SPOT', '');
-    if (cleanSym.startsWith('BTC') || cleanSym.startsWith('ETH') || cleanSym.startsWith('SOL') || cleanSym.startsWith('BNB')) {
-      return price;
-    }
     const offset = this.basisOffsets[cleanSym] ?? (this.isGoldSpot(cleanSym) ? this.spotBasisOffset : 0);
     if (offset !== 0 && Number.isFinite(offset)) {
       const isFx = cleanSym.includes('EUR') || cleanSym.includes('GBP');
@@ -278,7 +275,7 @@ export class BinanceAdapter implements IExchangeAdapter {
     this.calibrateBasis(symbol).catch(() => {});
     this.calibrateIntervalId = (setInterval as any)(() => {
       this.calibrateBasis(this.requestedSymbol || this.currentSymbol).catch(() => {});
-    }, 60000);
+    }, 10000);
 
     this.syncServerTime().catch(() => {});
     this.initWebSocket();
@@ -295,10 +292,9 @@ export class BinanceAdapter implements IExchangeAdapter {
     // Binance Futures requires @aggTrade (does not support individual @trade). Spot supports both.
     const tradeStream = `${effSym}@aggTrade`;
     const streamName = `${effSym}@depth@100ms/${tradeStream}/${effSym}@kline_${this.currentTimeframe}`;
-    // Use fstream.binance.me for USD-M Perpetual futures and stream.binance.me:9443 for spot (bypass ISP blocks, sub-second latency)
     const wsUrl = isFut
       ? `wss://fstream.binance.me/stream?streams=${streamName}`
-      : `wss://stream.binance.me:9443/stream?streams=${streamName}`;
+      : `wss://data-stream.binance.vision/stream?streams=${streamName}`;
 
     try {
       this.ws = new WebSocket(wsUrl);
@@ -861,6 +857,56 @@ export class BinanceAdapter implements IExchangeAdapter {
               low: parseFloat(item.low ?? item[3]),
               close: parseFloat(item.close ?? item[4]),
               volume: parseFloat(item.volume ?? item[5] ?? 0),
+            }));
+          }
+        }
+      } catch {}
+    }
+
+    // 2. Direct browser fallback: Coinbase USD Spot (CORS enabled for all origins, authentic MT5 USD spot)
+    const baseCrypto = (this.requestedSymbol || sym).toUpperCase().replace(/[-_/]/g, '').replace(/USDT$/, '').replace(/USD$/, '');
+    if ((baseCrypto === 'BTC' || baseCrypto === 'ETH' || baseCrypto === 'SOL') && !startTime && !endTime) {
+      try {
+        const gran = interval === '1d' ? 86400 : interval === '1h' ? 3600 : interval === '15m' ? 900 : interval === '5m' ? 300 : 60;
+        const cbRes = await fetch(`https://api.exchange.coinbase.com/products/${baseCrypto}-USD/candles?granularity=${gran}`, {
+          signal: AbortSignal.timeout(4000),
+        });
+        if (cbRes.ok) {
+          const cbList: any = await cbRes.json();
+          if (Array.isArray(cbList) && cbList.length > 0) {
+            const sorted = [...cbList].sort((a: any, b: any) => a[0] - b[0]);
+            return sorted.map((k: any) => ({
+              time: k[0],
+              open: parseFloat(k[3]),
+              high: parseFloat(k[2]),
+              low: parseFloat(k[1]),
+              close: parseFloat(k[4]),
+              volume: parseFloat(k[5] || 0),
+            }));
+          }
+        }
+      } catch {}
+    }
+
+    // 3. Direct browser fallback: Bybit Spot
+    if (baseCrypto === 'BNB' && !startTime && !endTime) {
+      try {
+        const byInterval = interval === '1d' ? 'D' : interval === '1h' ? '60' : interval === '15m' ? '15' : interval === '5m' ? '5' : '1';
+        const bbRes = await fetch(`https://api.bybit.com/v5/market/kline?category=spot&symbol=BNBUSDT&interval=${byInterval}&limit=300`, {
+          signal: AbortSignal.timeout(4000),
+        });
+        if (bbRes.ok) {
+          const json: any = await bbRes.json();
+          const bbList = json?.result?.list;
+          if (Array.isArray(bbList) && bbList.length > 0) {
+            const sorted = [...bbList].sort((a: any, b: any) => Number(a[0]) - Number(b[0]));
+            return sorted.map((k: any) => ({
+              time: Math.floor(Number(k[0]) / 1000),
+              open: parseFloat(k[1]),
+              high: parseFloat(k[2]),
+              low: parseFloat(k[3]),
+              close: parseFloat(k[4]),
+              volume: parseFloat(k[5]),
             }));
           }
         }

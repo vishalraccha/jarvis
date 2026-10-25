@@ -37,32 +37,75 @@ function redisFastCandleCachePlugin(): Plugin {
     if (s === 'EURUSD' || s === 'EUR' || s === 'EURUSDT') return 'EURUSD=X';
     if (s === 'GBPUSD' || s === 'GBP' || s === 'GBPUSDT') return 'GBPUSD=X';
     if (s === 'GC' || s === 'CME' || s === 'COMEX') return 'GC=F';
-    if (s.startsWith('XAU') || s.startsWith('GOLD') || s === 'VANTAGE' || s === 'OANDA') return 'GC=F';
+    if (s.startsWith('XAU') || s.startsWith('GOLD') || s === 'VANTAGE' || s === 'OANDA') return 'PAXG-USD';
     return `${s}-USD`;
   }
 
   async function fetchAndCache(symbol: string, interval: string, isFutures: boolean): Promise<string | null> {
-    const { cleanSym, targetSym, isComex, isGoldSpot, isFx, isCrypto } = parseInstrumentTarget(symbol);
+    const { cleanSym, targetSym, isComex, isGoldSpot, isFx } = parseInstrumentTarget(symbol);
     const key = `${cleanSym}_${interval}_${isFutures ? 'fut' : 'spot'}`;
     const yahooSym = getYahooSymbol(cleanSym);
+    const baseCrypto = cleanSym.replace(/USDT$/, '').replace(/USD$/, '');
 
-    // 1. Authoritative source for Crypto: Binance Spot (matches TradingView 1:1)
-    if (isCrypto) {
+    // 1. Authoritative source for BTC, ETH, SOL: Coinbase USD Spot (matches MT5 & TradingView 1:1)
+    if (baseCrypto === 'BTC' || baseCrypto === 'ETH' || baseCrypto === 'SOL') {
       try {
-        const baseUrl = 'https://data-api.binance.vision/api/v3/klines';
-        const res = await fetch(`${baseUrl}?symbol=${targetSym}&interval=${interval}&limit=1000`, {
+        const gran = interval === '1d' ? 86400 : interval === '1h' ? 3600 : interval === '15m' ? 900 : interval === '5m' ? 300 : 60;
+        const res = await fetch(`https://api.exchange.coinbase.com/products/${baseCrypto}-USD/candles?granularity=${gran}`, {
           headers: { 'User-Agent': 'Mozilla/5.0' },
-          signal: AbortSignal.timeout(6000),
+          signal: AbortSignal.timeout(5000),
         });
         if (res.ok) {
-          const text = await res.text();
-          memoryCache.set(key, { timestamp: Date.now(), data: text });
-          return text;
+          const cbList: any = await res.json();
+          if (Array.isArray(cbList) && cbList.length > 0) {
+            // Coinbase candle format: [time_sec, low, high, open, close, volume]
+            const sorted = [...cbList].sort((a: any, b: any) => a[0] - b[0]);
+            const list = sorted.map((k: any) => [
+              k[0] * 1000,
+              String(k[3]), // open
+              String(k[2]), // high
+              String(k[1]), // low
+              String(k[4]), // close
+              String(k[5] || 0), // volume
+            ]);
+            const text = JSON.stringify(list);
+            memoryCache.set(key, { timestamp: Date.now(), data: text });
+            return text;
+          }
         }
       } catch {}
     }
 
-    // 2. Authoritative source for Gold & Forex: Yahoo Finance query1 (matches CME & Spot FX 1:1)
+    // 2. Authoritative source for BNB: Bybit Spot (matches TradingView 1:1)
+    if (baseCrypto === 'BNB') {
+      try {
+        const byInterval = interval === '1d' ? 'D' : interval === '1h' ? '60' : interval === '15m' ? '15' : interval === '5m' ? '5' : '1';
+        const res = await fetch(`https://api.bybit.com/v5/market/kline?category=spot&symbol=BNBUSDT&interval=${byInterval}&limit=300`, {
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+          signal: AbortSignal.timeout(4000),
+        });
+        if (res.ok) {
+          const json: any = await res.json();
+          const bbList = json?.result?.list;
+          if (Array.isArray(bbList) && bbList.length > 0) {
+            const sorted = [...bbList].sort((a: any, b: any) => Number(a[0]) - Number(b[0]));
+            const list = sorted.map((k: any) => [
+              Number(k[0]),
+              k[1],
+              k[2],
+              k[3],
+              k[4],
+              k[5],
+            ]);
+            const text = JSON.stringify(list);
+            memoryCache.set(key, { timestamp: Date.now(), data: text });
+            return text;
+          }
+        }
+      } catch {}
+    }
+
+    // 3. Authoritative source for Gold & Forex: Yahoo Finance query1 (matches CME & Spot FX 1:1)
     if (isComex || isGoldSpot || isFx) {
       try {
         const yInterval = interval === '1d' ? '1d' : interval === '1h' ? '60m' : interval === '15m' ? '15m' : interval === '5m' ? '5m' : '1m';
@@ -97,41 +140,40 @@ function redisFastCandleCachePlugin(): Plugin {
       } catch {}
     }
 
-    // 3. Fallback for Gold Spot: Binance Vision PAXG
-    if (isGoldSpot) {
-      try {
-        const baseUrl = 'https://data-api.binance.vision/api/v3/klines';
-        const res = await fetch(`${baseUrl}?symbol=PAXGUSDT&interval=${interval}&limit=1000`, {
-          headers: { 'User-Agent': 'Mozilla/5.0' },
-          signal: AbortSignal.timeout(5000),
-        });
-        if (res.ok) {
-          const text = await res.text();
-          memoryCache.set(key, { timestamp: Date.now(), data: text });
-          return text;
-        }
-      } catch {}
-    }
+    // 4. Secondary fallback source: Binance Vision
+    try {
+      const baseUrl = 'https://data-api.binance.vision/api/v3/klines';
+      const res = await fetch(`${baseUrl}?symbol=${targetSym}&interval=${interval}&limit=1000`, {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+        signal: AbortSignal.timeout(5000),
+      });
+      if (res.ok) {
+        const text = await res.text();
+        memoryCache.set(key, { timestamp: Date.now(), data: text });
+        return text;
+      }
+    } catch {}
+
     return null;
   }
 
   async function fetchAndCacheTicker(rawSym: string): Promise<void> {
     const target = parseInstrumentTarget(rawSym);
     const tickerKey = `ticker_${target.cleanSym}_${target.isFutures ? 'fut' : 'spot'}`;
+    const baseCrypto = target.cleanSym.replace(/USDT$/, '').replace(/USD$/, '');
 
-    // 1. Crypto: Binance Spot Ticker (matches TradingView 1:1)
-    if (target.isCrypto) {
+    // 1. For BTC, ETH, SOL: Coinbase authentic MT5 / TradingView USD Spot price
+    if (baseCrypto === 'BTC' || baseCrypto === 'ETH' || baseCrypto === 'SOL') {
       try {
-        const baseUrl = 'https://data-api.binance.vision/api/v3/ticker/price';
-        const res = await fetch(`${baseUrl}?symbol=${target.targetSym}`, {
+        const res = await fetch(`https://api.coinbase.com/v2/prices/${baseCrypto}-USD/spot`, {
           headers: { 'User-Agent': 'Mozilla/5.0' },
-          signal: AbortSignal.timeout(2000),
+          signal: AbortSignal.timeout(3000),
         });
         if (res.ok) {
-          const parsed: any = await res.json();
-          const rawPrice = parseFloat(parsed.price);
-          if (Number.isFinite(rawPrice) && rawPrice > 0) {
-            const payload = JSON.stringify({ symbol: target.cleanSym, price: rawPrice, timestamp: Date.now() });
+          const json: any = await res.json();
+          const amt = parseFloat(json?.data?.amount);
+          if (Number.isFinite(amt) && amt > 0) {
+            const payload = JSON.stringify({ symbol: target.cleanSym, price: Math.round(amt * 100) / 100, timestamp: Date.now() });
             memoryCache.set(tickerKey, { timestamp: Date.now(), data: payload });
             return;
           }
@@ -139,12 +181,31 @@ function redisFastCandleCachePlugin(): Plugin {
       } catch {}
     }
 
-    // 2. Gold and Forex: Yahoo Finance
+    // 2. For BNB: Bybit Spot
+    if (baseCrypto === 'BNB') {
+      try {
+        const res = await fetch('https://api.bybit.com/v5/market/tickers?category=spot&symbol=BNBUSDT', {
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+          signal: AbortSignal.timeout(3000),
+        });
+        if (res.ok) {
+          const json: any = await res.json();
+          const p = parseFloat(json?.result?.list?.[0]?.lastPrice);
+          if (Number.isFinite(p) && p > 0) {
+            const payload = JSON.stringify({ symbol: target.cleanSym, price: Math.round(p * 100) / 100, timestamp: Date.now() });
+            memoryCache.set(tickerKey, { timestamp: Date.now(), data: payload });
+            return;
+          }
+        }
+      } catch {}
+    }
+
+    // 3. For Gold and Forex: Yahoo Finance query1 MT5/TradingView spot
     const yahooSym = getYahooSymbol(target.cleanSym);
     try {
       const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${yahooSym}?interval=1m&range=1d`, {
         headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-        signal: AbortSignal.timeout(2000),
+        signal: AbortSignal.timeout(4000),
       });
       if (res.ok) {
         const json: any = await res.json();
@@ -159,12 +220,12 @@ function redisFastCandleCachePlugin(): Plugin {
       }
     } catch {}
 
-    // 3. Fallback: Binance Spot Ticker
+    // 4. Secondary Fallback: Binance Spot Ticker
     try {
       const baseUrl = 'https://data-api.binance.vision/api/v3/ticker/price';
       const fetchRes = await fetch(`${baseUrl}?symbol=${target.targetSym}`, {
         headers: { 'User-Agent': 'Mozilla/5.0' },
-        signal: AbortSignal.timeout(1500),
+        signal: AbortSignal.timeout(3000),
       });
       if (fetchRes.ok) {
         const parsed: any = await fetchRes.json();
