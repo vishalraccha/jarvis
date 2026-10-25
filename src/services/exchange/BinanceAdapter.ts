@@ -55,16 +55,13 @@ export class BinanceAdapter implements IExchangeAdapter {
 
   constructor() {
     try {
+      localStorage.removeItem('jarvis_basis_offsets');
       const savedGold = localStorage.getItem('jarvis_spot_basis_offset');
       if (savedGold) {
         const p = parseFloat(savedGold);
         if (Number.isFinite(p) && p >= -20 && p <= 40) {
           this.spotBasisOffset = p;
         }
-      }
-      const savedOffsets = localStorage.getItem('jarvis_basis_offsets');
-      if (savedOffsets) {
-        this.basisOffsets = JSON.parse(savedOffsets);
       }
     } catch {}
   }
@@ -140,16 +137,22 @@ export class BinanceAdapter implements IExchangeAdapter {
   }
 
   /**
-   * Adjusts raw Binance price to true MT5 / TradingView benchmark price across all pairs
+   * Adjusts raw exchange price to true MT5 / TradingView benchmark price.
+   * STRICT INTEGRITY RULE: Crypto Spot (BTC, ETH, SOL, BNB, etc.) is NEVER offset!
+   * Raw exchange prices directly represent authentic order-book matching engine execution.
    */
   adjustPrice(price: number, symbol?: string): number {
     const s = (symbol || this.requestedSymbol || this.currentSymbol || '').toUpperCase().replace(/[-_/]/g, '');
     const cleanSym = s.replace('SPOT', '');
-    const offset = this.basisOffsets[cleanSym] ?? (this.isGoldSpot(cleanSym) ? this.spotBasisOffset : 0);
-    if (offset !== 0 && Number.isFinite(offset)) {
-      const isFx = cleanSym.includes('EUR') || cleanSym.includes('GBP');
-      const mult = isFx ? 10000 : 100;
-      return Math.round((price - offset) * mult) / mult;
+
+    // 1. Strict guard: NEVER adjust or offset crypto spot or forex
+    if (!this.isGoldSpot(cleanSym)) {
+      return price;
+    }
+
+    // 2. Only OTC Spot Gold (XAUUSD) has an OTC basis offset vs Binance futures/PaxG
+    if (this.spotBasisOffset !== 0 && Number.isFinite(this.spotBasisOffset)) {
+      return Math.round((price - this.spotBasisOffset) * 100) / 100;
     }
     return price;
   }
@@ -159,30 +162,11 @@ export class BinanceAdapter implements IExchangeAdapter {
    */
   async calibrateBasis(symbol?: string): Promise<number> {
     const sym = (symbol || this.requestedSymbol || this.currentSymbol || '').toUpperCase().replace(/[-_/]/g, '').replace('SPOT', '');
-    if (!sym) return 0;
-
-    try {
-      const tvRes = await fetch(`/api/cache/ticker?symbol=${sym}`, { signal: AbortSignal.timeout(2000) });
-      if (tvRes.ok) {
-        const tvData = await tvRes.json();
-        const tvPrice = tvData?.price;
-        if (typeof tvPrice === 'number' && tvPrice > 0) {
-          const rawPrice = this.lastRawBinancePrice > 0 ? this.lastRawBinancePrice : tvPrice;
-          const diff = Math.round((rawPrice - tvPrice) * 100) / 100;
-          this.basisOffsets[sym] = diff;
-          if (this.isGoldSpot(sym)) this.spotBasisOffset = diff;
-          try {
-            localStorage.setItem('jarvis_basis_offsets', JSON.stringify(this.basisOffsets));
-          } catch {}
-          return diff;
-        }
-      }
-    } catch {}
-
-    if (this.isGoldSpot(sym)) {
-      return this.calibrateSpotBasis();
+    if (!sym || !this.isGoldSpot(sym)) {
+      // NEVER calibrate or distort crypto spot or forex prices
+      return 0;
     }
-    return this.basisOffsets[sym] || 0;
+    return this.calibrateSpotBasis();
   }
 
   /**
@@ -574,6 +558,10 @@ export class BinanceAdapter implements IExchangeAdapter {
       const topic: string = payload.topic || '';
       if (topic) {
         const effSym = this.getEffectiveSymbol(this.currentSymbol).toUpperCase();
+        // Strict guard: ensure topic belongs to the currently active instrument
+        if (!topic.toUpperCase().includes(effSym)) {
+          return;
+        }
         const isFut = this.isFutures(this.currentSymbol);
         const data = payload.data;
         if (!data) return;

@@ -221,7 +221,7 @@ const BottomVolumeDeltaPanelComponent: React.FC<BottomVolumeDeltaPanelProps> = (
       const latestCvd = cvdPoints[cvdPoints.length - 1].cvd;
       ctx.fillStyle = '#38bdf8';
       ctx.textAlign = 'right';
-      ctx.fillText(`CVD: ${latestCvd >= 0 ? '+' : ''}${latestCvd.toFixed(1)}`, width - 12, halfH + 12);
+      ctx.fillText(`CVD: ${latestCvd >= 0 ? '+' : ''}${Math.round(latestCvd)}`, width - 12, halfH + 12);
     }
 
     ctx.restore();

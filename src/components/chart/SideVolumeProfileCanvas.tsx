@@ -141,7 +141,7 @@ const SideVolumeProfileCanvasComponent: React.FC<SideVolumeProfileCanvasProps> =
       ctx.fillRect(0, rowTop, barLen, rowHeight - 1);
 
       // Text label aligned on the left matching Image 2
-      const numStr = Math.round(lvl.totalVolume).toString();
+      const numStr = Math.max(1, Math.round(lvl.totalVolume)).toString();
       ctx.fillStyle = '#f8fafc';
       ctx.font = `600 9.5px 'JetBrains Mono', monospace`;
       ctx.textAlign = 'left';

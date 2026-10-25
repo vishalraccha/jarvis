@@ -28,24 +28,23 @@ interface FootprintCanvasProps {
 
 function formatVolumeNumber(vol: number): string {
   if (vol <= 0) return '0';
-  if (vol >= 1000000) return `${(vol / 1000000).toFixed(1)}M`;
+  if (vol >= 1000000) return `${Math.round(vol / 1000000)}M`;
   if (vol >= 10000) return `${Math.round(vol / 1000)}K`;
   if (vol >= 1000) return `${(vol / 1000).toFixed(1)}K`;
-  if (vol >= 10) return Math.round(vol).toString();
-  if (vol >= 1) return vol % 1 === 0 ? vol.toFixed(0) : vol.toFixed(1);
-  return vol.toFixed(2);
+  const rounded = Math.round(vol);
+  return (rounded === 0 && vol > 0 ? 1 : rounded).toString();
 }
 
 function formatDeltaNumber(delta: number): string {
   const sign = delta > 0 ? '+' : delta < 0 ? '-' : '';
   const abs = Math.abs(delta);
   if (abs === 0) return '0';
-  if (abs >= 1000000) return `${sign}${(abs / 1000000).toFixed(1)}M`;
+  if (abs >= 1000000) return `${sign}${Math.round(abs / 1000000)}M`;
   if (abs >= 10000) return `${sign}${Math.round(abs / 1000)}K`;
   if (abs >= 1000) return `${sign}${(abs / 1000).toFixed(1)}K`;
-  if (abs >= 10) return `${sign}${Math.round(abs)}`;
-  if (abs >= 1) return `${sign}${abs % 1 === 0 ? abs.toFixed(0) : abs.toFixed(1)}`;
-  return `${sign}${abs.toFixed(2)}`;
+  const rounded = Math.round(abs);
+  const val = rounded === 0 && abs > 0 ? 1 : rounded;
+  return `${sign}${val}`;
 }
 
 const FootprintCanvasComponent: React.FC<FootprintCanvasProps> = ({

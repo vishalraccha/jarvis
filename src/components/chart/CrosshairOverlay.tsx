@@ -138,21 +138,21 @@ export const CrosshairOverlay: React.FC<CrosshairOverlayProps> = ({
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 3 }}>
           <span style={{ color: '#94a3b8' }}>Bid × Ask Volume:</span>
           <span>
-            <strong style={{ color: '#ef4444' }}>{dbg.bidVolume.toFixed(2)}</strong>
+            <strong style={{ color: '#ef4444' }}>{Math.round(dbg.bidVolume)}</strong>
             <span style={{ color: '#64748b', margin: '0 4px' }}>×</span>
-            <strong style={{ color: '#10b981' }}>{dbg.askVolume.toFixed(2)}</strong>
+            <strong style={{ color: '#10b981' }}>{Math.round(dbg.askVolume)}</strong>
           </span>
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 3 }}>
           <span style={{ color: '#94a3b8' }}>Total Executed Vol:</span>
-          <span style={{ color: '#f1f5f9', fontWeight: 600 }}>{dbg.totalVolume.toFixed(2)}</span>
+          <span style={{ color: '#f1f5f9', fontWeight: 600 }}>{Math.round(dbg.totalVolume)}</span>
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, marginBottom: 4 }}>
           <span style={{ color: '#94a3b8' }}>Level Delta:</span>
           <span style={{ color: deltaColor, fontWeight: 700 }}>
-            {deltaSign}{dbg.delta.toFixed(2)}
+            {deltaSign}{Math.round(Math.abs(dbg.delta))}
           </span>
         </div>
 

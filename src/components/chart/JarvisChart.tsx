@@ -1132,10 +1132,10 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
           currentCandleRef.current = cur;
         }
 
-        // Discard extreme cross-symbol outlier ticks
+        // Discard extreme cross-symbol outlier ticks (> 4% deviation from candle close)
         if (cur && cur.close > 0) {
           const ratio = price / cur.close;
-          if (ratio > 1.35 || ratio < 0.65) {
+          if (ratio > 1.04 || ratio < 0.96) {
             return;
           }
         }

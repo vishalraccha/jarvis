@@ -374,10 +374,19 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
             Number.isFinite(c.close) && c.close > 0 &&
             c.low <= c.high &&
             !MarketSessionService.isCandleInClosedSession(targetInst.marketSchedule, c.time)
-          ).map((c) => ({
-            ...c,
-            time: (Math.floor(c.time / tfSec) * tfSec) as any,
-          }));
+          ).map((c) => {
+            const alignedTime = (Math.floor(c.time / tfSec) * tfSec) as any;
+            const maxBody = Math.max(c.open, c.close);
+            const minBody = Math.min(c.open, c.close);
+            const sanitizedHigh = c.high > maxBody * 1.05 ? maxBody * 1.015 : c.high;
+            const sanitizedLow = c.low < minBody * 0.95 ? minBody * 0.985 : c.low;
+            return {
+              ...c,
+              time: alignedTime,
+              high: Math.max(sanitizedHigh, maxBody),
+              low: Math.min(sanitizedLow, minBody),
+            };
+          });
           const sample = dbCached.slice(-30).map((c) => c.close).sort((a, b) => a - b);
           const median = sample[Math.floor(sample.length / 2)];
           if (median > 0) {
@@ -441,10 +450,19 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
             Number.isFinite(c.close) && c.close > 0 &&
             c.low <= c.high &&
             !MarketSessionService.isCandleInClosedSession(targetInst.marketSchedule, c.time)
-          ).map((c) => ({
-            ...c,
-            time: (Math.floor(c.time / tfSec) * tfSec) as any,
-          }));
+          ).map((c) => {
+            const alignedTime = (Math.floor(c.time / tfSec) * tfSec) as any;
+            const maxBody = Math.max(c.open, c.close);
+            const minBody = Math.min(c.open, c.close);
+            const sanitizedHigh = c.high > maxBody * 1.05 ? maxBody * 1.015 : c.high;
+            const sanitizedLow = c.low < minBody * 0.95 ? minBody * 0.985 : c.low;
+            return {
+              ...c,
+              time: alignedTime,
+              high: Math.max(sanitizedHigh, maxBody),
+              low: Math.min(sanitizedLow, minBody),
+            };
+          });
           const sample = validBars.slice(-30).map((c) => c.close).sort((a, b) => a - b);
           const median = sample[Math.floor(sample.length / 2)];
 
@@ -666,10 +684,23 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         if (latestCandlesRef.current.length > 0) {
           const last = latestCandlesRef.current[latestCandlesRef.current.length - 1];
           if (last.time === barTime) {
+            // Outlier tick protection: do not let aberrant trades (> 4% deviation) corrupt candle wick
+            if (last.close > 0) {
+              const ratio = trade.price / last.close;
+              if (ratio > 1.04 || ratio < 0.96) {
+                return;
+              }
+            }
             last.high = Math.max(last.high, trade.price);
             last.low = Math.min(last.low, trade.price);
             last.close = trade.price;
           } else if (last.time < barTime) {
+            if (last.close > 0) {
+              const ratio = trade.price / last.close;
+              if (ratio > 1.04 || ratio < 0.96) {
+                return;
+              }
+            }
             latestCandlesRef.current.push({
               time: barTime,
               open: trade.price,
@@ -710,6 +741,15 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         if (latestCandlesRef.current.length > 0) {
           const last = latestCandlesRef.current[latestCandlesRef.current.length - 1];
           if (last.time === alignedCandle.time) {
+            // Outlier check on klines: do not allow false wicks to exceed 4% of close
+            if (last.close > 0) {
+              if (alignedCandle.high / last.close > 1.04) {
+                alignedCandle.high = Math.min(alignedCandle.high, last.close * 1.02);
+              }
+              if (alignedCandle.low / last.close < 0.96) {
+                alignedCandle.low = Math.max(alignedCandle.low, last.close * 0.98);
+              }
+            }
             last.high = Math.max(last.high, alignedCandle.high);
             last.low = Math.min(last.low, alignedCandle.low);
             last.close = alignedCandle.close;
