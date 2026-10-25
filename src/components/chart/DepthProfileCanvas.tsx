@@ -96,12 +96,12 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
     // 2. Price-to-Coordinate Mapping (Aligned 1:1 with Candlesticks)
     const stats = orderBook.getStats();
     const lastCandle = candles && candles.length > 0 ? candles[candles.length - 1] : null;
-    const candlePrice = lastCandle && Number.isFinite(lastCandle.close) && lastCandle.close > 10
+    const candlePrice = lastCandle && Number.isFinite(lastCandle.close) && lastCandle.close > 0
       ? lastCandle.close
       : 0;
 
     const chartCenterPrice = series.coordinateToPrice(height / 2);
-    const validCenterPrice = chartCenterPrice !== null && Number.isFinite(chartCenterPrice) && chartCenterPrice > 10
+    const validCenterPrice = chartCenterPrice !== null && Number.isFinite(chartCenterPrice) && chartCenterPrice > 0
       ? chartCenterPrice
       : 0;
 
@@ -118,14 +118,14 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
       currentMid = (bestBid + candlePrice) / 2;
     } else if (bestAsk > 0 && candlePrice > 0 && Math.abs(bestAsk - candlePrice) / candlePrice < 0.05) {
       currentMid = (bestAsk + candlePrice) / 2;
-    } else if (candlePrice > 10) {
+    } else if (candlePrice > 0) {
       currentMid = candlePrice;
-    } else if (validCenterPrice > 10) {
+    } else if (validCenterPrice > 0) {
       currentMid = validCenterPrice;
-    } else if (stats.midPrice > 10) {
+    } else if (stats.midPrice > 0) {
       currentMid = stats.midPrice;
     } else {
-      currentMid = Math.max(10, bestBid || bestAsk || 100);
+      currentMid = Math.max(0.0001, bestBid || bestAsk || 100);
     }
 
     const pTopSample = series.coordinateToPrice(0);
@@ -160,7 +160,7 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
 
     const safeMid = currentMid > 0 ? currentMid : (candlePrice || validCenterPrice || 100);
     // Guard against NaN or inverse coordinates
-    const pMin = Number.isFinite(rawMin) && rawMin > 10 ? rawMin : safeMid * 0.98;
+    const pMin = Number.isFinite(rawMin) && rawMin > 0 ? rawMin : safeMid * 0.98;
     const pMax = Number.isFinite(rawMax) && rawMax > pMin ? rawMax : safeMid * 1.02;
     const visibleSpread = Math.max(0.1, pMax - pMin);
     const pxPerDollar = Math.abs((height - headerH) / visibleSpread);

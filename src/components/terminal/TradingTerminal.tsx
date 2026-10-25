@@ -368,10 +368,10 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
           // Purge any rogue cross-symbol outliers, closed session weekend bars, and align timestamps to timeframe grid
           dbCached = dbCached.filter((c) =>
             Number.isFinite(c.time) && c.time > 0 &&
-            Number.isFinite(c.open) && c.open > 10 &&
-            Number.isFinite(c.high) && c.high > 10 &&
-            Number.isFinite(c.low) && c.low > 10 &&
-            Number.isFinite(c.close) && c.close > 10 &&
+            Number.isFinite(c.open) && c.open > 0 &&
+            Number.isFinite(c.high) && c.high > 0 &&
+            Number.isFinite(c.low) && c.low > 0 &&
+            Number.isFinite(c.close) && c.close > 0 &&
             c.low <= c.high &&
             !MarketSessionService.isCandleInClosedSession(targetInst.marketSchedule, c.time)
           ).map((c) => ({
@@ -435,10 +435,10 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
           const tfSec = TIMEFRAME_SECONDS[timeframe] || 60;
           const validBars = freshCandles.filter((c) =>
             Number.isFinite(c.time) && c.time > 0 &&
-            Number.isFinite(c.open) && c.open > 10 &&
-            Number.isFinite(c.high) && c.high > 10 &&
-            Number.isFinite(c.low) && c.low > 10 &&
-            Number.isFinite(c.close) && c.close > 10 &&
+            Number.isFinite(c.open) && c.open > 0 &&
+            Number.isFinite(c.high) && c.high > 0 &&
+            Number.isFinite(c.low) && c.low > 0 &&
+            Number.isFinite(c.close) && c.close > 0 &&
             c.low <= c.high &&
             !MarketSessionService.isCandleInClosedSession(targetInst.marketSchedule, c.time)
           ).map((c) => ({
@@ -624,7 +624,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         orderBook.handleDepthUpdate(update, adapter, symbol);
       },
       onTrade: (trade) => {
-        if (!instrument.supportsTrades || !trade || !Number.isFinite(trade.price) || trade.price <= 10) return;
+        if (!instrument.supportsTrades || !trade || !Number.isFinite(trade.price) || trade.price <= 0) return;
         const targetSym = preferencesRef.current.symbol.toUpperCase().replace(/[-_/]/g, '');
         const isGoldTarget = targetSym.includes('XAU') || targetSym === 'GC' || targetSym === 'GOLD';
         const trSym = (trade.symbol || symbol).toUpperCase().replace(/[-_/]/g, '');
@@ -684,7 +684,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         chartRef.current?.updateTickPrice(trade.price, trade.timestamp);
       },
       onKline: (candle) => {
-        if (!candle || !Number.isFinite(candle.close) || candle.close <= 10) return;
+        if (!candle || !Number.isFinite(candle.close) || candle.close <= 0) return;
         const targetSym = preferencesRef.current.symbol.toUpperCase().replace(/[-_/]/g, '');
         const isGoldTarget = targetSym.includes('XAU') || targetSym === 'GC' || targetSym === 'GOLD';
         const sSym = symbol.toUpperCase().replace(/[-_/]/g, '');
@@ -773,10 +773,10 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
           if (freshBars && freshBars.length > 0) {
             const valid = freshBars.filter((c) =>
               Number.isFinite(c.time) && c.time > 0 &&
-              Number.isFinite(c.open) && c.open > 10 &&
-              Number.isFinite(c.high) && c.high > 10 &&
-              Number.isFinite(c.low) && c.low > 10 &&
-              Number.isFinite(c.close) && c.close > 10 &&
+              Number.isFinite(c.open) && c.open > 0 &&
+              Number.isFinite(c.high) && c.high > 0 &&
+              Number.isFinite(c.low) && c.low > 0 &&
+              Number.isFinite(c.close) && c.close > 0 &&
               c.low <= c.high &&
               !MarketSessionService.isCandleInClosedSession(inst.marketSchedule, c.time)
             ).map((c) => ({

@@ -13,9 +13,6 @@ function redisFastCandleCachePlugin(): Plugin {
   }
   const memoryCache = new Map<string, CacheEntry>();
 
-  // Real-time authoritative Spot Gold & COMEX basis calibration matching TradingView & MT5
-  const COMEX_FUTURES_BASIS_OVER_SPOT = 12.50; // CME Globex front-month futures basis (TradingView COMEX:GC1! $4,008.70)
-
   function parseInstrumentTarget(rawSym: string) {
     const cleanSym = (rawSym || 'XAUUSDT').toUpperCase().replace(/[-_/]/g, '');
     const isComex = cleanSym === 'GC' || cleanSym.startsWith('COMEX') || cleanSym.startsWith('GCFUTURES') || cleanSym === 'CME';
@@ -25,15 +22,10 @@ function redisFastCandleCachePlugin(): Plugin {
     let targetSym = isGold ? 'PAXGUSDT' : cleanSym;
     if (cleanSym === 'EURUSD' || cleanSym === 'EUR') targetSym = 'EURUSDT';
     if (cleanSym === 'GBPUSD' || cleanSym === 'GBP') targetSym = 'GBPUSDT';
-    const isCrypto = !isFx && (targetSym.endsWith('USDT') || targetSym.startsWith('BTC') || targetSym.startsWith('ETH') || targetSym.startsWith('SOL') || targetSym.startsWith('BNB'));
+    const isCrypto = !isFx && !isGold && (targetSym.endsWith('USDT') || targetSym.startsWith('BTC') || targetSym.startsWith('ETH') || targetSym.startsWith('SOL') || targetSym.startsWith('BNB'));
     const isFutures = !isFx && (cleanSym.includes('PERP') || cleanSym.includes('FUTURES'));
 
-    let priceOffset = 0;
-    if (isComex) {
-      priceOffset = -COMEX_FUTURES_BASIS_OVER_SPOT;
-    }
-
-    return { cleanSym, targetSym, isGoldSpot, isComex, isFx, isGold, isCrypto, isFutures, priceOffset };
+    return { cleanSym, targetSym, isGoldSpot, isComex, isFx, isGold, isCrypto, isFutures, priceOffset: 0 };
   }
 
   function getYahooSymbol(cleanSym: string): string {
@@ -50,147 +42,96 @@ function redisFastCandleCachePlugin(): Plugin {
   }
 
   async function fetchAndCache(symbol: string, interval: string, isFutures: boolean): Promise<string | null> {
-    const { cleanSym, targetSym, isGoldSpot } = parseInstrumentTarget(symbol);
+    const { cleanSym, targetSym, isComex, isGoldSpot, isFx, isCrypto } = parseInstrumentTarget(symbol);
     const key = `${cleanSym}_${interval}_${isFutures ? 'fut' : 'spot'}`;
     const yahooSym = getYahooSymbol(cleanSym);
 
-    // 1. If Crypto (BTC, ETH, SOL), fetch authentic USD spot candles directly from Coinbase (matches MT5 & TradingView 1:1)
-    const baseCrypto = cleanSym.replace(/USDT$/, '').replace(/USD$/, '');
-    if (baseCrypto === 'BTC' || baseCrypto === 'ETH' || baseCrypto === 'SOL') {
+    // 1. Authoritative source for Crypto: Binance Spot (matches TradingView 1:1)
+    if (isCrypto) {
       try {
-        const gran = interval === '1d' ? 86400 : interval === '1h' ? 3600 : interval === '15m' ? 900 : interval === '5m' ? 300 : 60;
-        const res = await fetch(`https://api.exchange.coinbase.com/products/${baseCrypto}-USD/candles?granularity=${gran}`, {
-          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
-          signal: AbortSignal.timeout(3000),
+        const baseUrl = 'https://data-api.binance.vision/api/v3/klines';
+        const res = await fetch(`${baseUrl}?symbol=${targetSym}&interval=${interval}&limit=1000`, {
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+          signal: AbortSignal.timeout(6000),
         });
         if (res.ok) {
-          const cbList = await res.json();
-          if (Array.isArray(cbList) && cbList.length > 0) {
-            // Coinbase candle format: [time_sec, low, high, open, close, volume]
-            // Sort ascending by time:
-            const sorted = [...cbList].sort((a, b) => a[0] - b[0]);
-            const list = sorted.map((k: any) => [
-              k[0] * 1000,
-              k[3].toString(), // open
-              k[2].toString(), // high
-              k[1].toString(), // low
-              k[4].toString(), // close
-              (k[5] || 0).toString(), // volume
-            ]);
-            const text = JSON.stringify(list);
-            memoryCache.set(key, { timestamp: Date.now(), data: text });
-            return text;
-          }
+          const text = await res.text();
+          memoryCache.set(key, { timestamp: Date.now(), data: text });
+          return text;
         }
       } catch {}
     }
 
-    // 2. If BNB, fetch spot candles from Bybit (matches TradingView spot 1:1)
-    if (baseCrypto === 'BNB') {
+    // 2. Authoritative source for Gold & Forex: Yahoo Finance query1 (matches CME & Spot FX 1:1)
+    if (isComex || isGoldSpot || isFx) {
       try {
-        const byInterval = interval === '1d' ? 'D' : interval === '1h' ? '60' : interval === '15m' ? '15' : interval === '5m' ? '5' : '1';
-        const res = await fetch(`https://api.bybit.com/v5/market/kline?category=spot&symbol=BNBUSDT&interval=${byInterval}&limit=300`, {
-          headers: { 'User-Agent': 'Mozilla/5.0' },
-          signal: AbortSignal.timeout(3000),
+        const yInterval = interval === '1d' ? '1d' : interval === '1h' ? '60m' : interval === '15m' ? '15m' : interval === '5m' ? '5m' : '1m';
+        const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${yahooSym}?interval=${yInterval}&range=2d`, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+          signal: AbortSignal.timeout(8000),
         });
         if (res.ok) {
           const json: any = await res.json();
-          const bbList = json?.result?.list;
-          if (Array.isArray(bbList) && bbList.length > 0) {
-            // Bybit format: [startTimeMs, open, high, low, close, volume, turnover]
-            const sorted = [...bbList].sort((a, b) => Number(a[0]) - Number(b[0]));
-            const list = sorted.map((k: any) => [
-              Number(k[0]),
-              k[1],
-              k[2],
-              k[3],
-              k[4],
-              k[5],
-            ]);
-            const text = JSON.stringify(list);
-            memoryCache.set(key, { timestamp: Date.now(), data: text });
-            return text;
+          const result = json?.chart?.result?.[0];
+          const timestamps = result?.timestamp || [];
+          const quotes = result?.indicators?.quote?.[0];
+          if (quotes && timestamps.length > 0) {
+            const list: any[] = [];
+            for (let i = 0; i < timestamps.length; i++) {
+              const t = timestamps[i];
+              const o = quotes.open[i];
+              const h = quotes.high[i];
+              const l = quotes.low[i];
+              const c = quotes.close[i];
+              const v = quotes.volume?.[i] ?? (isComex ? 100 : 1000);
+              if (o === null || h === null || l === null || c === null) continue;
+              list.push([t * 1000, o, h, l, c, v]);
+            }
+            if (list.length > 0) {
+              const text = JSON.stringify(list);
+              memoryCache.set(key, { timestamp: Date.now(), data: text });
+              return text;
+            }
           }
         }
       } catch {}
     }
 
-    // 3. Authoritative source for Gold & Forex: Yahoo Finance query1 (matches MT5 & TradingView 1:1)
-    try {
-      const yInterval = interval === '1d' ? '1d' : interval === '1h' ? '60m' : interval === '15m' ? '15m' : interval === '5m' ? '5m' : '1m';
-      const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${yahooSym}?interval=${yInterval}&range=2d`, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-        signal: AbortSignal.timeout(3000),
-      });
-      if (res.ok) {
-        const json: any = await res.json();
-        const result = json?.chart?.result?.[0];
-        const timestamps = result?.timestamp || [];
-        const quotes = result?.indicators?.quote?.[0];
-        if (quotes && timestamps.length > 0) {
-          const list: any[] = [];
-          for (let i = 0; i < timestamps.length; i++) {
-            const t = timestamps[i];
-            const o = quotes.open[i];
-            const h = quotes.high[i];
-            const l = quotes.low[i];
-            const c = quotes.close[i];
-            const v = quotes.volume?.[i] ?? 100;
-            if (o === null || h === null || l === null || c === null) continue;
-            let adjO = o;
-            let adjH = h;
-            let adjL = l;
-            let adjC = c;
-            if (isGoldSpot) {
-              adjO = Math.round((o - COMEX_FUTURES_BASIS_OVER_SPOT) * 100) / 100;
-              adjH = Math.round((h - COMEX_FUTURES_BASIS_OVER_SPOT) * 100) / 100;
-              adjL = Math.round((l - COMEX_FUTURES_BASIS_OVER_SPOT) * 100) / 100;
-              adjC = Math.round((c - COMEX_FUTURES_BASIS_OVER_SPOT) * 100) / 100;
-            }
-            list.push([t * 1000, adjO, adjH, adjL, adjC, v]);
-          }
-          if (list.length > 0) {
-            const text = JSON.stringify(list);
-            memoryCache.set(key, { timestamp: Date.now(), data: text });
-            return text;
-          }
+    // 3. Fallback for Gold Spot: Binance Vision PAXG
+    if (isGoldSpot) {
+      try {
+        const baseUrl = 'https://data-api.binance.vision/api/v3/klines';
+        const res = await fetch(`${baseUrl}?symbol=PAXGUSDT&interval=${interval}&limit=1000`, {
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+          signal: AbortSignal.timeout(5000),
+        });
+        if (res.ok) {
+          const text = await res.text();
+          memoryCache.set(key, { timestamp: Date.now(), data: text });
+          return text;
         }
-      }
-    } catch {}
-
-    // 4. Secondary fallback source: Binance Vision
-    try {
-      const baseUrl = 'https://data-api.binance.vision/api/v3/klines';
-      const res = await fetch(`${baseUrl}?symbol=${targetSym}&interval=${interval}&limit=1000`, {
-        headers: { 'User-Agent': 'Mozilla/5.0' },
-        signal: AbortSignal.timeout(2000),
-      });
-      if (res.ok) {
-        const text = await res.text();
-        memoryCache.set(key, { timestamp: Date.now(), data: text });
-        return text;
-      }
-    } catch {}
+      } catch {}
+    }
     return null;
   }
 
   async function fetchAndCacheTicker(rawSym: string): Promise<void> {
     const target = parseInstrumentTarget(rawSym);
     const tickerKey = `ticker_${target.cleanSym}_${target.isFutures ? 'fut' : 'spot'}`;
-    const baseCrypto = target.cleanSym.replace(/USDT$/, '').replace(/USD$/, '');
 
-    // 1. For BTC, ETH, SOL: Coinbase authentic MT5/TradingView USD spot price
-    if (baseCrypto === 'BTC' || baseCrypto === 'ETH' || baseCrypto === 'SOL') {
+    // 1. Crypto: Binance Spot Ticker (matches TradingView 1:1)
+    if (target.isCrypto) {
       try {
-        const res = await fetch(`https://api.coinbase.com/v2/prices/${baseCrypto}-USD/spot`, {
+        const baseUrl = 'https://data-api.binance.vision/api/v3/ticker/price';
+        const res = await fetch(`${baseUrl}?symbol=${target.targetSym}`, {
           headers: { 'User-Agent': 'Mozilla/5.0' },
           signal: AbortSignal.timeout(2000),
         });
         if (res.ok) {
-          const json: any = await res.json();
-          const amt = parseFloat(json?.data?.amount);
-          if (Number.isFinite(amt) && amt > 0) {
-            const payload = JSON.stringify({ symbol: target.cleanSym, price: Math.round(amt * 100) / 100, timestamp: Date.now() });
+          const parsed: any = await res.json();
+          const rawPrice = parseFloat(parsed.price);
+          if (Number.isFinite(rawPrice) && rawPrice > 0) {
+            const payload = JSON.stringify({ symbol: target.cleanSym, price: rawPrice, timestamp: Date.now() });
             memoryCache.set(tickerKey, { timestamp: Date.now(), data: payload });
             return;
           }
@@ -198,26 +139,7 @@ function redisFastCandleCachePlugin(): Plugin {
       } catch {}
     }
 
-    // 2. For BNB: Bybit Spot
-    if (baseCrypto === 'BNB') {
-      try {
-        const res = await fetch('https://api.bybit.com/v5/market/tickers?category=spot&symbol=BNBUSDT', {
-          headers: { 'User-Agent': 'Mozilla/5.0' },
-          signal: AbortSignal.timeout(2000),
-        });
-        if (res.ok) {
-          const json: any = await res.json();
-          const p = parseFloat(json?.result?.list?.[0]?.lastPrice);
-          if (Number.isFinite(p) && p > 0) {
-            const payload = JSON.stringify({ symbol: target.cleanSym, price: Math.round(p * 100) / 100, timestamp: Date.now() });
-            memoryCache.set(tickerKey, { timestamp: Date.now(), data: payload });
-            return;
-          }
-        }
-      } catch {}
-    }
-
-    // 3. For Gold and Forex: Yahoo Finance query1 MT5/TradingView spot
+    // 2. Gold and Forex: Yahoo Finance
     const yahooSym = getYahooSymbol(target.cleanSym);
     try {
       const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${yahooSym}?interval=1m&range=1d`, {
@@ -228,12 +150,8 @@ function redisFastCandleCachePlugin(): Plugin {
         const json: any = await res.json();
         const meta = json?.chart?.result?.[0]?.meta;
         if (meta && typeof meta.regularMarketPrice === 'number' && meta.regularMarketPrice > 0) {
-          let price = meta.regularMarketPrice;
-          if (target.isGoldSpot) {
-            price = Math.round((price - COMEX_FUTURES_BASIS_OVER_SPOT) * 100) / 100;
-          }
           const mult = target.isFx ? 10000 : (target.isComex ? 10 : 100);
-          const finalPrice = Math.round(price * mult) / mult;
+          const finalPrice = Math.round(meta.regularMarketPrice * mult) / mult;
           const payload = JSON.stringify({ symbol: target.cleanSym, price: finalPrice, timestamp: Date.now() });
           memoryCache.set(tickerKey, { timestamp: Date.now(), data: payload });
           return;
@@ -241,27 +159,7 @@ function redisFastCandleCachePlugin(): Plugin {
       }
     } catch {}
 
-    // 4. For Forex fallback: Frankfurter / ECB benchmark rates
-    if (target.isFx) {
-      try {
-        const base = target.cleanSym.startsWith('GBP') ? 'GBP' : 'EUR';
-        const res = await fetch(`https://api.frankfurter.dev/v1/latest?base=${base}&symbols=USD`, {
-          signal: AbortSignal.timeout(2000),
-        });
-        if (res.ok) {
-          const json: any = await res.json();
-          const rate = json?.rates?.USD;
-          if (typeof rate === 'number' && rate > 0) {
-            const finalPrice = Math.round(rate * 10000) / 10000;
-            const payload = JSON.stringify({ symbol: target.cleanSym, price: finalPrice, timestamp: Date.now() });
-            memoryCache.set(tickerKey, { timestamp: Date.now(), data: payload });
-            return;
-          }
-        }
-      } catch {}
-    }
-
-    // 5. Fallback: Binance Spot Ticker
+    // 3. Fallback: Binance Spot Ticker
     try {
       const baseUrl = 'https://data-api.binance.vision/api/v3/ticker/price';
       const fetchRes = await fetch(`${baseUrl}?symbol=${target.targetSym}`, {
@@ -269,11 +167,10 @@ function redisFastCandleCachePlugin(): Plugin {
         signal: AbortSignal.timeout(1500),
       });
       if (fetchRes.ok) {
-        const text = await fetchRes.text();
-        const parsed = JSON.parse(text);
+        const parsed: any = await fetchRes.json();
         const rawPrice = parseFloat(parsed.price);
         const mult = target.isFx ? 10000 : (target.isComex ? 10 : 100);
-        const finalPrice = Math.round((rawPrice - target.priceOffset) * mult) / mult;
+        const finalPrice = Math.round(rawPrice * mult) / mult;
         const payload = JSON.stringify({ symbol: target.cleanSym, price: finalPrice, timestamp: Date.now() });
         memoryCache.set(tickerKey, { timestamp: Date.now(), data: payload });
       }
@@ -332,30 +229,15 @@ function redisFastCandleCachePlugin(): Plugin {
             try {
               const list = JSON.parse(rawText);
               if (Array.isArray(list)) {
-                const isClosed = (tSec: number) => {
-                  if (!target.isComex && !target.isFx) return false;
-                  const d = new Date(tSec * 1000);
-                  const day = d.getUTCDay();
-                  const hours = d.getUTCHours();
-                  const timeDec = hours + d.getUTCMinutes() / 60;
-                  if (day === 6) return true; // Saturday closed
-                  if (day === 0 && timeDec < 22.0) return true; // Sunday before 22:00 UTC
-                  if (day === 5 && timeDec >= 21.0) return true; // Friday after 21:00 UTC
-                  if (timeDec >= 21.0 && timeDec < 22.0) return true; // Daily break
-                  return false;
-                };
-
-                const filtered = list.filter((k: any) => !isClosed(Math.floor(Number(k[0]) / 1000)));
-                const sliced = limit > 0 ? filtered.slice(-limit) : filtered;
-                const offset = target.priceOffset;
+                const sliced = limit > 0 ? list.slice(-limit) : list;
                 const mult = target.isFx ? 10000 : (target.isComex ? 10 : 100);
                 const formatted = sliced.map((k: any) => ({
                   time: Math.floor(Number(k[0]) / 1000),
-                  open: Math.round((parseFloat(k[1]) - offset) * mult) / mult,
-                  high: Math.round((parseFloat(k[2]) - offset) * mult) / mult,
-                  low: Math.round((parseFloat(k[3]) - offset) * mult) / mult,
-                  close: Math.round((parseFloat(k[4]) - offset) * mult) / mult,
-                  volume: target.isComex ? Math.max(1, Math.round(parseFloat(k[5]) * 0.1)) : parseFloat(k[5]),
+                  open: Math.round(parseFloat(k[1]) * mult) / mult,
+                  high: Math.round(parseFloat(k[2]) * mult) / mult,
+                  low: Math.round(parseFloat(k[3]) * mult) / mult,
+                  close: Math.round(parseFloat(k[4]) * mult) / mult,
+                  volume: parseFloat(k[5]),
                 }));
                 res.setHeader('Content-Type', 'application/json');
                 res.setHeader('X-Cache-Status', 'HIT-RAM-0MS');
@@ -424,33 +306,12 @@ function redisFastCandleCachePlugin(): Plugin {
         const now = Date.now();
 
         const formatRawKlines = (rawString: string) => {
-          if (target.priceOffset === 0 && !target.isComex) {
-            if (limit > 0 && limit < 1000) {
-              try {
-                const list = JSON.parse(rawString);
-                if (Array.isArray(list)) return JSON.stringify(list.slice(-limit));
-              } catch {}
-            }
-            return rawString;
+          if (limit > 0 && limit < 1000) {
+            try {
+              const list = JSON.parse(rawString);
+              if (Array.isArray(list)) return JSON.stringify(list.slice(-limit));
+            } catch {}
           }
-          try {
-            const list = JSON.parse(rawString);
-            if (Array.isArray(list)) {
-              const mult = target.isComex ? 10 : 100;
-              const offset = target.priceOffset;
-              const adjusted = list.map((k: any[]) => [
-                k[0],
-                String(Math.round((parseFloat(k[1]) - offset) * mult) / mult),
-                String(Math.round((parseFloat(k[2]) - offset) * mult) / mult),
-                String(Math.round((parseFloat(k[3]) - offset) * mult) / mult),
-                String(Math.round((parseFloat(k[4]) - offset) * mult) / mult),
-                target.isComex ? String(Math.max(1, Math.round(parseFloat(k[5]) * 0.1))) : k[5],
-                ...k.slice(6),
-              ]);
-              const sliced = limit > 0 && limit < adjusted.length ? adjusted.slice(-limit) : adjusted;
-              return JSON.stringify(sliced);
-            }
-          } catch {}
           return rawString;
         };
 

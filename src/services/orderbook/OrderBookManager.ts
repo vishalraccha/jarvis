@@ -161,13 +161,13 @@ export class OrderBookManager {
 
       // 3. Populate snapshot bids & asks
       for (const [p, q] of snapshot.bids) {
-        if (p > 10 && q > 0) {
+        if (p > 0 && q > 0) {
           const tick = Math.round(p * this.precisionMultiplier);
           this.bids.set(tick, q);
         }
       }
       for (const [p, q] of snapshot.asks) {
-        if (p > 10 && q > 0) {
+        if (p > 0 && q > 0) {
           const tick = Math.round(p * this.precisionMultiplier);
           this.asks.set(tick, q);
         }
@@ -252,14 +252,14 @@ export class OrderBookManager {
           this.lastResyncAttemptTime = now;
           adapter.fetchDepthSnapshot(symbol, 1000).then((snapshot) => {
             for (const [p, q] of snapshot.bids) {
-              if (p > 10) {
+              if (p > 0) {
                 const tick = Math.round(p * this.precisionMultiplier);
                 if (q > 0) this.bids.set(tick, q);
                 else this.bids.delete(tick);
               }
             }
             for (const [p, q] of snapshot.asks) {
-              if (p > 10) {
+              if (p > 0) {
                 const tick = Math.round(p * this.precisionMultiplier);
                 if (q > 0) this.asks.set(tick, q);
                 else this.asks.delete(tick);
@@ -296,7 +296,7 @@ export class OrderBookManager {
    * This drives the live COB ladder and causes the price to move dynamically!
    */
   consumeLiquidity(price: number, quantity: number, side: 'buy' | 'sell' | 'unknown'): void {
-    if (price <= 10 || quantity <= 0) return;
+    if (price <= 0 || quantity <= 0) return;
     const tick = Math.round(price * this.precisionMultiplier);
     const resolvedSide: 'buy' | 'sell' = side === 'unknown' 
       ? (price >= (this.cachedBestAsk || price) ? 'buy' : 'sell') 
@@ -336,7 +336,7 @@ export class OrderBookManager {
 
     // Apply bids
     for (const [p, q] of update.bids) {
-      if (p <= 10) continue;
+      if (p <= 0) continue;
       const tick = Math.round(p * this.precisionMultiplier);
       if (q === 0) {
         this.bids.delete(tick);
@@ -347,7 +347,7 @@ export class OrderBookManager {
 
     // Apply asks
     for (const [p, q] of update.asks) {
-      if (p <= 10) continue;
+      if (p <= 0) continue;
       const tick = Math.round(p * this.precisionMultiplier);
       if (q === 0) {
         this.asks.delete(tick);

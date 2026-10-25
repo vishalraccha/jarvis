@@ -1,6 +1,7 @@
 /**
  * JARVIS Market Sync & Ingestion Service
  * Connects upstream exchange APIs, SQLite durable store, and Redis hot cache.
+ * Provides authentic OHLCV klines and tickers for Crypto, COMEX, and Forex.
  */
 
 import { sqliteStore, StoredCandle } from '../db/sqliteStore.js';
@@ -26,10 +27,6 @@ export class MarketSyncService {
 
   private getYahooSymbol(cleanSym: string): string {
     const s = cleanSym.toUpperCase().replace(/[-_/]/g, '');
-    if (s.startsWith('BTC')) return 'BTC-USD';
-    if (s.startsWith('ETH')) return 'ETH-USD';
-    if (s.startsWith('SOL')) return 'SOL-USD';
-    if (s.startsWith('BNB')) return 'BNB-USD';
     if (s === 'EURUSD' || s === 'EUR' || s === 'EURUSDT') return 'EURUSD=X';
     if (s === 'GBPUSD' || s === 'GBP' || s === 'GBPUSDT') return 'GBPUSD=X';
     if (s === 'GC' || s === 'CME' || s === 'COMEX') return 'GC=F';
@@ -126,89 +123,22 @@ export class MarketSyncService {
   }
 
   /**
-   * Fetch from authoritative upstream sources (Coinbase, Bybit, Yahoo Finance, Binance Vision) and store in SQLite
+   * Fetch from authoritative upstream sources and store in SQLite
    */
-  async fetchAndStoreUpstream(symbol: string, timeframe: string, limit: number = 300, _endTime?: number): Promise<StoredCandle[]> {
+  async fetchAndStoreUpstream(symbol: string, timeframe: string, limit: number = 300, endTime?: number): Promise<StoredCandle[]> {
     const sym = symbol.toUpperCase().replace(/[-_/]/g, '');
     const tf = timeframe.toLowerCase();
-    const baseCrypto = sym.replace(/USDT$/, '').replace(/USD$/, '');
 
-    // 1. Crypto (BTC, ETH, SOL): Coinbase REST API (100% US & Cloud Friendly, authentic MT5 USD spot)
-    if (baseCrypto === 'BTC' || baseCrypto === 'ETH' || baseCrypto === 'SOL') {
+    // 1. Forex and COMEX Gold Futures
+    if (sym === 'GC' || sym.startsWith('COMEX') || sym === 'CME' || sym === 'EURUSD' || sym === 'GBPUSD') {
+      const isComex = sym === 'GC' || sym.startsWith('COMEX') || sym === 'CME';
+      const yahooSym = isComex ? 'GC=F' : `${sym}=X`;
+      const yInterval = tf === '1d' ? '1d' : tf === '1h' ? '60m' : tf === '15m' ? '15m' : tf === '5m' ? '5m' : '1m';
+
       try {
-        const gran = tf === '1d' ? 86400 : tf === '1h' ? 3600 : tf === '15m' ? 900 : tf === '5m' ? 300 : 60;
-        const res = await fetch(`https://api.exchange.coinbase.com/products/${baseCrypto}-USD/candles?granularity=${gran}`, {
-          headers: { 'User-Agent': 'Mozilla/5.0 JARVIS-Trading-Terminal/2.0' },
-          signal: AbortSignal.timeout(3500),
-        });
-        if (res.ok) {
-          const cbList: any = await res.json();
-          if (Array.isArray(cbList) && cbList.length > 0) {
-            // Coinbase format: [time_sec, low, high, open, close, volume]
-            const sorted = [...cbList].sort((a, b) => a[0] - b[0]);
-            const candles: StoredCandle[] = sorted.map((k) => ({
-              time: k[0],
-              open: parseFloat(k[3]),
-              high: parseFloat(k[2]),
-              low: parseFloat(k[1]),
-              close: parseFloat(k[4]),
-              volume: parseFloat(k[5] || 0),
-            }));
-            sqliteStore.insertCandles(sym, tf, candles);
-            if (sym !== `${baseCrypto}USDT`) {
-              sqliteStore.insertCandles(`${baseCrypto}USDT`, tf, candles);
-            }
-            const proxyKey = `klines_raw_${sym}_${tf}`;
-            await hotCache.set(proxyKey, JSON.stringify(candles.map(c => [c.time * 1000, c.open, c.high, c.low, c.close, c.volume])), 5);
-            return candles;
-          }
-        }
-      } catch (err) {
-        console.warn(`[MarketSyncService] Coinbase fetch failed for ${baseCrypto}:`, err);
-      }
-    }
-
-    // 2. BNB: Bybit Spot API
-    if (baseCrypto === 'BNB') {
-      try {
-        const byInterval = tf === '1d' ? 'D' : tf === '1h' ? '60' : tf === '15m' ? '15' : tf === '5m' ? '5' : '1';
-        const res = await fetch(`https://api.bybit.com/v5/market/kline?category=spot&symbol=BNBUSDT&interval=${byInterval}&limit=${Math.min(limit, 300)}`, {
-          headers: { 'User-Agent': 'Mozilla/5.0 JARVIS-Trading-Terminal/2.0' },
-          signal: AbortSignal.timeout(3500),
-        });
-        if (res.ok) {
-          const json: any = await res.json();
-          const bbList = json?.result?.list;
-          if (Array.isArray(bbList) && bbList.length > 0) {
-            const sorted = [...bbList].sort((a, b) => Number(a[0]) - Number(b[0]));
-            const candles: StoredCandle[] = sorted.map((k) => ({
-              time: Math.floor(Number(k[0]) / 1000),
-              open: parseFloat(k[1]),
-              high: parseFloat(k[2]),
-              low: parseFloat(k[3]),
-              close: parseFloat(k[4]),
-              volume: parseFloat(k[5] || 0),
-            }));
-            sqliteStore.insertCandles(sym, tf, candles);
-            sqliteStore.insertCandles('BNBUSDT', tf, candles);
-            return candles;
-          }
-        }
-      } catch {}
-    }
-
-    // 3. Gold & Forex: Yahoo Finance query1
-    const isComex = sym === 'GC' || sym.startsWith('COMEX') || sym === 'CME';
-    const isGoldSpot = sym.startsWith('XAU') || sym.startsWith('GOLD') || sym === 'VANTAGE' || sym === 'OANDA';
-    const isFx = sym.startsWith('EUR') || sym.startsWith('GBP');
-
-    if (isComex || isGoldSpot || isFx) {
-      try {
-        const yInterval = tf === '1d' ? '1d' : tf === '1h' ? '60m' : tf === '15m' ? '15m' : tf === '5m' ? '5m' : '1m';
-        const yahooSym = this.getYahooSymbol(sym);
         const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${yahooSym}?interval=${yInterval}&range=2d`, {
           headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-          signal: AbortSignal.timeout(3500),
+          signal: AbortSignal.timeout(4000),
         });
         if (res.ok) {
           const json: any = await res.json();
@@ -223,54 +153,101 @@ export class MarketSyncService {
               const h = quotes.high[i];
               const l = quotes.low[i];
               const c = quotes.close[i];
-              const v = quotes.volume?.[i] ?? 100;
+              const v = quotes.volume?.[i] ?? (isComex ? 100 : 1000);
               if (o === null || h === null || l === null || c === null) continue;
-              let adjO = o;
-              let adjH = h;
-              let adjL = l;
-              let adjC = c;
-              if (isGoldSpot) {
-                adjO = Math.round((o - 12.50) * 100) / 100;
-                adjH = Math.round((h - 12.50) * 100) / 100;
-                adjL = Math.round((l - 12.50) * 100) / 100;
-                adjC = Math.round((c - 12.50) * 100) / 100;
-              }
-              candles.push({ time: t, open: adjO, high: adjH, low: adjL, close: adjC, volume: v });
+              candles.push({ time: t, open: o, high: h, low: l, close: c, volume: v });
             }
             if (candles.length > 0) {
               sqliteStore.insertCandles(sym, tf, candles);
+              const proxyKey = `klines_raw_${sym}_${tf}`;
+              await hotCache.set(proxyKey, JSON.stringify(candles.map(c => [c.time * 1000, c.open, c.high, c.low, c.close, c.volume])), 5);
               return candles;
             }
           }
         }
-      } catch {}
+      } catch (err) {
+        console.warn(`[MarketSyncService] Yahoo fetch failed for ${sym}:`, err);
+      }
     }
 
-    // 4. Secondary fallback: Binance Vision
+    // 2. Binance Spot & Futures Pipeline
+    const isGoldSpot = sym.startsWith('XAU') || sym.startsWith('GOLD') || sym === 'VANTAGE' || sym === 'OANDA';
+    const isFutures = isGoldSpot || sym.includes('PERP') || sym.includes('FUTURES');
+    let targetSym = sym;
+    if (isGoldSpot) {
+      targetSym = 'XAUUSDT';
+    }
+
+    let endpoint = isFutures
+      ? `https://fapi.binance.com/fapi/v1/klines?symbol=${targetSym}&interval=${tf}&limit=${Math.min(limit, 1000)}`
+      : `https://api.binance.com/api/v3/klines?symbol=${targetSym}&interval=${tf}&limit=${Math.min(limit, 1000)}`;
+
+    if (endTime && Number.isFinite(endTime) && endTime > 0) {
+      endpoint += `&endTime=${Math.floor(endTime * 1000)}`;
+    }
+
+    let rawData: any[][] | null = null;
+
     try {
-      const targetSym = (sym.startsWith('XAU') || sym.startsWith('GOLD')) ? 'PAXGUSDT' : sym;
-      const res = await fetch(`https://data-api.binance.vision/api/v3/klines?symbol=${targetSym}&interval=${tf}&limit=${Math.min(limit, 1000)}`, {
-        headers: { 'User-Agent': 'Mozilla/5.0' },
-        signal: AbortSignal.timeout(3000),
+      const res = await fetch(endpoint, {
+        headers: { 'User-Agent': 'Mozilla/5.0 JARVIS-Trading-Terminal/2.0' },
+        signal: AbortSignal.timeout(4500),
       });
+
       if (res.ok) {
-        const rawData = (await res.json()) as any[][];
-        if (Array.isArray(rawData) && rawData.length > 0) {
-          const candles: StoredCandle[] = rawData.map((k) => ({
-            time: Math.floor(Number(k[0]) / 1000),
-            open: parseFloat(k[1]),
-            high: parseFloat(k[2]),
-            low: parseFloat(k[3]),
-            close: parseFloat(k[4]),
-            volume: parseFloat(k[5]),
-          }));
-          sqliteStore.insertCandles(sym, tf, candles);
-          return candles;
+        rawData = (await res.json()) as any[][];
+      } else if (!isFutures && (res.status === 451 || res.status === 403)) {
+        // Fallback for cloud hosts (e.g. Render US IP blocked by standard api.binance.com)
+        const visionEndpoint = endpoint.replace('api.binance.com', 'data-api.binance.vision');
+        const fallbackRes = await fetch(visionEndpoint, {
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+          signal: AbortSignal.timeout(4500),
+        });
+        if (fallbackRes.ok) {
+          rawData = (await fallbackRes.json()) as any[][];
         }
       }
-    } catch {}
+    } catch {
+      if (!isFutures) {
+        try {
+          const visionEndpoint = endpoint.replace('api.binance.com', 'data-api.binance.vision');
+          const fallbackRes = await fetch(visionEndpoint, {
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+            signal: AbortSignal.timeout(4500),
+          });
+          if (fallbackRes.ok) {
+            rawData = (await fallbackRes.json()) as any[][];
+          }
+        } catch {}
+      }
+    }
 
-    return [];
+    if (!Array.isArray(rawData) || rawData.length === 0) {
+      return [];
+    }
+
+    const spotGoldBasis = 2.66;
+    const offset = isGoldSpot ? spotGoldBasis : 0;
+    const mult = 100;
+
+    const candles: StoredCandle[] = rawData.map((k) => ({
+      time: Math.floor(Number(k[0]) / 1000),
+      open: Math.round((parseFloat(k[1]) - offset) * mult) / mult,
+      high: Math.round((parseFloat(k[2]) - offset) * mult) / mult,
+      low: Math.round((parseFloat(k[3]) - offset) * mult) / mult,
+      close: Math.round((parseFloat(k[4]) - offset) * mult) / mult,
+      volume: parseFloat(k[5]),
+    }));
+
+    sqliteStore.insertCandles(sym, tf, candles);
+    if (targetSym !== sym) {
+      sqliteStore.insertCandles(targetSym, tf, candles);
+    }
+
+    const proxyKey = `klines_raw_${sym}_${tf}`;
+    await hotCache.set(proxyKey, JSON.stringify(rawData), 5);
+
+    return candles;
   }
 
   /**
@@ -326,7 +303,7 @@ export class MarketSyncService {
   }
 
   /**
-   * Fast Ticker Price Handler (Coinbase, Bybit, Yahoo, Binance Vision)
+   * Fast Ticker Price Handler
    */
   async getTickerPrice(symbol: string): Promise<{ symbol: string; price: number; timestamp: number } | null> {
     const sym = symbol.toUpperCase().replace(/[-_/]/g, '');
@@ -339,20 +316,21 @@ export class MarketSyncService {
       } catch {}
     }
 
-    const baseCrypto = sym.replace(/USDT$/, '').replace(/USD$/, '');
-
-    // 1. Crypto (BTC, ETH, SOL): Coinbase Spot
-    if (baseCrypto === 'BTC' || baseCrypto === 'ETH' || baseCrypto === 'SOL') {
+    // 1. Gold & Forex: Yahoo Finance
+    if (sym === 'GC' || sym.startsWith('COMEX') || sym === 'CME' || sym === 'EURUSD' || sym === 'GBPUSD') {
       try {
-        const res = await fetch(`https://api.coinbase.com/v2/prices/${baseCrypto}-USD/spot`, {
-          headers: { 'User-Agent': 'Mozilla/5.0' },
-          signal: AbortSignal.timeout(2000),
+        const yahooSym = this.getYahooSymbol(sym);
+        const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${yahooSym}?interval=1m&range=1d`, {
+          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
+          signal: AbortSignal.timeout(2500),
         });
         if (res.ok) {
           const json: any = await res.json();
-          const amt = parseFloat(json?.data?.amount);
-          if (Number.isFinite(amt) && amt > 0) {
-            const result = { symbol: sym, price: Math.round(amt * 100) / 100, timestamp: Date.now() };
+          const meta = json?.chart?.result?.[0]?.meta;
+          if (meta && typeof meta.regularMarketPrice === 'number' && meta.regularMarketPrice > 0) {
+            const mult = sym.includes('EUR') || sym.includes('GBP') ? 10000 : (sym === 'GC' ? 10 : 100);
+            const finalPrice = Math.round(meta.regularMarketPrice * mult) / mult;
+            const result = { symbol: sym, price: finalPrice, timestamp: Date.now() };
             await hotCache.set(key, JSON.stringify(result), 2);
             return result;
           }
@@ -360,67 +338,57 @@ export class MarketSyncService {
       } catch {}
     }
 
-    // 2. BNB: Bybit Spot
-    if (baseCrypto === 'BNB') {
-      try {
-        const res = await fetch('https://api.bybit.com/v5/market/tickers?category=spot&symbol=BNBUSDT', {
-          headers: { 'User-Agent': 'Mozilla/5.0' },
-          signal: AbortSignal.timeout(2000),
-        });
-        if (res.ok) {
-          const json: any = await res.json();
-          const p = parseFloat(json?.result?.list?.[0]?.lastPrice);
-          if (Number.isFinite(p) && p > 0) {
-            const result = { symbol: sym, price: Math.round(p * 100) / 100, timestamp: Date.now() };
-            await hotCache.set(key, JSON.stringify(result), 2);
-            return result;
-          }
-        }
-      } catch {}
-    }
+    // 2. Binance Spot & Futures
+    const isGold = sym.startsWith('XAU') || sym.startsWith('GOLD');
+    const isFutures = sym.includes('PERP') || isGold;
+    const targetSym = isGold ? 'XAUUSDT' : sym;
+    const baseUrl = isFutures ? 'https://fapi.binance.com/fapi/v1/ticker/price' : 'https://api.binance.com/api/v3/ticker/price';
 
-    // 3. Gold & Forex: Yahoo Finance query1
     try {
-      const yahooSym = this.getYahooSymbol(sym);
-      const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${yahooSym}?interval=1m&range=1d`, {
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-        signal: AbortSignal.timeout(2000),
+      let res = await fetch(`${baseUrl}?symbol=${targetSym}`, {
+        signal: AbortSignal.timeout(2500),
       });
-      if (res.ok) {
-        const json: any = await res.json();
-        const meta = json?.chart?.result?.[0]?.meta;
-        if (meta && typeof meta.regularMarketPrice === 'number' && meta.regularMarketPrice > 0) {
-          let price = meta.regularMarketPrice;
-          const isGoldSpot = sym.startsWith('XAU') || sym.startsWith('GOLD') || sym === 'VANTAGE' || sym === 'OANDA';
-          if (isGoldSpot) {
-            price = Math.round((price - 12.50) * 100) / 100;
-          }
-          const mult = sym.includes('EUR') || sym.includes('GBP') ? 10000 : (sym === 'GC' ? 10 : 100);
-          const finalPrice = Math.round(price * mult) / mult;
-          const result = { symbol: sym, price: finalPrice, timestamp: Date.now() };
-          await hotCache.set(key, JSON.stringify(result), 2);
-          return result;
-        }
+
+      if (!res.ok && !isFutures) {
+        res = await fetch(`https://data-api.binance.vision/api/v3/ticker/price?symbol=${targetSym}`, {
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+          signal: AbortSignal.timeout(2000),
+        });
       }
-    } catch {}
 
-    // 4. Fallback: Binance Vision
-    try {
-      const targetSym = (sym.startsWith('XAU') || sym.startsWith('GOLD')) ? 'PAXGUSDT' : sym;
-      const res = await fetch(`https://data-api.binance.vision/api/v3/ticker/price?symbol=${targetSym}`, {
-        headers: { 'User-Agent': 'Mozilla/5.0' },
-        signal: AbortSignal.timeout(1500),
-      });
       if (res.ok) {
-        const data: any = await res.json();
+        const data = (await res.json()) as { symbol: string; price: string };
         const rawPrice = parseFloat(data.price);
         if (Number.isFinite(rawPrice) && rawPrice > 0) {
-          const result = { symbol: sym, price: rawPrice, timestamp: Date.now() };
+          const finalPrice = Math.round(rawPrice * 100) / 100;
+          const result = {
+            symbol: sym,
+            price: finalPrice,
+            timestamp: Date.now(),
+          };
           await hotCache.set(key, JSON.stringify(result), 2);
           return result;
         }
       }
-    } catch {}
+    } catch {
+      if (!isFutures) {
+        try {
+          const fallbackRes = await fetch(`https://data-api.binance.vision/api/v3/ticker/price?symbol=${targetSym}`, {
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+            signal: AbortSignal.timeout(2000),
+          });
+          if (fallbackRes.ok) {
+            const data = (await fallbackRes.json()) as { symbol: string; price: string };
+            const rawPrice = parseFloat(data.price);
+            if (Number.isFinite(rawPrice) && rawPrice > 0) {
+              const result = { symbol: sym, price: Math.round(rawPrice * 100) / 100, timestamp: Date.now() };
+              await hotCache.set(key, JSON.stringify(result), 2);
+              return result;
+            }
+          }
+        } catch {}
+      }
+    }
 
     return null;
   }

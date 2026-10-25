@@ -665,10 +665,10 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
           const valid = candlesToApply
             .filter((c) =>
               Number.isFinite(c.time) && c.time > 0 &&
-              Number.isFinite(c.open) && c.open > 10 &&
-              Number.isFinite(c.high) && c.high > 10 &&
-              Number.isFinite(c.low) && c.low > 10 &&
-              Number.isFinite(c.close) && c.close > 10 &&
+              Number.isFinite(c.open) && c.open > 0 &&
+              Number.isFinite(c.high) && c.high > 0 &&
+              Number.isFinite(c.low) && c.low > 0 &&
+              Number.isFinite(c.close) && c.close > 0 &&
               c.low <= c.high
             )
             .map((c) => ({
@@ -937,15 +937,15 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         const tfSec = TIMEFRAME_SECONDS[preferences.timeframe] || 60;
 
         for (const c of candlesToUpdate) {
-          if (!Number.isFinite(c.close) || c.close <= 10) continue;
+          if (!Number.isFinite(c.close) || c.close <= 0) continue;
           const barTime = (Math.floor(c.time / tfSec) * tfSec) as UTCTimestamp;
           let cur = currentCandleRef.current;
           if (cur && barTime < (cur.time as number)) continue;
 
           const close = c.close;
-          const open = Number.isFinite(c.open) && c.open > 10 ? c.open : close;
-          const high = Number.isFinite(c.high) && c.high > 10 ? Math.max(c.high, open, close) : Math.max(open, close);
-          const low = Number.isFinite(c.low) && c.low > 10 ? Math.min(c.low, open, close) : Math.min(open, close);
+          const open = Number.isFinite(c.open) && c.open > 0 ? c.open : close;
+          const high = Number.isFinite(c.high) && c.high > 0 ? Math.max(c.high, open, close) : Math.max(open, close);
+          const low = Number.isFinite(c.low) && c.low > 0 ? Math.min(c.low, open, close) : Math.min(open, close);
 
           if (!cur || barTime > (cur.time as number)) {
             const newBar: CandlestickData = { time: barTime, open, high, low, close };
@@ -994,7 +994,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
       updateLiveCandle: (candle: Candle) => {
         const activeSeries = seriesRef.current || series;
         if (!activeSeries || !candle) return;
-        if (!Number.isFinite(candle.close) || candle.close <= 10) return;
+        if (!Number.isFinite(candle.close) || candle.close <= 0) return;
 
         const tfSec = TIMEFRAME_SECONDS[preferences.timeframe] || 60;
         const barTime = (Math.floor(candle.time / tfSec) * tfSec) as UTCTimestamp;
@@ -1013,9 +1013,9 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         }
 
         const close = candle.close;
-        const open = Number.isFinite(candle.open) && candle.open > 10 ? candle.open : close;
-        let high = Number.isFinite(candle.high) && candle.high > 10 ? Math.max(candle.high, open, close) : Math.max(open, close);
-        let low = Number.isFinite(candle.low) && candle.low > 10 ? Math.min(candle.low, open, close) : Math.min(open, close);
+        const open = Number.isFinite(candle.open) && candle.open > 0 ? candle.open : close;
+        let high = Number.isFinite(candle.high) && candle.high > 0 ? Math.max(candle.high, open, close) : Math.max(open, close);
+        let low = Number.isFinite(candle.low) && candle.low > 0 ? Math.min(candle.low, open, close) : Math.min(open, close);
 
         // Stale timestamp guard: only ignore past klines that are genuinely older than 2 full bars
         if (cur && barTime < (cur.time as number) - 2 * tfSec) {
@@ -1023,7 +1023,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         }
 
         // Discard rogue outlier ticks from wrong stream or cross-symbol contamination
-        if (cur && cur.close > 10) {
+        if (cur && cur.close > 0) {
           const ratio = close / cur.close;
           if (ratio > 1.35 || ratio < 0.65) {
             return;
@@ -1100,7 +1100,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
       updateTickPrice: (price: number, timestamp?: number) => {
         const activeSeries = seriesRef.current || series;
         const activeChart = chartRef.current || chart;
-        if (!activeSeries || !Number.isFinite(price) || price <= 10) return;
+        if (!activeSeries || !Number.isFinite(price) || price <= 0) return;
         const tfSec = TIMEFRAME_SECONDS[preferences.timeframe] || 60;
         let cur = currentCandleRef.current;
 
@@ -1123,7 +1123,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         }
 
         // Discard extreme cross-symbol outlier ticks
-        if (cur && cur.close > 10) {
+        if (cur && cur.close > 0) {
           const ratio = price / cur.close;
           if (ratio > 1.35 || ratio < 0.65) {
             return;
