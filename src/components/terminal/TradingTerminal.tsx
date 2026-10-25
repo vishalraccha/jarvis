@@ -788,9 +788,10 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
               const merged = mergeAndDeduplicateCandles(latestCandlesRef.current, valid, curTf);
               if (merged.length > 0) {
                 latestCandlesRef.current = merged;
-                // Incremental in-place bar update - NEVER reload or wipe the whole chart!
                 chartRef.current?.incrementalUpdateCandles(valid);
-                indexedDBCache.saveCandles(curSymbol, curTf, merged, curExchange);
+                if (syncTickCount % 12 === 0) {
+                  indexedDBCache.saveCandles(curSymbol, curTf, merged, curExchange);
+                }
               }
             }
           }

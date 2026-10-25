@@ -147,17 +147,65 @@ export class ComexAdapter implements IExchangeAdapter {
 
   private initTradeWebSocket(): void {
     try {
-      this.ws = new WebSocket('wss://fstream.binance.me/stream?streams=xauusdt@aggTrade');
+      this.ws = new WebSocket('wss://stream.bybit.com/v5/public/linear');
       this.ws.onopen = () => {
-        // TCP connected; will switch isWsActive to true upon receiving first actual trade packet
+        try {
+          this.ws?.send(JSON.stringify({ op: 'subscribe', args: ['publicTrade.XAUUSDT'] }));
+        } catch {}
       };
       this.ws.onmessage = (event: MessageEvent) => {
         try {
           const payload = JSON.parse(event.data);
+
+          // 1. Bybit publicTrade format
+          if (payload.topic?.startsWith('publicTrade')) {
+            const session = MarketSessionService.getSessionInfo('cme_futures');
+            if (!session.isOpen) return;
+
+            const list = Array.isArray(payload.data) ? payload.data : [payload.data];
+            for (const t of list) {
+              if (!t || !t.p) continue;
+              this.lastWsTradeTimestamp = Date.now();
+              this.isWsActive = true;
+              this.setConnectionState('LIVE');
+
+              const spotPrice = parseFloat(t.p);
+              const comexPrice = Math.round((spotPrice + this.comexBasis) * 10) / 10;
+              const tradeTime = t.T || Date.now();
+              const qty = Math.max(1, Math.round((parseFloat(t.v) || 1) * 10) / 10);
+              const side: 'buy' | 'sell' = String(t.S).toLowerCase() === 'buy' ? 'buy' : 'sell';
+
+              this.lastQuotePrice = comexPrice;
+              this.lastQuoteTimestamp = tradeTime;
+
+              const trade: MarketTrade = {
+                id: `gc_${t.i || `${tradeTime}_${comexPrice}`}`,
+                timestamp: tradeTime,
+                price: comexPrice,
+                quantity: qty,
+                notional: comexPrice * qty,
+                side,
+                isBuyerMaker: side === 'sell',
+                exchange: 'comex',
+                symbol: 'GC',
+                marketType: 'commodity_futures',
+              };
+
+              this.messagesInSecond++;
+              this.metrics.totalMessagesProcessed++;
+              this.metrics.lastMessageTimestamp = tradeTime;
+
+              this.events?.onTrade(trade);
+              this.updateActiveCandle(comexPrice, qty, tradeTime);
+            }
+            return;
+          }
+
+          // 2. Binance format fallback
           const data = payload.data || payload;
           if ((data.e === 'trade' || data.e === 'aggTrade') && data.p) {
             const session = MarketSessionService.getSessionInfo('cme_futures');
-            if (!session.isOpen) return; // Never emit live trades during closed weekend hours
+            if (!session.isOpen) return;
 
             this.lastWsTradeTimestamp = Date.now();
             this.isWsActive = true;

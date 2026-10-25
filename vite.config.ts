@@ -14,16 +14,32 @@ function redisFastCandleCachePlugin(): Plugin {
   const memoryCache = new Map<string, CacheEntry>();
 
   function parseInstrumentTarget(rawSym: string) {
-    const cleanSym = (rawSym || 'XAUUSDT').toUpperCase().replace(/[-_/]/g, '');
-    const isComex = cleanSym === 'GC' || cleanSym.startsWith('COMEX') || cleanSym.startsWith('GCFUTURES') || cleanSym === 'CME';
-    const isGoldSpot = cleanSym.startsWith('XAU') || cleanSym.startsWith('GOLD') || cleanSym === 'VANTAGE' || cleanSym === 'OANDA';
-    const isFx = cleanSym === 'EURUSD' || cleanSym === 'EUR' || cleanSym === 'GBPUSD' || cleanSym === 'GBP';
+    const raw = (rawSym || 'XAUUSD').toUpperCase().replace(/[-_/]/g, '');
+    let cleanSym = raw;
+    if (raw.startsWith('BTC')) cleanSym = 'BTC';
+    else if (raw.startsWith('ETH')) cleanSym = 'ETH';
+    else if (raw.startsWith('SOL')) cleanSym = 'SOL';
+    else if (raw.startsWith('BNB')) cleanSym = 'BNB';
+    else if (raw.startsWith('XAU') || raw.startsWith('GOLD') || raw === 'VANTAGE' || raw === 'OANDA') cleanSym = 'XAUUSD';
+    else if (raw === 'GC' || raw.startsWith('COMEX') || raw.startsWith('GCFUTURES') || raw === 'CME') cleanSym = 'GC';
+    else if (raw.startsWith('EUR')) cleanSym = 'EURUSD';
+    else if (raw.startsWith('GBP')) cleanSym = 'GBPUSD';
+
+    const isComex = cleanSym === 'GC';
+    const isGoldSpot = cleanSym === 'XAUUSD';
+    const isFx = cleanSym === 'EURUSD' || cleanSym === 'GBPUSD';
     const isGold = isGoldSpot || isComex;
-    let targetSym = isGold ? 'PAXGUSDT' : cleanSym;
-    if (cleanSym === 'EURUSD' || cleanSym === 'EUR') targetSym = 'EURUSDT';
-    if (cleanSym === 'GBPUSD' || cleanSym === 'GBP') targetSym = 'GBPUSDT';
-    const isCrypto = !isFx && !isGold && (targetSym.endsWith('USDT') || targetSym.startsWith('BTC') || targetSym.startsWith('ETH') || targetSym.startsWith('SOL') || targetSym.startsWith('BNB'));
-    const isFutures = !isFx && (cleanSym.includes('PERP') || cleanSym.includes('FUTURES'));
+    let targetSym = cleanSym;
+    if (isGoldSpot) targetSym = 'PAXGUSDT';
+    else if (cleanSym === 'EURUSD') targetSym = 'EURUSDT';
+    else if (cleanSym === 'GBPUSD') targetSym = 'GBPUSDT';
+    else if (cleanSym === 'BTC') targetSym = 'BTCUSDT';
+    else if (cleanSym === 'ETH') targetSym = 'ETHUSDT';
+    else if (cleanSym === 'SOL') targetSym = 'SOLUSDT';
+    else if (cleanSym === 'BNB') targetSym = 'BNBUSDT';
+
+    const isCrypto = !isFx && !isGold;
+    const isFutures = !isFx && (raw.includes('PERP') || raw.includes('FUTURES'));
 
     return { cleanSym, targetSym, isGoldSpot, isComex, isFx, isGold, isCrypto, isFutures, priceOffset: 0 };
   }
@@ -238,29 +254,30 @@ function redisFastCandleCachePlugin(): Plugin {
     } catch {}
   }
 
-  // Gentle pre-warm on server start
+  const ALL_CANONICAL_SYMBOLS = ['BTC', 'ETH', 'SOL', 'BNB', 'XAUUSD', 'GC', 'EURUSD', 'GBPUSD'];
+
+  // Gentle pre-warm on server start (both tickers & candles for instant 0.1ms load)
   setTimeout(() => {
-    fetchAndCacheTicker('BTCUSDT').catch(() => {});
-    fetchAndCacheTicker('ETHUSDT').catch(() => {});
-    fetchAndCacheTicker('SOLUSDT').catch(() => {});
-    fetchAndCacheTicker('BNBUSDT').catch(() => {});
-    fetchAndCacheTicker('XAUUSD').catch(() => {});
-    fetchAndCacheTicker('GC').catch(() => {});
-    fetchAndCacheTicker('EURUSD').catch(() => {});
-    fetchAndCacheTicker('GBPUSD').catch(() => {});
+    for (const s of ALL_CANONICAL_SYMBOLS) {
+      fetchAndCacheTicker(s).catch(() => {});
+      fetchAndCache(s, '1m', false).catch(() => {});
+      fetchAndCache(s, '5m', false).catch(() => {});
+    }
   }, 100)?.unref();
 
-  // Gentle background refresh once every 30 seconds
+  // Fast background ticker refresh every 3 seconds for zero latency
   setInterval(() => {
-    fetchAndCacheTicker('BTCUSDT').catch(() => {});
-    fetchAndCacheTicker('ETHUSDT').catch(() => {});
-    fetchAndCacheTicker('SOLUSDT').catch(() => {});
-    fetchAndCacheTicker('BNBUSDT').catch(() => {});
-    fetchAndCacheTicker('XAUUSD').catch(() => {});
-    fetchAndCacheTicker('GC').catch(() => {});
-    fetchAndCacheTicker('EURUSD').catch(() => {});
-    fetchAndCacheTicker('GBPUSD').catch(() => {});
-  }, 30000)?.unref();
+    for (const s of ALL_CANONICAL_SYMBOLS) {
+      fetchAndCacheTicker(s).catch(() => {});
+    }
+  }, 3000)?.unref();
+
+  // Background candle refresh every 15 seconds
+  setInterval(() => {
+    for (const s of ALL_CANONICAL_SYMBOLS) {
+      fetchAndCache(s, '1m', false).catch(() => {});
+    }
+  }, 15000)?.unref();
 
   return {
     name: 'redis-fast-candle-cache',
@@ -281,8 +298,16 @@ function redisFastCandleCachePlugin(): Plugin {
           const limit = limitParam ? parseInt(limitParam, 10) : 300;
           const key = `${target.cleanSym}_${interval}_${target.isFutures ? 'fut' : 'spot'}`;
 
-          let rawText: string | null | undefined = memoryCache.get(key)?.data;
-          if (!rawText) {
+          const cached = memoryCache.get(key);
+          let rawText: string | null | undefined = cached?.data;
+          const now = Date.now();
+
+          if (cached) {
+            // If cached data is older than 5 seconds, trigger background revalidation
+            if (now - cached.timestamp > 5000) {
+              fetchAndCache(target.cleanSym, interval, target.isFutures).catch(() => {});
+            }
+          } else {
             rawText = await fetchAndCache(target.cleanSym, interval, target.isFutures);
           }
 
@@ -320,8 +345,8 @@ function redisFastCandleCachePlugin(): Plugin {
           const cached = memoryCache.get(tickerKey);
           const now = Date.now();
 
-          // Tier 1: Fresh cached ticker (< 1500ms old from background pre-warm loop)
-          if (cached && (now - cached.timestamp < 1500)) {
+          // Tier 1: Fresh cached ticker (< 4000ms old from background pre-warm loop)
+          if (cached && (now - cached.timestamp < 4000)) {
             res.setHeader('Content-Type', 'application/json');
             res.setHeader('X-Cache-Status', 'HIT-RAM-0MS');
             res.end(cached.data);
@@ -330,7 +355,7 @@ function redisFastCandleCachePlugin(): Plugin {
 
           // Tier 2: Stale cache: return immediately and trigger background refresh (0ms response)
           if (cached) {
-            fetchAndCacheTicker(rawSym).catch(() => {});
+            fetchAndCacheTicker(target.cleanSym).catch(() => {});
             res.setHeader('Content-Type', 'application/json');
             res.setHeader('X-Cache-Status', 'HIT-STALE-REFRESHING');
             res.end(cached.data);
@@ -338,7 +363,7 @@ function redisFastCandleCachePlugin(): Plugin {
           }
 
           // Tier 3: Cold start miss: fetch once synchronously
-          await fetchAndCacheTicker(rawSym);
+          await fetchAndCacheTicker(target.cleanSym);
           const fresh = memoryCache.get(tickerKey);
           if (fresh) {
             res.setHeader('Content-Type', 'application/json');

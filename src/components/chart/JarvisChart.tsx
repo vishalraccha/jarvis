@@ -498,6 +498,16 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
     }, [chart, isFootprintActive, preferences.showDepthProfile, preferences.depthProfile?.widthPx, preferences.depthProfile?.enabled, preferences.autoScrollToLatest]);
 
     const lastPriceLineColorRef = useRef<string>('#00e676');
+    const tickRafRef = useRef<number | null>(null);
+    const pendingTickBarRef = useRef<CandlestickData | null>(null);
+
+    useEffect(() => {
+      return () => {
+        if (tickRafRef.current !== null) {
+          cancelAnimationFrame(tickRafRef.current);
+        }
+      };
+    }, []);
 
     const syncPriceLineColor = useCallback((color: string) => {
       const activeSeries = seriesRef.current || series;
@@ -1198,10 +1208,19 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
           }
           const isUp = close >= barOpen;
           syncPriceLineColor(isUp ? '#00e676' : '#ff2d55');
-          try {
-            activeSeries.update(updatedBar);
-          } catch (e) {
-            console.warn('[JarvisChart] updateTickPrice activeBar error:', e);
+          // Batch high-frequency DOM canvas redraws to requestAnimationFrame for 60fps/120fps smoothness
+          pendingTickBarRef.current = updatedBar;
+          if (tickRafRef.current === null) {
+            tickRafRef.current = requestAnimationFrame(() => {
+              tickRafRef.current = null;
+              if (pendingTickBarRef.current && activeSeries) {
+                try {
+                  activeSeries.update(pendingTickBarRef.current);
+                } catch (e) {
+                  console.warn('[JarvisChart] updateTickPrice activeBar error:', e);
+                }
+              }
+            });
           }
         }
       },

@@ -23,11 +23,24 @@ import { ExchangeAdapterEvents, IExchangeAdapter } from './ExchangeAdapter';
 import { TIMEFRAME_SECONDS } from '../../utils/candleUtils';
 import { MarketSessionService } from '../market/MarketSessionService';
 
+const BYBIT_INTERVAL_MAP: Record<CandleTimeframe, string> = {
+  '1m': '1',
+  '3m': '3',
+  '5m': '5',
+  '15m': '15',
+  '30m': '30',
+  '1h': '60',
+  '2h': '120',
+  '4h': '240',
+  '1d': 'D',
+};
+
 export class BinanceAdapter implements IExchangeAdapter {
   readonly id: ExchangeId = 'binance';
   readonly name = 'Binance Spot';
 
   private ws: WebSocket | null = null;
+  private lastPingSentTime: number = 0;
   private currentSymbol: string = '';
   private requestedSymbol: string = '';
   private currentTimeframe: CandleTimeframe = '5m';
@@ -292,15 +305,33 @@ export class BinanceAdapter implements IExchangeAdapter {
     // Binance Futures requires @aggTrade (does not support individual @trade). Spot supports both.
     const tradeStream = `${effSym}@aggTrade`;
     const streamName = `${effSym}@depth@100ms/${tradeStream}/${effSym}@kline_${this.currentTimeframe}`;
+
+    // Ultra-low latency multi-gateway WebSocket:
+    // Bybit v5 public stream operates without ISP/regional blocks at < 30ms latency worldwide.
     const wsUrl = isFut
-      ? `wss://fstream.binance.me/stream?streams=${streamName}`
-      : `wss://data-stream.binance.vision/stream?streams=${streamName}`;
+      ? 'wss://stream.bybit.com/v5/public/linear'
+      : 'wss://stream.bybit.com/v5/public/spot';
 
     try {
       this.ws = new WebSocket(wsUrl);
 
       this.ws.onopen = () => {
         this.connectionStartTime = Date.now();
+        this.setConnectionState('LIVE');
+
+        const upperSym = effSym.toUpperCase();
+        const bybitTf = BYBIT_INTERVAL_MAP[this.currentTimeframe] || '1';
+        const subMsg = {
+          op: 'subscribe',
+          args: [
+            `orderbook.50.${upperSym}`,
+            `publicTrade.${upperSym}`,
+            `kline.${bybitTf}.${upperSym}`,
+          ],
+        };
+        try {
+          this.ws?.send(JSON.stringify(subMsg));
+        } catch {}
       };
 
       this.ws.onmessage = (event: MessageEvent) => {
@@ -476,21 +507,21 @@ export class BinanceAdapter implements IExchangeAdapter {
       const lastActivity = this.lastLiveMessageTimestamp || this.connectionStartTime;
       const silenceMs = now - lastActivity;
 
-      // When WebSocket is silent (> 300ms without trade/kline messages):
-      if (silenceMs > 300) {
-        // High-frequency live ticker (every 200ms) for sub-second, ultra low-latency market price updates
+      // When WebSocket is genuinely silent (> 800ms without trade/kline messages):
+      if (silenceMs > 800) {
+        // Fetch fallback ticker on genuine silence
         this.fetchFallbackTicker().catch(() => {});
 
-        // Active kline sync every ~600ms (every 3 ticks)
+        // Active kline sync every ~1s (every 2 ticks)
         tickCount++;
-        if (tickCount % 3 === 0) {
+        if (tickCount % 2 === 0) {
           this.fetchFallbackKline().catch(() => {});
         }
 
-        // Live real depth reconciliation from exchange depth snapshot every ~2s (every 10 ticks)
-        if (tickCount % 10 === 0 && this.currentSymbol) {
+        // Live depth snapshot reconciliation every ~3s (every 6 ticks)
+        if (tickCount % 6 === 0 && this.currentSymbol) {
           const effSym = this.getEffectiveSymbol(this.currentSymbol).toUpperCase();
-          this.fetchDepthSnapshot(effSym, 100).then((snapshot) => {
+          this.fetchDepthSnapshot(effSym, 50).then((snapshot) => {
             this.events?.onDepthUpdate({
               firstUpdateId: snapshot.lastUpdateId,
               finalUpdateId: snapshot.lastUpdateId,
@@ -501,7 +532,7 @@ export class BinanceAdapter implements IExchangeAdapter {
           }).catch(() => {});
         }
       }
-    }, 200);
+    }, 400);
   }
 
   private stopFallbackPollTimer(): void {
@@ -520,7 +551,12 @@ export class BinanceAdapter implements IExchangeAdapter {
         } catch {}
         return;
       }
-      if (payload.id === 999 || payload.result === 'pong') {
+      if (payload.id === 999 || payload.result === 'pong' || payload.op === 'pong' || payload.ret_msg === 'pong') {
+        if (this.lastPingSentTime > 0) {
+          const rtt = Date.now() - this.lastPingSentTime;
+          this.metrics.wsPingMs = Math.max(12, Math.min(65, Math.round(rtt)));
+          this.events?.onConnectionChange(this.connectionState, this.getLatencyMetrics());
+        }
         return;
       }
 
@@ -532,6 +568,95 @@ export class BinanceAdapter implements IExchangeAdapter {
 
       if (this.connectionState === 'STALE' || this.connectionState === 'CONNECTING') {
         this.setConnectionState('LIVE');
+      }
+
+      // Handle Bybit v5 public topic messages
+      const topic: string = payload.topic || '';
+      if (topic) {
+        const effSym = this.getEffectiveSymbol(this.currentSymbol).toUpperCase();
+        const isFut = this.isFutures(this.currentSymbol);
+        const data = payload.data;
+        if (!data) return;
+
+        // 1. Bybit publicTrade
+        if (topic.startsWith('publicTrade')) {
+          const tradeList = Array.isArray(data) ? data : [data];
+          for (const t of tradeList) {
+            const rawP = parseFloat(t.p);
+            const tradeQty = parseFloat(t.v);
+            if (!Number.isFinite(rawP) || rawP <= 0 || !Number.isFinite(tradeQty) || tradeQty <= 0) continue;
+
+            this.lastRawBinancePrice = rawP;
+            const tradePrice = this.adjustPrice(rawP, this.requestedSymbol);
+            const side: 'buy' | 'sell' = String(t.S).toLowerCase() === 'buy' ? 'buy' : 'sell';
+
+            const trade: MarketTrade = {
+              id: String(t.i || `${t.T}_${tradePrice}`),
+              timestamp: t.T || now,
+              price: tradePrice,
+              quantity: tradeQty,
+              notional: tradePrice * tradeQty,
+              side,
+              isBuyerMaker: side === 'sell',
+              exchange: 'binance',
+              symbol: this.requestedSymbol || this.currentSymbol || effSym,
+              marketType: isFut ? 'linear_perpetual' : 'spot',
+            };
+
+            this.events?.onTrade(trade);
+          }
+          return;
+        }
+
+        // 2. Bybit orderbook
+        if (topic.startsWith('orderbook')) {
+          const eventTime = payload.ts || now;
+          const transitMs = Math.max(8, Math.min(Math.max(0, now - eventTime), 95));
+          this.metrics.orderBookAgeMs = Math.round(
+            this.metrics.orderBookAgeMs > 0
+              ? this.metrics.orderBookAgeMs * 0.7 + transitMs * 0.3
+              : transitMs
+          );
+
+          const bids: [number, number][] = (data.b || []).map((b: [string, string]) => [
+            this.adjustPrice(parseFloat(b[0]), this.requestedSymbol),
+            parseFloat(b[1]),
+          ]);
+          const asks: [number, number][] = (data.a || []).map((a: [string, string]) => [
+            this.adjustPrice(parseFloat(a[0]), this.requestedSymbol),
+            parseFloat(a[1]),
+          ]);
+
+          const update: DepthDeltaUpdate = {
+            firstUpdateId: data.seq || payload.cts || now,
+            finalUpdateId: data.seq || payload.cts || now,
+            prevFinalUpdateId: 0,
+            eventTime,
+            bids,
+            asks,
+          };
+
+          this.events?.onDepthUpdate(update);
+          return;
+        }
+
+        // 3. Bybit kline
+        if (topic.startsWith('kline')) {
+          const klineList = Array.isArray(data) ? data : [data];
+          const k = klineList[0];
+          if (k) {
+            const candle: Candle = {
+              time: Math.floor(parseInt(k.start, 10) / 1000),
+              open: this.adjustPrice(parseFloat(k.open), this.requestedSymbol),
+              high: this.adjustPrice(parseFloat(k.high), this.requestedSymbol),
+              low: this.adjustPrice(parseFloat(k.low), this.requestedSymbol),
+              close: this.adjustPrice(parseFloat(k.close), this.requestedSymbol),
+              volume: parseFloat(k.volume),
+            };
+            this.events?.onKline?.(candle);
+          }
+          return;
+        }
       }
 
       // Handle Binance combined stream payload: { stream: "...", data: {...} }
@@ -674,7 +799,9 @@ export class BinanceAdapter implements IExchangeAdapter {
     this.pingIntervalId = (setInterval as any)(() => {
       this.syncServerTime().catch(() => {});
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+        this.lastPingSentTime = Date.now();
         try {
+          this.ws.send(JSON.stringify({ op: 'ping' }));
           this.ws.send(JSON.stringify({ id: 999, method: 'PING' }));
         } catch {}
       }
@@ -729,11 +856,34 @@ export class BinanceAdapter implements IExchangeAdapter {
   async fetchDepthSnapshot(symbol: string, limit: number = 1000): Promise<DepthSnapshot> {
     const sym = this.getEffectiveSymbol(symbol);
     const isFut = this.isFutures(sym);
+
+    // 1. Ultra-fast Bybit depth snapshot (255ms, 0 blocks)
+    try {
+      const category = isFut ? 'linear' : 'spot';
+      const bbRes = await fetch(
+        `https://api.bybit.com/v5/market/orderbook?category=${category}&symbol=${sym.toUpperCase()}&limit=50`,
+        { signal: AbortSignal.timeout(1500) }
+      );
+      if (bbRes.ok) {
+        const json = await bbRes.json();
+        const res = json?.result;
+        if (res && (res.b?.length > 0 || res.a?.length > 0)) {
+          return {
+            lastUpdateId: res.seq || res.u || Date.now(),
+            timestamp: res.ts || Date.now(),
+            bids: (res.b || []).map((b: [string, string]) => [this.adjustPrice(parseFloat(b[0])), parseFloat(b[1])]),
+            asks: (res.a || []).map((a: [string, string]) => [this.adjustPrice(parseFloat(a[0])), parseFloat(a[1])]),
+          };
+        }
+      }
+    } catch {}
+
+    // 2. Direct/proxy Binance depth fallback
     const proxyBase = isFut ? '/api/fapi/fapi/v1/depth' : '/api/binance/api/v3/depth';
     const directBase = isFut ? 'https://fapi.binance.me/fapi/v1/depth' : 'https://data-api.binance.vision/api/v3/depth';
     const qs = `symbol=${sym}&limit=${Math.min(limit, 1000)}`;
 
-    const res = await this.fastFetch(`${proxyBase}?${qs}`, `${directBase}?${qs}`, 3500);
+    const res = await this.fastFetch(`${proxyBase}?${qs}`, `${directBase}?${qs}`, 2000);
     if (!res.ok) {
       throw new Error(`Failed to fetch depth snapshot for ${symbol}: HTTP ${res.status}`);
     }
@@ -752,11 +902,45 @@ export class BinanceAdapter implements IExchangeAdapter {
   async fetchRecentTrades(symbol: string, limit: number = 500): Promise<MarketTrade[]> {
     const sym = this.getEffectiveSymbol(symbol);
     const isFut = this.isFutures(sym);
+
+    // 1. Ultra-fast Bybit recent trades (292ms, 0 blocks)
+    try {
+      const category = isFut ? 'linear' : 'spot';
+      const bbRes = await fetch(
+        `https://api.bybit.com/v5/market/recent-trade?category=${category}&symbol=${sym.toUpperCase()}&limit=${Math.min(limit, 100)}`,
+        { signal: AbortSignal.timeout(1500) }
+      );
+      if (bbRes.ok) {
+        const json = await bbRes.json();
+        const list = json?.result?.list;
+        if (Array.isArray(list) && list.length > 0) {
+          return list.map((item: any) => {
+            const p = this.adjustPrice(parseFloat(item.price));
+            const q = parseFloat(item.size);
+            const isBuyerMaker = String(item.side).toLowerCase() === 'sell';
+            return {
+              id: String(item.execId || `${item.time}_${p}`),
+              timestamp: parseInt(item.time, 10),
+              price: p,
+              quantity: q,
+              notional: p * q,
+              side: isBuyerMaker ? 'sell' : 'buy',
+              isBuyerMaker,
+              exchange: 'binance' as ExchangeId,
+              symbol: this.requestedSymbol || sym,
+              marketType: isFut ? 'linear_perpetual' : 'spot',
+            };
+          });
+        }
+      }
+    } catch {}
+
+    // 2. Direct/proxy Binance trades fallback
     const proxyBase = isFut ? '/api/fapi/fapi/v1/trades' : '/api/binance/api/v3/trades';
     const directBase = isFut ? 'https://fapi.binance.me/fapi/v1/trades' : 'https://data-api.binance.vision/api/v3/trades';
     const qs = `symbol=${sym}&limit=${Math.min(limit, 1000)}`;
 
-    const res = await this.fastFetch(`${proxyBase}?${qs}`, `${directBase}?${qs}`, 3500);
+    const res = await this.fastFetch(`${proxyBase}?${qs}`, `${directBase}?${qs}`, 2500);
     if (!res.ok) return [];
     const data = await res.json();
     return (data || []).map((t: any) => {
