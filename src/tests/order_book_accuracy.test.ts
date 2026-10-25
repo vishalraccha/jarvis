@@ -182,4 +182,68 @@ describe('Order Book Accuracy & Mathematical Precision Suite', () => {
     expect(maxBid).toBeLessThan(minAsk);
     expect(minAsk - maxBid).toBeCloseTo(0.10, 2);
   });
+
+  it('6. Reset clears synchronization cooldown allowing instant re-synchronization on symbol switch', async () => {
+    let syncCount = 0;
+    const mockAdapter: Partial<IExchangeAdapter> = {
+      fetchDepthSnapshot: async () => {
+        syncCount++;
+        return {
+          lastUpdateId: 6000 + syncCount,
+          timestamp: Date.now(),
+          bids: [[4000, 10]],
+          asks: [[4001, 10]],
+        };
+      },
+      fetchRecentTrades: async () => [],
+    };
+
+    // First sync
+    await orderBook.synchronize(mockAdapter as IExchangeAdapter, 'BTCUSDT');
+    expect(syncCount).toBe(1);
+
+    // Resetting book (e.g. on timeframe or symbol change) must clear cooldown
+    orderBook.reset();
+    expect(orderBook.getBidQuantityAtPrice(4000)).toBe(0);
+
+    // Immediate second sync must NOT be blocked by cooldown
+    await orderBook.synchronize(mockAdapter as IExchangeAdapter, 'BTCUSDT');
+    expect(syncCount).toBe(2);
+    expect(orderBook.getBidQuantityAtPrice(4000)).toBe(10);
+  });
+
+  it('7. Safety watchdog triggers background sync when bids or asks drop to zero', async () => {
+    let resyncTriggered = false;
+    const mockAdapter: Partial<IExchangeAdapter> = {
+      fetchDepthSnapshot: async () => {
+        resyncTriggered = true;
+        return {
+          lastUpdateId: 7000,
+          timestamp: Date.now(),
+          bids: [[4000, 20]],
+          asks: [[4001, 20]],
+        };
+      },
+    };
+
+    // Initialize book in INITIALIZING state
+    orderBook.reset();
+    expect(orderBook.getStats().bidLevelsCount).toBe(0);
+
+    // When delta arrives into an empty book, watchdog triggers background sync
+    orderBook.handleDepthUpdate(
+      {
+        firstUpdateId: 7001,
+        finalUpdateId: 7001,
+        eventTime: Date.now(),
+        bids: [],
+        asks: [[4001, 5]],
+      },
+      mockAdapter as IExchangeAdapter,
+      'BTCUSDT'
+    );
+
+    expect(resyncTriggered).toBe(true);
+  });
 });
+

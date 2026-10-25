@@ -237,6 +237,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
   const latestCandlesRef = useRef<any[]>([]);
   const [renderedCandles, setRenderedCandles] = useState<Candle[]>([]);
   const currentInstrumentKeyRef = useRef<string>('');
+  const currentSymbolKeyRef = useRef<string>('');
   const lastTickTimeRef = useRef<number>(0);
   const lastTickPriceRef = useRef<number>(0);
 
@@ -270,6 +271,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
   const loadCandles = useCallback(async (symbol: string, timeframe: any, exchange: ExchangeId = preferencesRef.current.exchange) => {
     const cacheKey = `${exchange}_${symbol}_${timeframe}`;
     const adapter = getAdapter(exchange);
+    const targetInst = InstrumentRegistry.getInstrument(symbol, exchange);
 
     // Cancel any background pagination from previous symbol/timeframe
     if (progressiveTimerRef.current !== null) {
@@ -312,12 +314,17 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
             exchange === preferencesRef.current.exchange &&
             timeframe === preferencesRef.current.timeframe
           ) {
-            latestCandlesRef.current = backendCandles;
-            setRenderedCandles(backendCandles);
-            chartRef.current?.updateCandles(backendCandles);
-            seedEngines(backendCandles, symbol, timeframe, exchange);
-            indexedDBCache.saveCandles(symbol, timeframe, backendCandles, exchange);
-            return;
+            const filteredBackend = backendCandles.filter(
+              (c) => !MarketSessionService.isCandleInClosedSession(targetInst.marketSchedule, c.time)
+            );
+            if (filteredBackend.length > 0) {
+              latestCandlesRef.current = filteredBackend;
+              setRenderedCandles(filteredBackend);
+              chartRef.current?.updateCandles(filteredBackend);
+              seedEngines(filteredBackend, symbol, timeframe, exchange);
+              indexedDBCache.saveCandles(symbol, timeframe, filteredBackend, exchange);
+              return;
+            }
           }
         }
       } catch (err) {
@@ -333,11 +340,16 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
       exchange === preferencesRef.current.exchange &&
       timeframe === preferencesRef.current.timeframe
     ) {
-      latestCandlesRef.current = ramCandles;
-      setRenderedCandles(ramCandles);
-      chartRef.current?.updateCandles(ramCandles);
-      seedEngines(ramCandles, symbol, timeframe, exchange);
-      hasRendered = true;
+      const filteredRam = ramCandles.filter(
+        (c) => !MarketSessionService.isCandleInClosedSession(targetInst.marketSchedule, c.time)
+      );
+      if (filteredRam.length > 0) {
+        latestCandlesRef.current = filteredRam;
+        setRenderedCandles(filteredRam);
+        chartRef.current?.updateCandles(filteredRam);
+        seedEngines(filteredRam, symbol, timeframe, exchange);
+        hasRendered = true;
+      }
     }
 
     // TIER 2: IndexedDB Local Cache (< 3ms) if not already rendered from RAM
@@ -353,14 +365,15 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
           exchange === preferencesRef.current.exchange &&
           timeframe === preferencesRef.current.timeframe
         ) {
-          // Purge any rogue cross-symbol outliers and align timestamps to timeframe grid
+          // Purge any rogue cross-symbol outliers, closed session weekend bars, and align timestamps to timeframe grid
           dbCached = dbCached.filter((c) =>
             Number.isFinite(c.time) && c.time > 0 &&
             Number.isFinite(c.open) && c.open > 10 &&
             Number.isFinite(c.high) && c.high > 10 &&
             Number.isFinite(c.low) && c.low > 10 &&
             Number.isFinite(c.close) && c.close > 10 &&
-            c.low <= c.high
+            c.low <= c.high &&
+            !MarketSessionService.isCandleInClosedSession(targetInst.marketSchedule, c.time)
           ).map((c) => ({
             ...c,
             time: (Math.floor(c.time / tfSec) * tfSec) as any,
@@ -417,7 +430,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
             return;
           }
 
-          // Filter out cross-symbol outliers, zero/negative prices, and align to timeframe grid
+          // Filter out cross-symbol outliers, closed session weekend bars, zero/negative prices, and align to timeframe grid
           const isGold = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase() === 'GC';
           const tfSec = TIMEFRAME_SECONDS[timeframe] || 60;
           const validBars = freshCandles.filter((c) =>
@@ -426,7 +439,8 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
             Number.isFinite(c.high) && c.high > 10 &&
             Number.isFinite(c.low) && c.low > 10 &&
             Number.isFinite(c.close) && c.close > 10 &&
-            c.low <= c.high
+            c.low <= c.high &&
+            !MarketSessionService.isCandleInClosedSession(targetInst.marketSchedule, c.time)
           ).map((c) => ({
             ...c,
             time: (Math.floor(c.time / tfSec) * tfSec) as any,
@@ -505,8 +519,9 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
       if (res.ok) {
         const olderCandles: Candle[] = await res.json();
         if (Array.isArray(olderCandles) && olderCandles.length > 0) {
-          latestCandlesRef.current = [...olderCandles, ...latestCandlesRef.current];
-          setRenderedCandles(latestCandlesRef.current);
+          const merged = mergeAndDeduplicateCandles(olderCandles, latestCandlesRef.current, timeframe);
+          latestCandlesRef.current = merged;
+          setRenderedCandles(merged);
           chartRef.current?.prependOlderCandles(olderCandles);
         } else {
           hasReachedEarliestHistoryRef.current = true;
@@ -543,19 +558,26 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
     // Reset in-flight requests (do NOT clear chart to pitch black; loadCandles paints cached bars in 0ms)
     inFlightCandleLoadsRef.current.clear();
 
-    // Reset book and engines on symbol/exchange/timeframe change
-    orderBook.reset();
-    heatmap.clear();
-    bubbles.clear();
+    // Only reset the live order book when changing the symbol or exchange!
+    // Changing timeframe (e.g. 1m to 15m) keeps the continuous live order book and heatmap active!
+    const symbolKey = `${exchange}_${symbol}`;
+    const isNewSymbol = currentSymbolKeyRef.current !== symbolKey;
+    if (isNewSymbol) {
+      currentSymbolKeyRef.current = symbolKey;
+      orderBook.reset();
+      heatmap.clear();
+      bubbles.clear();
+      shiftDetector.clear();
+      const defaultTick = getSymbolDefaultFootprintTick(symbol);
+      footprintEngineRef.current.clear();
+      footprintEngineRef.current.setSymbol(symbol, exchange, defaultTick);
+      footprintEngineRef.current.setOrderBook(orderBookRef.current);
+      prevSliceRef.current = null;
+    }
+
     bubbles.setTimeframe(preferences.timeframe);
-    shiftDetector.clear();
-    const defaultTick = getSymbolDefaultFootprintTick(symbol);
-    footprintEngineRef.current.clear();
-    footprintEngineRef.current.setSymbol(symbol, exchange, defaultTick);
-    footprintEngineRef.current.setOrderBook(orderBookRef.current);
     footprintEngineRef.current.setTimeframe(preferences.timeframe);
     footprintEngineRef.current.updateSettings(preferences.footprint);
-    prevSliceRef.current = null;
 
     const instrument = InstrumentRegistry.getInstrument(symbol, exchange);
 
@@ -565,8 +587,8 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
     // Initial klines fetch for selected timeframe (renders in 0-3ms from RAM/IDB cache)
     loadCandles(symbol, preferences.timeframe, exchange);
 
-    // Start Order Book Snapshot and Sequence Synchronization ONLY if supported
-    if (instrument.supportsOrderBook) {
+    // Start Order Book Snapshot and Sequence Synchronization on symbol change or initial connect
+    if (instrument.supportsOrderBook && (isNewSymbol || orderBook.getStats().bidLevelsCount === 0)) {
       orderBook.synchronize(adapter, symbol).then(async () => {
         // Re-seed heatmap with synchronized order book + latest candles
         if (latestCandlesRef.current.length > 0 && instrument.supportsHeatmap) {
@@ -625,9 +647,22 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         }
 
         // Keep latestCandlesRef synchronized on every tick
+        const inst = InstrumentRegistry.getInstrument(trade.symbol || preferencesRef.current.symbol, preferencesRef.current.exchange);
+        const session = MarketSessionService.getSessionInfo(inst.marketSchedule);
+        if (!session.isOpen) {
+          // Market closed - update price label only, do NOT form or advance candles
+          chartRef.current?.updateTickPrice(trade.price, trade.timestamp);
+          return;
+        }
+
         const tfSec = TIMEFRAME_SECONDS[preferencesRef.current.timeframe] || 60;
         const tradeSec = Math.floor((trade.timestamp || Date.now()) / 1000);
         const barTime = Math.floor(tradeSec / tfSec) * tfSec;
+        if (MarketSessionService.isCandleInClosedSession(inst.marketSchedule, barTime)) {
+          chartRef.current?.updateTickPrice(trade.price, trade.timestamp);
+          return;
+        }
+
         if (latestCandlesRef.current.length > 0) {
           const last = latestCandlesRef.current[latestCandlesRef.current.length - 1];
           if (last.time === barTime) {
@@ -664,6 +699,12 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         // Verify candle matches current timeframe interval and align
         const tfSec = TIMEFRAME_SECONDS[preferencesRef.current.timeframe] || 60;
         const alignedCandle = { ...candle, time: Math.floor(candle.time / tfSec) * tfSec };
+
+        const inst = InstrumentRegistry.getInstrument(preferencesRef.current.symbol, preferencesRef.current.exchange);
+        const session = MarketSessionService.getSessionInfo(inst.marketSchedule);
+        if (!session.isOpen || MarketSessionService.isCandleInClosedSession(inst.marketSchedule, alignedCandle.time)) {
+          return;
+        }
 
         // Keep latestCandlesRef synchronized on klines
         if (latestCandlesRef.current.length > 0) {
@@ -705,6 +746,10 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
       const curTf = preferencesRef.current.timeframe;
       if (curExchange !== exchange || curSymbol !== symbol) return;
 
+      const inst = InstrumentRegistry.getInstrument(curSymbol, curExchange);
+      const session = MarketSessionService.getSessionInfo(inst.marketSchedule);
+      if (!session.isOpen) return; // Never advance or sync candles when market is closed
+
       syncTickCount++;
       const nowSec = Math.floor(Date.now() / 1000);
       const tfSec = TIMEFRAME_SECONDS[curTf] || 60;
@@ -732,7 +777,8 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
               Number.isFinite(c.high) && c.high > 10 &&
               Number.isFinite(c.low) && c.low > 10 &&
               Number.isFinite(c.close) && c.close > 10 &&
-              c.low <= c.high
+              c.low <= c.high &&
+              !MarketSessionService.isCandleInClosedSession(inst.marketSchedule, c.time)
             ).map((c) => ({
               ...c,
               time: (Math.floor(c.time / tfSec) * tfSec) as any,

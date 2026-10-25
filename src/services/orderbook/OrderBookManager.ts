@@ -124,6 +124,7 @@ export class OrderBookManager {
     this.lastValidUpdateId = 0;
     this.cachedBestBid = 0;
     this.cachedBestAsk = 0;
+    this.lastResyncAttemptTime = 0; // Clear cooldown immediately on reset
     this.syncStatus = 'INITIALIZING';
     this.isResyncing = false;
     this.notifyListeners();
@@ -135,8 +136,15 @@ export class OrderBookManager {
   async synchronize(adapter: IExchangeAdapter, symbol: string): Promise<void> {
     if (this.isResyncing) return;
     const now = Date.now();
-    if (now - this.lastResyncAttemptTime < 4000) {
-      return; // Cooldown active to protect against request storms
+    if (now - this.lastResyncAttemptTime < 2500) {
+      // Defer resync so synchronization is never permanently skipped after rapid state changes
+      const delay = 2500 - (now - this.lastResyncAttemptTime);
+      setTimeout(() => {
+        if (this.syncStatus !== 'SYNCHRONIZED' && !this.isResyncing) {
+          this.synchronize(adapter, symbol).catch(() => {});
+        }
+      }, delay);
+      return;
     }
     this.lastResyncAttemptTime = now;
     this.isResyncing = true;
@@ -222,6 +230,9 @@ export class OrderBookManager {
       this.applyUpdateDirect(update);
       this.updateBestBidAsk();
       this.notifyListeners();
+      if (adapter && symbol && !this.isResyncing && Date.now() - this.lastResyncAttemptTime > 2500) {
+        this.synchronize(adapter, symbol).catch(() => {});
+      }
       return;
     }
 
@@ -237,7 +248,7 @@ export class OrderBookManager {
       // Reconcile snapshot in background if adapter provided
       if (adapter && symbol && !this.isResyncing) {
         const now = Date.now();
-        if (now - this.lastResyncAttemptTime > 5000) {
+        if (now - this.lastResyncAttemptTime > 4000) {
           this.lastResyncAttemptTime = now;
           adapter.fetchDepthSnapshot(symbol, 1000).then((snapshot) => {
             for (const [p, q] of snapshot.bids) {
@@ -269,6 +280,14 @@ export class OrderBookManager {
     this.applyUpdateDirect(update);
     this.updateBestBidAsk();
     this.notifyListeners();
+
+    // Safety watchdog: If either side has dropped to 0 levels, auto-resync immediately
+    if ((this.bids.size === 0 || this.asks.size === 0) && adapter && symbol && !this.isResyncing) {
+      const now = Date.now();
+      if (now - this.lastResyncAttemptTime > 2500) {
+        this.synchronize(adapter, symbol).catch(() => {});
+      }
+    }
   }
 
   /**

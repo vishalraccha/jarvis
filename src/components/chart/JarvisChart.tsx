@@ -108,6 +108,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
     const pendingCandlesRef = useRef<Candle[] | null>(null);
 
     const [dimensions, setDimensions] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+    const [hoveredCandle, setHoveredCandle] = useState<Candle | null>(null);
     const [hoveredBubble, setHoveredBubble] = useState<{ bubble: TradeBubble | null; x: number; y: number }>({
       bubble: null,
       x: 0,
@@ -152,6 +153,8 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
     const lower1SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
     const upper2SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
     const lower2SeriesRef = useRef<ISeriesApi<'Line'> | null>(null);
+    const hoveredCandleTimeRef = useRef<number | null>(null);
+    const crosshairMarkerElRef = useRef<HTMLDivElement | null>(null);
 
     // 1. Initialize Lightweight Chart
     useEffect(() => {
@@ -178,6 +181,10 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
             return (
               new Intl.DateTimeFormat('en-IN', {
                 timeZone: 'Asia/Kolkata',
+                weekday: 'short',
+                day: '2-digit',
+                month: 'short',
+                year: 'numeric',
                 hour: '2-digit',
                 minute: '2-digit',
                 second: '2-digit',
@@ -193,14 +200,20 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         crosshair: {
           mode: CrosshairMode.Normal,
           vertLine: {
-            color: 'rgba(0, 180, 216, 0.35)',
+            color: 'rgba(203, 213, 225, 0.45)',
             width: 1,
             style: 2, // dashed
+            visible: true,
+            labelVisible: true,
+            labelBackgroundColor: '#1e222d',
           },
           horzLine: {
-            color: 'rgba(0, 180, 216, 0.35)',
+            color: 'rgba(203, 213, 225, 0.45)',
             width: 1,
-            style: 2,
+            style: 2, // dashed
+            visible: true,
+            labelVisible: true,
+            labelBackgroundColor: '#1e222d',
           },
         },
         rightPriceScale: {
@@ -356,9 +369,58 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
           onLoadMoreHistoryRef.current();
         }
       };
-      tvChart.timeScale().subscribeVisibleLogicalRangeChange(handleLogicalRangeChange);
+      // Crosshair move listener to inspect candle day, time, and OHLC with silky smooth 120 FPS performance
+      const handleCrosshairMove = (param: any) => {
+        // 1. Move TradingView-style (+) plus marker button smoothly along right price scale edge
+        if (crosshairMarkerElRef.current) {
+          if (param && param.point && typeof param.point.y === 'number' && param.point.y >= 0) {
+            const chartW = chartHostRef.current?.clientWidth || dimensions.width;
+            const xPos = Math.max(0, chartW - 65);
+            crosshairMarkerElRef.current.style.opacity = '1';
+            crosshairMarkerElRef.current.style.transform = `translate3d(${xPos}px, ${Math.round(param.point.y) - 10}px, 0)`;
+          } else {
+            crosshairMarkerElRef.current.style.opacity = '0';
+          }
+        }
+
+        if (!param || !param.time) {
+          if (hoveredCandleTimeRef.current !== null) {
+            hoveredCandleTimeRef.current = null;
+            setHoveredCandle(null);
+          }
+          return;
+        }
+
+        const t = typeof param.time === 'number' ? param.time : (param.time.timestamp || param.time);
+        if (hoveredCandleTimeRef.current === t) {
+          // Same candle: bypass React component re-rendering to keep crosshair moving at 120 FPS
+          return;
+        }
+        hoveredCandleTimeRef.current = t;
+
+        const data = param.seriesData?.get(candleSeries);
+        if (data && typeof data.close === 'number') {
+          setHoveredCandle({
+            time: t,
+            open: data.open,
+            high: data.high,
+            low: data.low,
+            close: data.close,
+            volume: data.volume || 0,
+          });
+        } else {
+          const found = allCandlesRef.current.find((c) => c.time === t);
+          if (found) {
+            setHoveredCandle(found);
+          } else {
+            setHoveredCandle(null);
+          }
+        }
+      };
+      tvChart.subscribeCrosshairMove(handleCrosshairMove);
 
       return () => {
+        tvChart.unsubscribeCrosshairMove(handleCrosshairMove);
         tvChart.timeScale().unsubscribeVisibleLogicalRangeChange(handleLogicalRangeChange);
         resizeObserver.disconnect();
         vwapSeriesRef.current = null;
@@ -449,9 +511,9 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
       const activeSeries = seriesRef.current || series;
       if (activeSeries) {
         const curColor = lastPriceLineColorRef.current || '#00e676';
-        const isDedicatedFootprint = preferences.chartMode === 'footprint';
+        const isDedicatedFootprint = preferences.chartMode === 'footprint' || isFootprintActive;
         if (isDedicatedFootprint) {
-          // In Dedicated Footprint mode, FootprintCanvas renders custom crisp wicks & outlines with internal bid x ask ladder
+          // When Footprint is active, FootprintCanvas renders custom crisp wicks & outlines with internal bid x ask ladder
           activeSeries.applyOptions({
             visible: true,
             upColor: 'transparent',
@@ -468,7 +530,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
             lastValueVisible: true,
           });
         } else {
-          // Standard candlestick mode (Works universally for Candles, Heatmap, Bubbles, DOM, and Footprint Overlay)
+          // Standard candlestick mode (Works universally for Candles, Heatmap, Bubbles, and DOM)
           const candlesVisible = preferences.showCandles !== false;
           activeSeries.applyOptions({
             visible: candlesVisible,
@@ -487,7 +549,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
           });
         }
       }
-    }, [series, preferences.showCandles, preferences.showCurrentPriceLine, preferences.chartMode]);
+    }, [series, preferences.showCandles, preferences.showCurrentPriceLine, preferences.chartMode, isFootprintActive]);
 
     // Reset current candle on timeframe or symbol change
     useEffect(() => {
@@ -814,18 +876,43 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         // Capture visible logical range before updating data
         const visibleRange = activeChart.timeScale().getVisibleLogicalRange();
 
-        // Merge: older first, then current
-        const mergedCandles = [...strictlyOlder, ...currentBars];
-        allCandlesRef.current = mergedCandles;
+        // Merge: older first, then current with strict ascending sort & deduplication
+        const tfSec = TIMEFRAME_SECONDS[preferences.timeframe] || 60;
+        const allBars = [...strictlyOlder, ...currentBars]
+          .filter((c) => Number.isFinite(c.time) && c.time > 0 && Number.isFinite(c.close) && c.close > 0)
+          .map((c) => ({
+            ...c,
+            time: (Math.floor(c.time / tfSec) * tfSec) as any,
+          }))
+          .sort((a, b) => a.time - b.time);
 
-        // Convert to TV candlestick data
-        const tvData: CandlestickData[] = mergedCandles.map((c) => ({
-          time: c.time as UTCTimestamp,
-          open: c.open,
-          high: c.high,
-          low: c.low,
-          close: c.close,
-        }));
+        const tvData: CandlestickData[] = [];
+        const mergedCandles: Candle[] = [];
+
+        for (const c of allBars) {
+          const t = c.time as UTCTimestamp;
+          if (tvData.length === 0 || (t as number) > (tvData[tvData.length - 1].time as number)) {
+            tvData.push({
+              time: t,
+              open: c.open,
+              high: c.high,
+              low: c.low,
+              close: c.close,
+            });
+            mergedCandles.push(c);
+          } else {
+            const lastTv = tvData[tvData.length - 1];
+            const lastMerged = mergedCandles[mergedCandles.length - 1];
+            lastTv.high = Math.max(lastTv.high, c.high);
+            lastTv.low = Math.min(lastTv.low, c.low);
+            lastTv.close = c.close;
+            lastMerged.high = lastTv.high;
+            lastMerged.low = lastTv.low;
+            lastMerged.close = c.close;
+          }
+        }
+
+        allCandlesRef.current = mergedCandles;
 
         try {
           activeSeries.setData(tvData);
@@ -930,8 +1017,8 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         let high = Number.isFinite(candle.high) && candle.high > 10 ? Math.max(candle.high, open, close) : Math.max(open, close);
         let low = Number.isFinite(candle.low) && candle.low > 10 ? Math.min(candle.low, open, close) : Math.min(open, close);
 
-        // Stale timestamp guard: ignore past klines that arrive out of order
-        if (cur && barTime < (cur.time as number)) {
+        // Stale timestamp guard: only ignore past klines that are genuinely older than 2 full bars
+        if (cur && barTime < (cur.time as number) - 2 * tfSec) {
           return;
         }
 
@@ -1047,8 +1134,8 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         const tradeSec = Math.floor(effectiveTimestamp / 1000);
         const barTime = (Math.floor(tradeSec / tfSec) * tfSec) as UTCTimestamp;
 
-        // Stale timestamp guard: ignore ticks older than the current bar
-        if (cur && barTime < (cur.time as number)) {
+        // Stale timestamp guard: only ignore ticks that are genuinely older than 2 full bars
+        if (cur && barTime < (cur.time as number) - 2 * tfSec) {
           return;
         }
 
@@ -1285,10 +1372,12 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
           height: '100%',
           overflow: 'hidden',
           background: '#080b11',
+          cursor: 'crosshair',
           touchAction: 'none',
         }}
         onMouseMove={handleContainerMouseMove}
         onMouseLeave={() => {
+          if (crosshairMarkerElRef.current) crosshairMarkerElRef.current.style.opacity = '0';
           handleHoverBubble(null, 0, 0);
           setHoveredZone({ zone: null, x: 0, y: 0 });
           setHoveredFootprintDebug({ debug: null, x: 0, y: 0 });
@@ -1317,6 +1406,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
             showDepthProfile={preferences.showDepthProfile && preferences.depthProfile?.enabled !== false}
             depthProfileWidth={dimensions.width > 0 && dimensions.width < 600 ? Math.min(preferences.depthProfile?.widthPx || 220, 140) : (preferences.depthProfile?.widthPx || 220)}
             showCandles={preferences.showCandles}
+            isFootprintActive={isFootprintActive}
             width={dimensions.width}
             height={dimensions.height}
           />
@@ -1411,6 +1501,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
           lastQuoteTime={lastQuoteTime || (allCandlesRef.current.length > 0 ? allCandlesRef.current[allCandlesRef.current.length - 1].time * 1000 : undefined)}
           showHeatmap={preferences.showHeatmap}
           showFootprint={preferences.showFootprint}
+          hoveredCandle={hoveredCandle}
         />
 
         {/* Trade Bubble, Liquidity Zone & Footprint Debug Precision Tooltip */}
@@ -1446,6 +1537,48 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
             height={dimensions.height}
           />
         )}
+
+        {/* TradingView-style smooth (+) marker on crosshair price line */}
+        <div
+          ref={crosshairMarkerElRef}
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            width: 20,
+            height: 20,
+            borderRadius: '50%',
+            background: '#1e222d',
+            border: '1px solid rgba(255, 255, 255, 0.25)',
+            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.6)',
+            color: '#f8fafc',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            fontSize: 14,
+            fontWeight: 800,
+            lineHeight: 1,
+            zIndex: 35,
+            opacity: 0,
+            pointerEvents: 'auto',
+            cursor: 'pointer',
+            transition: 'opacity 0.15s ease, background 0.15s ease, border-color 0.15s ease',
+            userSelect: 'none',
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.background = '#38bdf8';
+            e.currentTarget.style.color = '#080b11';
+            e.currentTarget.style.borderColor = '#38bdf8';
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.background = '#1e222d';
+            e.currentTarget.style.color = '#f8fafc';
+            e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.25)';
+          }}
+          title="TradingView Quick Order / Alert Marker (+)"
+        >
+          +
+        </div>
       </div>
     );
   }

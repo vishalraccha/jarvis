@@ -32,6 +32,7 @@ interface HeatmapCanvasProps {
   showDepthProfile?: boolean;
   depthProfileWidth?: number;
   showCandles?: boolean;
+  isFootprintActive?: boolean;
   onHoverBubble?: (bubble: TradeBubble | null, screenX: number, screenY: number) => void;
   onHoverZone?: (zone: LiquidityZone | null, screenX: number, screenY: number) => void;
   onUpdateBubbleCoords?: (coords: Array<{ bubble: TradeBubble; cx: number; cy: number; radius: number }>) => void;
@@ -51,6 +52,7 @@ export const HeatmapCanvas: React.FC<HeatmapCanvasProps> = ({
   showDepthProfile,
   depthProfileWidth,
   showCandles = true,
+  isFootprintActive = false,
   width,
   height,
 }) => {
@@ -195,7 +197,9 @@ export const HeatmapCanvas: React.FC<HeatmapCanvasProps> = ({
       const filterThreshold = heatmapEngine.getFilterThreshold(heatmapSettings, slices);
 
       ctx.save();
-      ctx.globalAlpha = Math.min(0.95, heatmapSettings.opacity);
+      const baseAlpha = Math.min(0.95, heatmapSettings.opacity);
+      // When footprint mode is active, dim the heatmap so footprint numbers are the primary readable layer
+      ctx.globalAlpha = isFootprintActive ? Math.min(baseAlpha, 0.20) : baseAlpha;
 
       // 1A. Authentic Bookmap ocean-blue background depth field
       const bgGrad = ctx.createLinearGradient(0, 0, 0, height);

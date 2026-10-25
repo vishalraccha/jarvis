@@ -7,7 +7,7 @@
 import React from 'react';
 import { InstrumentConfig, InstrumentRegistry } from '../../services/market/InstrumentRegistry';
 import { MarketSessionInfo, MarketSessionService } from '../../services/market/MarketSessionService';
-import { CandleTimeframe } from '../../types/market';
+import { Candle, CandleTimeframe } from '../../types/market';
 import { AlertTriangle, Clock, Info } from 'lucide-react';
 
 interface ChartHeaderOverlayProps {
@@ -18,6 +18,24 @@ interface ChartHeaderOverlayProps {
   lastQuoteTime?: number;
   showHeatmap: boolean;
   showFootprint: boolean;
+  hoveredCandle?: Candle | null;
+}
+
+function formatCandleDateTime(sec: number): string {
+  const date = new Date(sec * 1000);
+  return (
+    new Intl.DateTimeFormat('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      weekday: 'short',
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(date) + ' IST'
+  );
 }
 
 const ChartHeaderOverlayComponent: React.FC<ChartHeaderOverlayProps> = ({
@@ -28,6 +46,7 @@ const ChartHeaderOverlayComponent: React.FC<ChartHeaderOverlayProps> = ({
   lastQuoteTime,
   showHeatmap,
   showFootprint,
+  hoveredCandle,
 }) => {
   const instrument: InstrumentConfig = InstrumentRegistry.getInstrument(symbol);
   const session: MarketSessionInfo = MarketSessionService.getSessionInfo(instrument.marketSchedule);
@@ -204,6 +223,49 @@ const ChartHeaderOverlayComponent: React.FC<ChartHeaderOverlayProps> = ({
           </span>
         )}
       </div>
+
+      {/* Hovered / Inspected Candle Day, Time & OHLC HUD */}
+      {hoveredCandle && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            background: 'rgba(12, 16, 25, 0.92)',
+            backdropFilter: 'blur(8px)',
+            border: '1px solid rgba(255, 255, 255, 0.12)',
+            borderRadius: 6,
+            padding: '3px 10px',
+            fontSize: 11,
+            fontFamily: "'JetBrains Mono', monospace",
+            color: '#f8fafc',
+            boxShadow: '0 4px 14px rgba(0, 0, 0, 0.35)',
+            pointerEvents: 'auto',
+            width: 'fit-content',
+          }}
+        >
+          <span style={{ color: '#38bdf8', fontWeight: 700 }}>
+            {formatCandleDateTime(hoveredCandle.time)}
+          </span>
+          <span>
+            O <strong style={{ color: hoveredCandle.close >= hoveredCandle.open ? '#0ecb81' : '#f6465d' }}>{hoveredCandle.open.toFixed(2)}</strong>
+          </span>
+          <span>
+            H <strong style={{ color: hoveredCandle.close >= hoveredCandle.open ? '#0ecb81' : '#f6465d' }}>{hoveredCandle.high.toFixed(2)}</strong>
+          </span>
+          <span>
+            L <strong style={{ color: hoveredCandle.close >= hoveredCandle.open ? '#0ecb81' : '#f6465d' }}>{hoveredCandle.low.toFixed(2)}</strong>
+          </span>
+          <span>
+            C <strong style={{ color: hoveredCandle.close >= hoveredCandle.open ? '#0ecb81' : '#f6465d' }}>{hoveredCandle.close.toFixed(2)}</strong>
+          </span>
+          {hoveredCandle.volume !== undefined && hoveredCandle.volume > 0 && (
+            <span style={{ color: '#94a3b8' }}>
+              Vol <strong>{Math.round(hoveredCandle.volume)}</strong>
+            </span>
+          )}
+        </div>
+      )}
 
       {/* Feature Compatibility Warning (If Heatmap/Footprint is toggled on for unsupported instruments like XAUUSD Spot) */}
       {showFeatureWarning && instrument.unsupportedFeaturesNotice && (

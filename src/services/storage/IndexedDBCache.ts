@@ -28,7 +28,7 @@ export interface CacheStatus {
 }
 
 export class IndexedDBCache {
-  private dbName = 'jarvis_heatmap_cache_v1';
+  private dbName = 'jarvis_heatmap_cache_v2';
   private db: IDBDatabase | null = null;
   private isOpening = false;
   private pendingSliceBatch: StoredHeatmapRecord[] = [];

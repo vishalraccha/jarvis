@@ -28,22 +28,24 @@ interface FootprintCanvasProps {
 
 function formatVolumeNumber(vol: number): string {
   if (vol <= 0) return '0';
-  // Strictly integer values matching professional order-flow footprint (Image 2: "0.1 Lots")
-  // Converts fractional crypto units into clean integer lots (1 to 50):
-  const intVal = vol >= 10 ? Math.round(vol) : Math.max(1, Math.round(vol * 10));
-  if (intVal >= 1000000) return `${Math.round(intVal / 1000000)}M`;
-  if (intVal >= 10000) return `${Math.round(intVal / 1000)}K`;
-  return intVal.toString();
+  if (vol >= 1000000) return `${(vol / 1000000).toFixed(1)}M`;
+  if (vol >= 10000) return `${Math.round(vol / 1000)}K`;
+  if (vol >= 1000) return `${(vol / 1000).toFixed(1)}K`;
+  if (vol >= 10) return Math.round(vol).toString();
+  if (vol >= 1) return vol % 1 === 0 ? vol.toFixed(0) : vol.toFixed(1);
+  return vol.toFixed(2);
 }
 
 function formatDeltaNumber(delta: number): string {
   const sign = delta > 0 ? '+' : delta < 0 ? '-' : '';
   const abs = Math.abs(delta);
   if (abs === 0) return '0';
-  const intVal = abs >= 10 ? Math.round(abs) : Math.round(abs * 10);
-  if (intVal >= 1000000) return `${sign}${Math.round(intVal / 1000000)}M`;
-  if (intVal >= 10000) return `${sign}${Math.round(intVal / 1000)}K`;
-  return `${sign}${intVal}`;
+  if (abs >= 1000000) return `${sign}${(abs / 1000000).toFixed(1)}M`;
+  if (abs >= 10000) return `${sign}${Math.round(abs / 1000)}K`;
+  if (abs >= 1000) return `${sign}${(abs / 1000).toFixed(1)}K`;
+  if (abs >= 10) return `${sign}${Math.round(abs)}`;
+  if (abs >= 1) return `${sign}${abs % 1 === 0 ? abs.toFixed(0) : abs.toFixed(1)}`;
+  return `${sign}${abs.toFixed(2)}`;
 }
 
 const FootprintCanvasComponent: React.FC<FootprintCanvasProps> = ({
@@ -246,8 +248,8 @@ const FootprintCanvasComponent: React.FC<FootprintCanvasProps> = ({
       const slotLeft = cx - columnWidth / 2;
       const slotRight = cx + columnWidth / 2;
 
-      // Professional detail threshold: render footprint ladder whenever column is >= 26px
-      const isFullDetail = columnWidth >= 26 && settings.showBidAskText !== false;
+      // Professional detail threshold: render footprint ladder whenever column is >= 24px
+      const isFullDetail = columnWidth >= 24 && settings.showBidAskText !== false;
 
       // ============================================================
       // STRICT CANVAS CLIPPING:
@@ -259,30 +261,23 @@ const FootprintCanvasComponent: React.FC<FootprintCanvasProps> = ({
       ctx.clip();
 
       // ============================================================
-      // CASE A: ZOOMED IN (isFullDetail) -> FULL FOOTPRINT LADDER
+      // CASE A: ZOOMED IN (isFullDetail) -> FULL FOOTPRINT LADDER WITH CENTER CANDLE
       // ============================================================
       if (isFullDetail) {
-        // Vertical candle body bar on the left of slot
-        const bodyWidth = Math.max(3, Math.min(6, Math.round(columnWidth * 0.07)));
-        const bodyX = slotLeft + 1.5;
+        const ladderLeft = slotLeft;
+        const ladderRight = slotRight;
+        const ladderWidth = columnWidth;
 
-        ctx.fillStyle = bodyColor;
-        ctx.fillRect(bodyX, bodyTop, bodyWidth, bodyHeight);
+        // Center Candlestick dimensions (Exact like TradingView)
+        const candleBodyW = Math.max(5, Math.min(10, Math.round(columnWidth * 0.12)));
+        const candleX0 = cx - candleBodyW / 2;
+        const candleX1 = cx + candleBodyW / 2;
 
-        // Upper and lower wicks on left bar
-        ctx.strokeStyle = bodyColor;
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.moveTo(bodyX + bodyWidth / 2, yHigh);
-        ctx.lineTo(bodyX + bodyWidth / 2, bodyTop);
-        ctx.moveTo(bodyX + bodyWidth / 2, bodyTop + bodyHeight);
-        ctx.lineTo(bodyX + bodyWidth / 2, yLow);
-        ctx.stroke();
-
-        // Ladder layout strictly contained within candle column
-        const ladderLeft = bodyX + bodyWidth + 3;
-        const ladderRight = slotRight - 1.5;
-        const ladderWidth = Math.max(16, ladderRight - ladderLeft);
+        // Left Bid column and Right Ask column bounds
+        const bidW = Math.max(8, candleX0 - 1 - ladderLeft);
+        const askW = Math.max(8, ladderRight - (candleX1 + 1));
+        const leftCellMidX = ladderLeft + bidW / 2;
+        const rightCellMidX = (candleX1 + 1) + askW / 2;
 
         // Calculate actual vertical bucket pixel height
         let bucketPixelHeight = 16;
@@ -300,19 +295,25 @@ const FootprintCanvasComponent: React.FC<FootprintCanvasProps> = ({
           }
         }
 
-        // Dynamically scale font size both horizontally and vertically so numbers never collide
-        const maxFontForWidth = Math.max(6.5, Math.min(11, Math.floor(ladderWidth / 5.8)));
-        const maxFontForHeight = Math.max(6.5, Math.min(fontSize, Math.floor(bucketPixelHeight - 2)));
-        const adaptiveFontSize = Math.min(maxFontForWidth, maxFontForHeight);
+        // Calculate peak volumes for heat intensity
+        let maxBidVol = 0;
+        let maxAskVol = 0;
+        for (const lvl of sortedLevels) {
+          if (lvl.bidVolume > maxBidVol) maxBidVol = lvl.bidVolume;
+          if (lvl.askVolume > maxAskVol) maxAskVol = lvl.askVolume;
+        }
 
+        const adaptiveFontSize = Math.max(6.5, Math.min(11, Math.min(bucketPixelHeight - 2, bidW / 3.2)));
+
+        // 1. RENDER FOOTPRINT LEVEL CELLS (Bid on left, Ask on right)
         for (const lvl of sortedLevels) {
           const yBottom = series.priceToCoordinate(lvl.price);
           const yTop = series.priceToCoordinate(lvl.price + bucketSize);
           if (yBottom === null && yTop === null) continue;
 
-          const rowTop = yTop !== null ? yTop : (yBottom! - bucketPixelHeight);
-          const rowBottom = yBottom !== null ? yBottom : (yTop! + bucketPixelHeight);
-          const rowHeight = Math.max(1, rowBottom - rowTop);
+          const rowTop = yTop !== null && yBottom !== null ? Math.min(yTop, yBottom) : (yTop !== null ? yTop : yBottom! - bucketPixelHeight);
+          const rowBottom = yTop !== null && yBottom !== null ? Math.max(yTop, yBottom) : (yBottom !== null ? yBottom : yTop! + bucketPixelHeight);
+          const rowHeight = Math.max(2, rowBottom - rowTop);
           const yCenter = (rowTop + rowBottom) / 2;
 
           if (rowBottom < -20 || rowTop > height + 20) continue;
@@ -321,63 +322,98 @@ const FootprintCanvasComponent: React.FC<FootprintCanvasProps> = ({
           const isAskImb = lvl.isAskImbalance && settings.showImbalances;
           const isBidImb = lvl.isBidImbalance && settings.showImbalances;
 
-          // Optional subtle DOM resting depth background bar
-          if (lvl.domTotalLiquidity && lvl.domTotalLiquidity > 0) {
-            const domBarWidth = Math.min(ladderWidth * 0.40, Math.max(2, Math.log10(lvl.domTotalLiquidity + 1) * 6));
-            ctx.fillStyle = (lvl.domImbalance || 0) > 0 ? 'rgba(56, 189, 248, 0.09)' : 'rgba(246, 70, 93, 0.09)';
-            ctx.fillRect(ladderLeft, rowTop + 0.5, domBarWidth, rowHeight - 1);
+          // 1A. LEFT CELL: SELL AGGRESSOR (BID VOLUME)
+          ctx.fillStyle = 'rgba(13, 17, 28, 0.94)';
+          ctx.fillRect(ladderLeft, rowTop + 0.5, bidW, rowHeight - 1);
+
+          if (lvl.bidVolume > 0) {
+            const bidRatio = maxBidVol > 0 ? lvl.bidVolume / maxBidVol : 0;
+            const bidAlpha = 0.14 + 0.62 * bidRatio;
+            ctx.fillStyle = `rgba(220, 38, 38, ${bidAlpha.toFixed(3)})`;
+            ctx.fillRect(ladderLeft, rowTop + 0.5, bidW, rowHeight - 1);
           }
 
-          // POC Box outline strictly inside ladder bounds, matching authoritative price bucket
+          // 1B. RIGHT CELL: BUY AGGRESSOR (ASK VOLUME)
+          ctx.fillStyle = 'rgba(13, 17, 28, 0.94)';
+          ctx.fillRect(candleX1 + 1, rowTop + 0.5, askW, rowHeight - 1);
+
+          if (lvl.askVolume > 0) {
+            const askRatio = maxAskVol > 0 ? lvl.askVolume / maxAskVol : 0;
+            const askAlpha = 0.14 + 0.62 * askRatio;
+            ctx.fillStyle = `rgba(16, 185, 129, ${askAlpha.toFixed(3)})`;
+            ctx.fillRect(candleX1 + 1, rowTop + 0.5, askW, rowHeight - 1);
+          }
+
+          // 1C. CELL GRID LINES (Subtle 1px dividers)
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
+          ctx.lineWidth = 0.8;
+          ctx.beginPath();
+          ctx.moveTo(ladderLeft, rowBottom - 0.5);
+          ctx.lineTo(candleX0 - 1, rowBottom - 0.5);
+          ctx.moveTo(candleX1 + 1, rowBottom - 0.5);
+          ctx.lineTo(ladderRight, rowBottom - 0.5);
+          ctx.stroke();
+
+          // 1D. POC OUTLINE FRAME (Prominent golden yellow box framing entire price row)
           if (isPoc) {
-            ctx.strokeStyle = pocBoxColor;
-            ctx.lineWidth = 1.2;
-            ctx.strokeRect(ladderLeft - 1, rowTop + 0.5, ladderWidth + 2, rowHeight - 1);
+            ctx.strokeStyle = '#facc15';
+            ctx.lineWidth = 1.8;
+            ctx.strokeRect(ladderLeft + 0.5, rowTop + 0.5, ladderWidth - 1, rowHeight - 1);
           }
 
-          // Format: [Bid] x [Ask]
-          const bidText = formatVolumeNumber(lvl.bidVolume);
-          const askText = formatVolumeNumber(lvl.askVolume);
-          const xText = 'x';
+          // 1E. NUMERIC TEXT LABELS INSIDE CELLS
+          if (rowHeight >= 8 && bidW >= 10) {
+            const bidText = formatVolumeNumber(lvl.bidVolume);
+            const askText = formatVolumeNumber(lvl.askVolume);
 
-          ctx.textBaseline = 'middle';
-          const midX = ladderLeft + ladderWidth * 0.48;
-          const spacingOffset = adaptiveFontSize < 8 ? 2.5 : 4;
+            ctx.textBaseline = 'middle';
+            ctx.textAlign = 'center';
 
-          // Middle 'x'
-          ctx.textAlign = 'center';
-          ctx.fillStyle = xSeparatorColor;
-          ctx.font = `500 ${Math.max(6.5, adaptiveFontSize - 1)}px 'JetBrains Mono', monospace`;
-          ctx.fillText(xText, midX, yCenter);
+            // Left Bid Text (Seller aggressor)
+            if (isBidImb || lvl.isStackedBidImbalance) {
+              ctx.fillStyle = '#fca5a5';
+              ctx.font = `700 ${adaptiveFontSize}px 'JetBrains Mono', monospace`;
+            } else if (lvl.bidVolume === 0) {
+              ctx.fillStyle = '#475569';
+              ctx.font = `500 ${adaptiveFontSize}px 'JetBrains Mono', monospace`;
+            } else {
+              ctx.fillStyle = '#f8fafc';
+              ctx.font = `600 ${adaptiveFontSize}px 'JetBrains Mono', monospace`;
+            }
+            ctx.fillText(bidText, leftCellMidX, yCenter);
 
-          // Left Bid Number (Seller aggressor - Red emphasis on dominant / imbalance)
-          ctx.textAlign = 'right';
-          if (isBidImb || lvl.isStackedBidImbalance || (lvl.bidVolume > lvl.askVolume * 1.4 && lvl.bidVolume >= 5)) {
-            ctx.fillStyle = imbBidColor;
-            ctx.font = `700 ${adaptiveFontSize}px 'JetBrains Mono', monospace`;
-          } else if (lvl.bidVolume === 0) {
-            ctx.fillStyle = '#475569';
-            ctx.font = `500 ${adaptiveFontSize}px 'JetBrains Mono', monospace`;
-          } else {
-            ctx.fillStyle = neutralTextColor;
-            ctx.font = `500 ${adaptiveFontSize}px 'JetBrains Mono', monospace`;
+            // Right Ask Text (Buyer aggressor)
+            if (isAskImb || lvl.isStackedAskImbalance) {
+              ctx.fillStyle = '#86efac';
+              ctx.font = `700 ${adaptiveFontSize}px 'JetBrains Mono', monospace`;
+            } else if (lvl.askVolume === 0) {
+              ctx.fillStyle = '#475569';
+              ctx.font = `500 ${adaptiveFontSize}px 'JetBrains Mono', monospace`;
+            } else {
+              ctx.fillStyle = '#f8fafc';
+              ctx.font = `600 ${adaptiveFontSize}px 'JetBrains Mono', monospace`;
+            }
+            ctx.fillText(askText, rightCellMidX, yCenter);
           }
-          ctx.fillText(bidText, midX - spacingOffset, yCenter);
-
-          // Right Ask Number (Buyer aggressor - Blue/Cyan emphasis on dominant / imbalance)
-          ctx.textAlign = 'left';
-          if (isAskImb || lvl.isStackedAskImbalance || (lvl.askVolume > lvl.bidVolume * 1.4 && lvl.askVolume >= 5)) {
-            ctx.fillStyle = imbAskColor;
-            ctx.font = `700 ${adaptiveFontSize}px 'JetBrains Mono', monospace`;
-          } else if (lvl.askVolume === 0) {
-            ctx.fillStyle = '#475569';
-            ctx.font = `500 ${adaptiveFontSize}px 'JetBrains Mono', monospace`;
-          } else {
-            ctx.fillStyle = neutralTextColor;
-            ctx.font = `500 ${adaptiveFontSize}px 'JetBrains Mono', monospace`;
-          }
-          ctx.fillText(askText, midX + spacingOffset, yCenter);
         }
+
+        // 2. RENDER THE CANDLESTICK EXACTLY AT THE CENTER (Exact like TradingView)
+        // 2A. Full TradingView Central Wicks (from yHigh to bodyTop, and bodyTop+bodyHeight to yLow)
+        ctx.strokeStyle = bodyColor;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(cx, yHigh);
+        ctx.lineTo(cx, bodyTop);
+        ctx.moveTo(cx, bodyTop + bodyHeight);
+        ctx.lineTo(cx, yLow);
+        ctx.stroke();
+
+        // 2B. Central Candle Body (Open-to-Close)
+        ctx.fillStyle = bodyColor;
+        ctx.fillRect(candleX0, bodyTop, candleBodyW, bodyHeight);
+        ctx.strokeStyle = isGreen ? '#00c853' : isRed ? '#d50000' : '#848e9c';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(candleX0, bodyTop, candleBodyW, bodyHeight);
       }
       // ============================================================
       // CASE B: ZOOMED OUT (!isFullDetail) -> COLLAPSE INTO CANDLES WITH DELTA
@@ -413,8 +449,8 @@ const FootprintCanvasComponent: React.FC<FootprintCanvasProps> = ({
             ? (yPocBottom + yPocTop) / 2
             : yPocBottom;
           if (pocY !== null && pocY >= yHigh && pocY <= yLow) {
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 1;
+            ctx.strokeStyle = '#facc15';
+            ctx.lineWidth = 1.2;
             ctx.beginPath();
             ctx.moveTo(bodyX, pocY);
             ctx.lineTo(bodyX + bodyWidth, pocY);
@@ -424,7 +460,7 @@ const FootprintCanvasComponent: React.FC<FootprintCanvasProps> = ({
       }
 
       // ============================================================
-      // SHOW DELTA ALL THE TIME (Both Zoomed-in and Zoomed-out)
+      // SHOW DELTA & TOTAL VOLUME ALL THE TIME (Both Zoomed-in and Zoomed-out)
       // ============================================================
       if (settings.showCandleDelta !== false) {
         const densityStep = candleSpacing >= 16 ? 1 : candleSpacing >= 10 ? 2 : 4;
@@ -432,25 +468,46 @@ const FootprintCanvasComponent: React.FC<FootprintCanvasProps> = ({
 
         if (shouldShowDelta) {
           const deltaStr = formatDeltaNumber(candle.delta);
+          const volStr = formatVolumeNumber(candle.totalVolume);
           const deltaColor = candle.delta > 0 ? '#0ecb81' : candle.delta < 0 ? '#f6465d' : '#94a3b8';
           const deltaBorder = candle.delta > 0 ? 'rgba(14, 203, 129, 0.45)' : candle.delta < 0 ? 'rgba(246, 70, 93, 0.45)' : 'rgba(148, 163, 184, 0.3)';
 
+          const hasRoomForTwoLines = height - lowestCandleExtentY >= 34;
+          const cardH = hasRoomForTwoLines ? 24 : 14;
+          const cardY = Math.min(height - cardH - 2, lowestCandleExtentY + 5);
+
           ctx.font = `700 9px 'JetBrains Mono', monospace`;
-          const textMetrics = ctx.measureText(deltaStr);
-          const maxPillW = Math.max(20, Math.min(46, columnWidth - 2));
-          const pillW = Math.min(maxPillW, Math.max(20, textMetrics.width + 6));
+          const deltaTextW = ctx.measureText(deltaStr).width;
+          ctx.font = `500 8px 'JetBrains Mono', monospace`;
+          const volTextW = ctx.measureText(`Vol ${volStr}`).width;
+          const maxContentW = Math.max(deltaTextW, volTextW);
+
+          const maxPillW = Math.max(22, Math.min(64, columnWidth - 2));
+          const pillW = Math.min(maxPillW, Math.max(22, maxContentW + 8));
           const pillX = cx - pillW / 2;
 
           ctx.fillStyle = 'rgba(11, 15, 23, 0.95)';
-          ctx.fillRect(pillX, deltaY, pillW, pillH);
+          ctx.fillRect(pillX, cardY, pillW, cardH);
           ctx.strokeStyle = deltaBorder;
           ctx.lineWidth = 1;
-          ctx.strokeRect(pillX, deltaY, pillW, pillH);
+          ctx.strokeRect(pillX, cardY, pillW, cardH);
 
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
-          ctx.fillStyle = deltaColor;
-          ctx.fillText(deltaStr, cx, deltaY + pillH / 2);
+
+          if (hasRoomForTwoLines) {
+            ctx.font = `700 9px 'JetBrains Mono', monospace`;
+            ctx.fillStyle = deltaColor;
+            ctx.fillText(deltaStr, cx, cardY + 7);
+
+            ctx.font = `500 8px 'JetBrains Mono', monospace`;
+            ctx.fillStyle = '#94a3b8';
+            ctx.fillText(volStr, cx, cardY + 17);
+          } else {
+            ctx.font = `700 9px 'JetBrains Mono', monospace`;
+            ctx.fillStyle = deltaColor;
+            ctx.fillText(deltaStr, cx, cardY + cardH / 2);
+          }
         }
       }
 

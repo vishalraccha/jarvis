@@ -21,6 +21,7 @@ import {
 } from '../../types/market';
 import { ExchangeAdapterEvents, IExchangeAdapter } from './ExchangeAdapter';
 import { TIMEFRAME_SECONDS } from '../../utils/candleUtils';
+import { MarketSessionService } from '../market/MarketSessionService';
 
 export class BinanceAdapter implements IExchangeAdapter {
   readonly id: ExchangeId = 'binance';
@@ -33,18 +34,27 @@ export class BinanceAdapter implements IExchangeAdapter {
   private events: ExchangeAdapterEvents | null = null;
   private connectionState: ConnectionState = 'DISCONNECTED';
 
-  // Spot Gold Calibration: persistent stable basis between Binance perpetual futures and true Spot Gold
-  private spotBasisOffset: number = (() => {
+  // Universal MT5 / TradingView Basis Calibration: 1:1 direct real-time pricing matching TradingView & MT5
+  private spotBasisOffset: number = 2.66;
+  private basisOffsets: Record<string, number> = {};
+  private lastRawBinancePrice: number = 0;
+  private calibrateIntervalId: number | null = null;
+
+  constructor() {
     try {
-      const v = localStorage.getItem('jarvis_spot_basis_offset');
-      if (v) {
-        const n = parseFloat(v);
-        if (Number.isFinite(n) && n > 0 && n < 30) return n;
+      const savedGold = localStorage.getItem('jarvis_spot_basis_offset');
+      if (savedGold) {
+        const p = parseFloat(savedGold);
+        if (Number.isFinite(p) && p >= -20 && p <= 40) {
+          this.spotBasisOffset = p;
+        }
+      }
+      const savedOffsets = localStorage.getItem('jarvis_basis_offsets');
+      if (savedOffsets) {
+        this.basisOffsets = JSON.parse(savedOffsets);
       }
     } catch {}
-    return 8.37;
-  })();
-  private calibrateIntervalId: number | null = null;
+  }
 
   // Metrics
   private metrics: LatencyMetrics = {
@@ -74,7 +84,7 @@ export class BinanceAdapter implements IExchangeAdapter {
       const sym = this.getEffectiveSymbol(this.currentSymbol || 'BTCUSDT');
       const isFut = this.isFutures(sym);
       const proxyBase = isFut ? '/api/fapi/fapi/v1/time' : '/api/binance/api/v3/time';
-      const directBase = isFut ? 'https://fapi.binance.com/fapi/v1/time' : 'https://api.binance.com/api/v3/time';
+      const directBase = isFut ? 'https://fapi.binance.me/fapi/v1/time' : 'https://data-api.binance.vision/api/v3/time';
       const t0 = Date.now();
       const res = await this.fastFetch(proxyBase, directBase, 2500);
       if (res && res.ok) {
@@ -111,17 +121,55 @@ export class BinanceAdapter implements IExchangeAdapter {
   private getEffectiveSymbol(symbol: string): string {
     const s = symbol.toUpperCase().replace(/[-_/]/g, '');
     if (s === 'XAUUSD' || s === 'GOLD' || s.startsWith('XAUUSD')) return 'XAUUSDT';
+    if (s === 'EURUSD' || s === 'EUR') return 'EURUSDT';
+    if (s === 'GBPUSD' || s === 'GBP') return 'GBPUSDT';
     return s;
   }
 
   /**
-   * Adjusts raw Binance price to true Spot Gold benchmark price matching TradingView (OANDA / Vantage)
+   * Adjusts raw Binance price to true MT5 / TradingView benchmark price across all pairs
    */
-  adjustPrice(price: number): number {
-    if (this.isGoldSpot(this.requestedSymbol || this.currentSymbol) && this.spotBasisOffset !== 0) {
-      return Math.round((price - this.spotBasisOffset) * 100) / 100;
+  adjustPrice(price: number, symbol?: string): number {
+    const s = (symbol || this.requestedSymbol || this.currentSymbol || '').toUpperCase().replace(/[-_/]/g, '');
+    const cleanSym = s.replace('SPOT', '');
+    const offset = this.basisOffsets[cleanSym] ?? (this.isGoldSpot(cleanSym) ? this.spotBasisOffset : 0);
+    if (offset !== 0 && Number.isFinite(offset)) {
+      const isFx = cleanSym.includes('EUR') || cleanSym.includes('GBP');
+      const mult = isFx ? 10000 : 100;
+      return Math.round((price - offset) * mult) / mult;
     }
     return price;
+  }
+
+  /**
+   * Universal calibration against live MT5 / TradingView benchmark ticker
+   */
+  async calibrateBasis(symbol?: string): Promise<number> {
+    const sym = (symbol || this.requestedSymbol || this.currentSymbol || '').toUpperCase().replace(/[-_/]/g, '').replace('SPOT', '');
+    if (!sym) return 0;
+
+    try {
+      const tvRes = await fetch(`/api/cache/ticker?symbol=${sym}`, { signal: AbortSignal.timeout(2000) });
+      if (tvRes.ok) {
+        const tvData = await tvRes.json();
+        const tvPrice = tvData?.price;
+        if (typeof tvPrice === 'number' && tvPrice > 0) {
+          const rawPrice = this.lastRawBinancePrice > 0 ? this.lastRawBinancePrice : tvPrice;
+          const diff = Math.round((rawPrice - tvPrice) * 100) / 100;
+          this.basisOffsets[sym] = diff;
+          if (this.isGoldSpot(sym)) this.spotBasisOffset = diff;
+          try {
+            localStorage.setItem('jarvis_basis_offsets', JSON.stringify(this.basisOffsets));
+          } catch {}
+          return diff;
+        }
+      }
+    } catch {}
+
+    if (this.isGoldSpot(sym)) {
+      return this.calibrateSpotBasis();
+    }
+    return this.basisOffsets[sym] || 0;
   }
 
   /**
@@ -145,8 +193,8 @@ export class BinanceAdapter implements IExchangeAdapter {
         if (spotRes && spotRes.ok) {
           const spotData = await spotRes.json();
           const compTime = spotData?.computed_at ? new Date(spotData.computed_at).getTime() : 0;
-          const isFresh = compTime > 0 && (Date.now() - compTime) < 180000 && !spotData.is_stale;
-          if (isFresh && spotData?.price) {
+          const isRecent = compTime > 0 && (Date.now() - compTime) < 7 * 86400000;
+          if ((isRecent || !spotData.is_stale) && spotData?.price) {
             const p = parseFloat(spotData.price);
             if (Number.isFinite(p) && p > 3000 && p < 6000) {
               spotPrice = p;
@@ -173,8 +221,8 @@ export class BinanceAdapter implements IExchangeAdapter {
 
       if (spotPrice !== null && binancePrice !== null) {
         const measured = Math.round((binancePrice - spotPrice) * 100) / 100;
-        if (measured >= 7.0 && measured <= 10.5) {
-          this.spotBasisOffset = Math.round((this.spotBasisOffset * 0.9 + measured * 0.1) * 100) / 100;
+        if (measured >= -20.0 && measured <= 35.0) {
+          this.spotBasisOffset = measured;
           try {
             localStorage.setItem('jarvis_spot_basis_offset', String(this.spotBasisOffset));
           } catch {}
@@ -185,9 +233,6 @@ export class BinanceAdapter implements IExchangeAdapter {
       console.warn('[BinanceAdapter] calibrateSpotBasis error:', e);
     }
 
-    if (this.spotBasisOffset === 0) {
-      this.spotBasisOffset = 8.37;
-    }
     return this.spotBasisOffset;
   }
 
@@ -202,14 +247,15 @@ export class BinanceAdapter implements IExchangeAdapter {
   async getSymbolInfo(symbol: string): Promise<SymbolInfo> {
     const cleanSym = this.getEffectiveSymbol(symbol);
     const isGold = this.isFutures(cleanSym);
+    const isFx = cleanSym === 'EURUSDT' || cleanSym === 'GBPUSDT';
     return {
       id: cleanSym,
       symbol: cleanSym,
-      baseAsset: isGold ? 'XAU' : cleanSym.replace(/(USDT|BUSD|FDUSD|USDC|EUR)$/, ''),
+      baseAsset: isGold ? 'XAU' : isFx ? cleanSym.replace('USDT', '') : cleanSym.replace(/(USDT|BUSD|FDUSD|USDC|EUR)$/, ''),
       quoteAsset: cleanSym.endsWith('USDT') ? 'USDT' : 'USD',
-      priceTick: isGold ? 0.01 : cleanSym.includes('BTC') ? 0.01 : 0.001,
-      lotSize: isGold ? 0.001 : 0.00001,
-      minQty: isGold ? 0.001 : 0.00001,
+      priceTick: isGold ? 0.01 : isFx ? 0.0001 : cleanSym.includes('BTC') ? 0.01 : 0.001,
+      lotSize: isGold ? 0.001 : isFx ? 1 : 0.00001,
+      minQty: isGold ? 0.001 : isFx ? 1 : 0.00001,
       minNotional: 5.0,
     };
   }
@@ -226,12 +272,10 @@ export class BinanceAdapter implements IExchangeAdapter {
 
     this.disconnect(false);
 
-    if (this.isGoldSpot(symbol)) {
-      this.calibrateSpotBasis();
-      this.calibrateIntervalId = (setInterval as any)(() => {
-        this.calibrateSpotBasis();
-      }, 60000);
-    }
+    this.calibrateBasis(symbol).catch(() => {});
+    this.calibrateIntervalId = (setInterval as any)(() => {
+      this.calibrateBasis(this.requestedSymbol || this.currentSymbol).catch(() => {});
+    }, 60000);
 
     this.syncServerTime().catch(() => {});
     this.initWebSocket();
@@ -248,10 +292,10 @@ export class BinanceAdapter implements IExchangeAdapter {
     // Binance Futures requires @aggTrade (does not support individual @trade). Spot supports both.
     const tradeStream = `${effSym}@aggTrade`;
     const streamName = `${effSym}@depth@100ms/${tradeStream}/${effSym}@kline_${this.currentTimeframe}`;
-    // Use fstream.binance.com for USD-M Perpetual futures (XAUUSDT, etc.) and data-stream.binance.vision for spot
+    // Use fstream.binance.me for USD-M Perpetual futures and stream.binance.me:9443 for spot (bypass ISP blocks, sub-second latency)
     const wsUrl = isFut
-      ? `wss://fstream.binance.com/stream?streams=${streamName}`
-      : `wss://data-stream.binance.vision/stream?streams=${streamName}`;
+      ? `wss://fstream.binance.me/stream?streams=${streamName}`
+      : `wss://stream.binance.me:9443/stream?streams=${streamName}`;
 
     try {
       this.ws = new WebSocket(wsUrl);
@@ -310,15 +354,17 @@ export class BinanceAdapter implements IExchangeAdapter {
 
     try {
       let price: number | null = null;
-      // 1. Try Redis-style server cache ticker endpoint first (sub-millisecond)
+      let alreadyAdjusted = false;
+      // 1. Try Redis-style server cache ticker endpoint first (sub-millisecond, pre-calibrated to TradingView/MT5)
       try {
-        const cacheRes = await fetch(`/api/cache/ticker?symbol=${effSym}`, {
+        const cacheRes = await fetch(`/api/cache/ticker?symbol=${this.requestedSymbol || effSym}`, {
           signal: AbortSignal.timeout(1000),
         });
         if (cacheRes.ok) {
           const cData = await cacheRes.json();
           if (cData && typeof cData.price === 'number' && cData.price > 0) {
             price = cData.price;
+            alreadyAdjusted = true;
           }
         }
       } catch {}
@@ -329,20 +375,21 @@ export class BinanceAdapter implements IExchangeAdapter {
           ? `/api/fapi/fapi/v1/ticker/price?symbol=${effSym}`
           : `/api/binance/api/v3/ticker/price?symbol=${effSym}`;
         const directUrl = isFut
-          ? `https://fapi.binance.com/fapi/v1/ticker/price?symbol=${effSym}`
-          : `https://api.binance.com/api/v3/ticker/price?symbol=${effSym}`;
+          ? `https://fapi.binance.me/fapi/v1/ticker/price?symbol=${effSym}`
+          : `https://data-api.binance.vision/api/v3/ticker/price?symbol=${effSym}`;
         const res = await this.fastFetch(proxyUrl, directUrl, 1500);
         if (res.ok) {
           const data = await res.json();
           const p = parseFloat(data.price);
           if (Number.isFinite(p) && p > 0) {
             price = p;
+            alreadyAdjusted = false;
           }
         }
       }
 
       if (price !== null && Number.isFinite(price) && price > 0) {
-        const adjustedPrice = this.adjustPrice(price);
+        const adjustedPrice = alreadyAdjusted ? price : this.adjustPrice(price);
         const qty = Math.max(0.001, Math.round((Math.random() * 0.5 + 0.05) * 1000) / 1000);
         const isUp = this.lastEmittedPrice > 0 ? adjustedPrice >= this.lastEmittedPrice : true;
         this.lastEmittedPrice = adjustedPrice;
@@ -391,7 +438,7 @@ export class BinanceAdapter implements IExchangeAdapter {
       // 2. Direct REST fallback
       if (!rawKline) {
         const proxyBase = isFut ? '/api/fapi/fapi/v1/klines' : '/api/binance/api/v3/klines';
-        const directBase = isFut ? 'https://fapi.binance.com/fapi/v1/klines' : 'https://api.binance.com/api/v3/klines';
+        const directBase = isFut ? 'https://fapi.binance.me/fapi/v1/klines' : 'https://data-api.binance.vision/api/v3/klines';
         const res = await this.fastFetch(
           `${proxyBase}?symbol=${effSym}&interval=${tf}&limit=2`,
           `${directBase}?symbol=${effSym}&interval=${tf}&limit=2`,
@@ -430,19 +477,19 @@ export class BinanceAdapter implements IExchangeAdapter {
       const lastActivity = this.lastLiveMessageTimestamp || this.connectionStartTime;
       const silenceMs = now - lastActivity;
 
-      // When WebSocket is silent (> 800ms without trade/kline messages):
-      if (silenceMs > 800) {
-        // High-frequency live ticker (every 350ms) for early, low-latency market price updates
+      // When WebSocket is silent (> 300ms without trade/kline messages):
+      if (silenceMs > 300) {
+        // High-frequency live ticker (every 200ms) for sub-second, ultra low-latency market price updates
         this.fetchFallbackTicker().catch(() => {});
 
-        // Active kline sync every ~1s (every 3 ticks)
+        // Active kline sync every ~600ms (every 3 ticks)
         tickCount++;
         if (tickCount % 3 === 0) {
           this.fetchFallbackKline().catch(() => {});
         }
 
-        // Live real depth reconciliation from exchange depth snapshot every ~2s (every 6 ticks)
-        if (tickCount % 6 === 0 && this.currentSymbol) {
+        // Live real depth reconciliation from exchange depth snapshot every ~2s (every 10 ticks)
+        if (tickCount % 10 === 0 && this.currentSymbol) {
           const effSym = this.getEffectiveSymbol(this.currentSymbol).toUpperCase();
           this.fetchDepthSnapshot(effSym, 100).then((snapshot) => {
             this.events?.onDepthUpdate({
@@ -455,7 +502,7 @@ export class BinanceAdapter implements IExchangeAdapter {
           }).catch(() => {});
         }
       }
-    }, 350);
+    }, 200);
   }
 
   private stopFallbackPollTimer(): void {
@@ -517,13 +564,13 @@ export class BinanceAdapter implements IExchangeAdapter {
             : transitMs
         );
 
-        // Convert string arrays to numbers and apply Spot Gold basis adjustment
+        // Convert string arrays to numbers and apply universal basis adjustment
         const bids: [number, number][] = (data.b || []).map((b: [string, string]) => [
-          this.adjustPrice(parseFloat(b[0])),
+          this.adjustPrice(parseFloat(b[0]), this.requestedSymbol),
           parseFloat(b[1]),
         ]);
         const asks: [number, number][] = (data.a || []).map((a: [string, string]) => [
-          this.adjustPrice(parseFloat(a[0])),
+          this.adjustPrice(parseFloat(a[0]), this.requestedSymbol),
           parseFloat(a[1]),
         ]);
 
@@ -539,11 +586,12 @@ export class BinanceAdapter implements IExchangeAdapter {
         this.events?.onDepthUpdate(update);
       } else if (eventType === 'trade' || eventType === 'aggTrade') {
         const rawTradePrice = parseFloat(data.p);
-        const tradePrice = this.adjustPrice(rawTradePrice);
+        this.lastRawBinancePrice = rawTradePrice;
+        const tradePrice = this.adjustPrice(rawTradePrice, this.requestedSymbol);
         const tradeQty = parseFloat(data.q);
         const isBuyerMaker = Boolean(data.m);
 
-        if (!Number.isFinite(tradePrice) || tradePrice <= 10 || !Number.isFinite(tradeQty) || tradeQty <= 0) {
+        if (!Number.isFinite(tradePrice) || tradePrice <= 0 || !Number.isFinite(tradeQty) || tradeQty <= 0) {
           return;
         }
 
@@ -571,10 +619,10 @@ export class BinanceAdapter implements IExchangeAdapter {
         if (k) {
           const candle: Candle = {
             time: Math.floor(k.t / 1000),
-            open: this.adjustPrice(parseFloat(k.o)),
-            high: this.adjustPrice(parseFloat(k.h)),
-            low: this.adjustPrice(parseFloat(k.l)),
-            close: this.adjustPrice(parseFloat(k.c)),
+            open: this.adjustPrice(parseFloat(k.o), this.requestedSymbol),
+            high: this.adjustPrice(parseFloat(k.h), this.requestedSymbol),
+            low: this.adjustPrice(parseFloat(k.l), this.requestedSymbol),
+            close: this.adjustPrice(parseFloat(k.c), this.requestedSymbol),
             volume: parseFloat(k.v),
             buyVolume: k.V ? parseFloat(k.V) : undefined,
             tradeCount: k.n ? parseInt(k.n, 10) : undefined,
@@ -683,7 +731,7 @@ export class BinanceAdapter implements IExchangeAdapter {
     const sym = this.getEffectiveSymbol(symbol);
     const isFut = this.isFutures(sym);
     const proxyBase = isFut ? '/api/fapi/fapi/v1/depth' : '/api/binance/api/v3/depth';
-    const directBase = isFut ? 'https://fapi.binance.com/fapi/v1/depth' : 'https://api.binance.com/api/v3/depth';
+    const directBase = isFut ? 'https://fapi.binance.me/fapi/v1/depth' : 'https://data-api.binance.vision/api/v3/depth';
     const qs = `symbol=${sym}&limit=${Math.min(limit, 1000)}`;
 
     const res = await this.fastFetch(`${proxyBase}?${qs}`, `${directBase}?${qs}`, 3500);
@@ -706,7 +754,7 @@ export class BinanceAdapter implements IExchangeAdapter {
     const sym = this.getEffectiveSymbol(symbol);
     const isFut = this.isFutures(sym);
     const proxyBase = isFut ? '/api/fapi/fapi/v1/trades' : '/api/binance/api/v3/trades';
-    const directBase = isFut ? 'https://fapi.binance.com/fapi/v1/trades' : 'https://api.binance.com/api/v3/trades';
+    const directBase = isFut ? 'https://fapi.binance.me/fapi/v1/trades' : 'https://data-api.binance.vision/api/v3/trades';
     const qs = `symbol=${sym}&limit=${Math.min(limit, 1000)}`;
 
     const res = await this.fastFetch(`${proxyBase}?${qs}`, `${directBase}?${qs}`, 3500);
@@ -742,7 +790,7 @@ export class BinanceAdapter implements IExchangeAdapter {
     const sym = this.getEffectiveSymbol(symbol);
     const isFut = this.isFutures(sym);
     const proxyBase = isFut ? '/api/fapi/fapi/v1/aggTrades' : '/api/binance/api/v3/aggTrades';
-    const directBase = isFut ? 'https://fapi.binance.com/fapi/v1/aggTrades' : 'https://api.binance.com/api/v3/aggTrades';
+    const directBase = isFut ? 'https://fapi.binance.me/fapi/v1/aggTrades' : 'https://data-api.binance.vision/api/v3/aggTrades';
     const params = new URLSearchParams({
       symbol: sym,
       limit: String(Math.min(limit, 1000)),
@@ -793,25 +841,23 @@ export class BinanceAdapter implements IExchangeAdapter {
     const sym = this.getEffectiveSymbol(symbol);
     const isFut = this.isFutures(sym);
 
-    // 1. Fast path: Redis-style in-memory server cache (< 1ms response)
+    // 1. Authoritative fast path: /api/candles endpoint (pre-aligned to MT5 & TradingView)
     if (!startTime && !endTime) {
       try {
         const cacheRes = await fetch(
-          `/api/cache/klines?symbol=${sym}&interval=${interval}&limit=${Math.min(limit, 1000)}`,
+          `/api/candles?symbol=${encodeURIComponent(this.requestedSymbol || sym)}&timeframe=${encodeURIComponent(interval)}&limit=${Math.min(limit, 1000)}`,
           { signal: AbortSignal.timeout(3500) }
         );
         if (cacheRes.ok) {
-          const cachedData: any[][] = await cacheRes.json();
-          if (Array.isArray(cachedData) && cachedData.length > 0) {
-            return cachedData.map((item) => ({
-              time: Math.floor(Number(item[0]) / 1000),
-              open: this.adjustPrice(parseFloat(item[1])),
-              high: this.adjustPrice(parseFloat(item[2])),
-              low: this.adjustPrice(parseFloat(item[3])),
-              close: this.adjustPrice(parseFloat(item[4])),
-              volume: parseFloat(item[5]),
-              tradeCount: Number(item[8]) || undefined,
-              buyVolume: parseFloat(item[9]) || undefined,
+          const list: any[] = await cacheRes.json();
+          if (Array.isArray(list) && list.length > 0) {
+            return list.map((item) => ({
+              time: Number(item.time || Math.floor(Number(item[0]) / 1000)),
+              open: parseFloat(item.open ?? item[1]),
+              high: parseFloat(item.high ?? item[2]),
+              low: parseFloat(item.low ?? item[3]),
+              close: parseFloat(item.close ?? item[4]),
+              volume: parseFloat(item.volume ?? item[5] ?? 0),
             }));
           }
         }
@@ -819,7 +865,7 @@ export class BinanceAdapter implements IExchangeAdapter {
     }
 
     const proxyBase = isFut ? '/api/fapi/fapi/v1/klines' : '/api/binance/api/v3/klines';
-    const directBase = isFut ? 'https://fapi.binance.com/fapi/v1/klines' : 'https://api.binance.com/api/v3/klines';
+    const directBase = isFut ? 'https://fapi.binance.me/fapi/v1/klines' : 'https://data-api.binance.vision/api/v3/klines';
     const params = new URLSearchParams({
       symbol: sym,
       interval,
@@ -837,10 +883,10 @@ export class BinanceAdapter implements IExchangeAdapter {
     const data: any[][] = await res.json();
     return (data || []).map((item) => ({
       time: Math.floor(Number(item[0]) / 1000), // TradingView Lightweight Charts uses seconds
-      open: this.adjustPrice(parseFloat(item[1])),
-      high: this.adjustPrice(parseFloat(item[2])),
-      low: this.adjustPrice(parseFloat(item[3])),
-      close: this.adjustPrice(parseFloat(item[4])),
+      open: this.adjustPrice(parseFloat(item[1]), this.requestedSymbol),
+      high: this.adjustPrice(parseFloat(item[2]), this.requestedSymbol),
+      low: this.adjustPrice(parseFloat(item[3]), this.requestedSymbol),
+      close: this.adjustPrice(parseFloat(item[4]), this.requestedSymbol),
       volume: parseFloat(item[5]),
       tradeCount: Number(item[8]) || undefined,
       buyVolume: parseFloat(item[9]) || undefined,

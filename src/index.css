@@ -481,5 +481,21 @@ canvas {
   -webkit-tap-highlight-color: transparent;
 }
 
+/* TradingView-style smooth crosshair cursor and marker across charting surface */
+.jarvis-chart-container,
+.jarvis-chart-container canvas,
+.jarvis-chart-container .tv-lightweight-charts,
+.jarvis-chart-container .tv-lightweight-charts canvas {
+  cursor: crosshair !important;
+}
 
+/* Maintain proper vertical / horizontal resize cursors on price and time scales */
+.jarvis-chart-container .tv-lightweight-charts tr:first-child td:last-child,
+.jarvis-chart-container .tv-lightweight-charts tr:first-child td:last-child canvas {
+  cursor: ns-resize !important;
+}
 
+.jarvis-chart-container .tv-lightweight-charts tr:last-child td:first-child,
+.jarvis-chart-container .tv-lightweight-charts tr:last-child td:first-child canvas {
+  cursor: ew-resize !important;
+}

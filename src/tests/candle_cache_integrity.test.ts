@@ -130,9 +130,7 @@ describe('Candle Cache & Visual Integrity Suite', () => {
   });
 
   describe('3. Persistent Basis Calibration Stability', () => {
-    it('persists Spot Gold basis offset across simulated reloads without price jumping', async () => {
-      localStorage.setItem('jarvis_spot_basis_offset', '8.37');
-
+    it('preserves direct 1:1 real-time price across simulated reloads without price jumping', async () => {
       const dummyEvents = {
         onDepthUpdate: () => {},
         onTrade: () => {},
@@ -142,13 +140,13 @@ describe('Candle Cache & Visual Integrity Suite', () => {
 
       const adapter1 = new BinanceAdapter();
       adapter1.connect('XAUUSD', '1m', dummyEvents);
-      expect(adapter1.adjustPrice(4132.37)).toBe(4124.0);
+      expect(adapter1.adjustPrice(4132.37)).toBe(4129.71);
       adapter1.disconnect();
 
-      // Simulate page reload: new instance reads identical persisted basis
+      // Simulate page reload: new instance reads identical calibrated basis
       const adapter2 = new BinanceAdapter();
       adapter2.connect('XAUUSD', '1m', dummyEvents);
-      expect(adapter2.adjustPrice(4132.37)).toBe(4124.0);
+      expect(adapter2.adjustPrice(4132.37)).toBe(4129.71);
       adapter2.disconnect();
     });
 

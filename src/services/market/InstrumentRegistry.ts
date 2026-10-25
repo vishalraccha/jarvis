@@ -7,7 +7,7 @@
 import { CandleTimeframe, ExchangeId } from '../../types/market';
 import { MarketSchedule } from './MarketSessionService';
 
-export type InstrumentCategory = 'crypto' | 'metals' | 'futures';
+export type InstrumentCategory = 'crypto' | 'metals' | 'futures' | 'forex';
 
 export type InstrumentType = 'spot' | 'spot_otc' | 'linear_perpetual' | 'commodity_futures';
 
@@ -189,6 +189,50 @@ export const INSTRUMENT_CATALOG: InstrumentConfig[] = [
     supportsBubbles: true,
     description: 'BNB / Tether US spot market.',
   },
+
+  // 5. Forex Major Pairs (Pip precision: 0.0001, Traditional Market Session)
+  {
+    id: 'EURUSD',
+    symbol: 'EURUSD',
+    displayName: 'EUR/USD • Spot Forex',
+    shortLabel: 'EUR/USD',
+    category: 'forex',
+    instrumentType: 'spot',
+    typeLabel: 'Forex',
+    provider: 'Binance / Global FX',
+    providerId: 'binance',
+    marketSchedule: 'traditional_metals',
+    supportedIntervals: ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '1d'],
+    defaultTimeframe: '1m',
+    priceTick: 0.0001,
+    supportsOrderBook: true,
+    supportsTrades: true,
+    supportsHeatmap: true,
+    supportsFootprint: true,
+    supportsBubbles: true,
+    description: 'Euro / US Dollar major currency pair with 4-decimal pip precision.',
+  },
+  {
+    id: 'GBPUSD',
+    symbol: 'GBPUSD',
+    displayName: 'GBP/USD • Spot Forex',
+    shortLabel: 'GBP/USD',
+    category: 'forex',
+    instrumentType: 'spot',
+    typeLabel: 'Forex',
+    provider: 'Binance / Global FX',
+    providerId: 'binance',
+    marketSchedule: 'traditional_metals',
+    supportedIntervals: ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '1d'],
+    defaultTimeframe: '1m',
+    priceTick: 0.0001,
+    supportsOrderBook: true,
+    supportsTrades: true,
+    supportsHeatmap: true,
+    supportsFootprint: true,
+    supportsBubbles: true,
+    description: 'British Pound / US Dollar major currency pair with 4-decimal pip precision.',
+  },
 ];
 
 export class InstrumentRegistry {
@@ -220,6 +264,12 @@ export class InstrumentRegistry {
     if (clean === 'GC' || clean === 'GCFUTURES' || clean === 'CME' || clean === 'COMEX') return INSTRUMENT_CATALOG[2];
     if (clean === 'VANTAGE' || clean === 'XAUUSDVANTAGE' || clean === 'VANTAGEXAUUSD') return INSTRUMENT_CATALOG[1];
     if (clean === 'XAUUSD' || clean === 'XAU' || clean === 'GOLD' || clean === 'SPOTGOLD' || clean === 'OANDA' || clean === 'XAUUSDOANDA') return INSTRUMENT_CATALOG[0];
+    if (clean === 'BTC' || clean === 'BTCUSD' || clean === 'BTCUSDT' || clean === 'BTCUSDTSPOT') return INSTRUMENT_CATALOG[3];
+    if (clean === 'ETH' || clean === 'ETHUSD' || clean === 'ETHUSDT' || clean === 'ETHUSDTSPOT') return INSTRUMENT_CATALOG[4];
+    if (clean === 'SOL' || clean === 'SOLUSD' || clean === 'SOLUSDT' || clean === 'SOLUSDTSPOT') return INSTRUMENT_CATALOG[5];
+    if (clean === 'BNB' || clean === 'BNBUSD' || clean === 'BNBUSDT' || clean === 'BNBUSDTSPOT') return INSTRUMENT_CATALOG[6];
+    if (clean === 'EURUSD' || clean === 'EUR' || clean === 'EURUSDT') return INSTRUMENT_CATALOG[7];
+    if (clean === 'GBPUSD' || clean === 'GBP' || clean === 'GBPUSDT') return INSTRUMENT_CATALOG[8];
 
     // Fallback: Default to XAU/USD OANDA Spot Gold (Matches TradingView market price)
     return INSTRUMENT_CATALOG[0];

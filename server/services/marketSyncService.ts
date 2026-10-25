@@ -120,17 +120,20 @@ export class MarketSyncService {
     const tf = timeframe.toLowerCase();
 
     // Map symbol to exchange source
-    const isCrypto = sym.endsWith('USDT') || sym.startsWith('BTC') || sym.startsWith('ETH') || sym.startsWith('SOL');
-    const isFutures = isCrypto && !sym.includes('SPOT');
+    const isComex = sym === 'GC' || sym.startsWith('COMEX') || sym.startsWith('GCFUTURES') || sym === 'CME';
+    const isGoldSpot = sym.startsWith('XAU') || sym.startsWith('GOLD') || sym === 'VANTAGE' || sym === 'OANDA';
+    const isGold = isGoldSpot || isComex;
+    const isCrypto = sym.endsWith('USDT') || sym.startsWith('BTC') || sym.startsWith('ETH') || sym.startsWith('SOL') || sym.startsWith('BNB');
+    const isFutures = isGold || sym.includes('PERP') || sym.includes('FUTURES');
+
+    let targetSym = sym;
+    if (isGold) {
+      targetSym = 'XAUUSDT';
+    }
 
     let endpoint = isFutures
-      ? `https://fapi.binance.com/fapi/v1/klines?symbol=${sym}&interval=${tf}&limit=${Math.min(limit, 1000)}`
-      : `https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${tf}&limit=${Math.min(limit, 1000)}`;
-
-    // Fallback for gold symbols if needed
-    if (sym === 'XAUUSD' || sym === 'XAUUSDVANTAGE') {
-      endpoint = `https://fapi.binance.com/fapi/v1/klines?symbol=XAUUSDT&interval=${tf}&limit=${Math.min(limit, 1000)}`;
-    }
+      ? `https://fapi.binance.com/fapi/v1/klines?symbol=${targetSym}&interval=${tf}&limit=${Math.min(limit, 1000)}`
+      : `https://api.binance.com/api/v3/klines?symbol=${targetSym}&interval=${tf}&limit=${Math.min(limit, 1000)}`;
 
     if (endTime && Number.isFinite(endTime) && endTime > 0) {
       endpoint += `&endTime=${Math.floor(endTime * 1000)}`;
@@ -150,17 +153,25 @@ export class MarketSyncService {
       return [];
     }
 
+    const spotGoldBasis = 2.66;
+    const comexBasisOverSpot = 12.50;
+    const offset = isGoldSpot ? spotGoldBasis : isComex ? (spotGoldBasis - comexBasisOverSpot) : 0;
+    const mult = isComex ? 10 : 100;
+
     const candles: StoredCandle[] = rawData.map((k) => ({
       time: Math.floor(Number(k[0]) / 1000),
-      open: parseFloat(k[1]),
-      high: parseFloat(k[2]),
-      low: parseFloat(k[3]),
-      close: parseFloat(k[4]),
-      volume: parseFloat(k[5]),
+      open: Math.round((parseFloat(k[1]) - offset) * mult) / mult,
+      high: Math.round((parseFloat(k[2]) - offset) * mult) / mult,
+      low: Math.round((parseFloat(k[3]) - offset) * mult) / mult,
+      close: Math.round((parseFloat(k[4]) - offset) * mult) / mult,
+      volume: isComex ? Math.max(1, Math.round(parseFloat(k[5]) * 0.1)) : parseFloat(k[5]),
     }));
 
-    // Insert into SQLite
+    // Insert into SQLite under requested symbol and canonical symbol
     sqliteStore.insertCandles(sym, tf, candles);
+    if (targetSym !== sym) {
+      sqliteStore.insertCandles(targetSym, tf, candles);
+    }
 
     // Cache latest 1000 in Redis hot cache for drop-in proxy compatibility
     const proxyKey = `klines_raw_${sym}_${tf}`;
@@ -236,19 +247,23 @@ export class MarketSyncService {
     }
 
     // Fetch from Binance
-    const isCrypto = sym.endsWith('USDT') || sym.startsWith('BTC') || sym.startsWith('ETH');
-    const baseUrl = isCrypto ? 'https://fapi.binance.com/fapi/v1/ticker/price' : 'https://api.binance.com/api/v3/ticker/price';
+    const isGold = sym.startsWith('XAU') || sym.startsWith('GOLD');
+    const isFutures = sym.includes('PERP') || isGold;
+    const baseUrl = isFutures ? 'https://fapi.binance.com/fapi/v1/ticker/price' : 'https://api.binance.com/api/v3/ticker/price';
 
     try {
-      const targetSym = (sym === 'XAUUSD' || sym === 'XAUUSDVANTAGE') ? 'XAUUSDT' : sym;
+      const targetSym = isGold ? 'XAUUSDT' : sym;
       const res = await fetch(`${baseUrl}?symbol=${targetSym}`, {
         signal: AbortSignal.timeout(2500),
       });
       if (res.ok) {
         const data = (await res.json()) as { symbol: string; price: string };
+        const goldOffset = 0;
+        const rawPrice = parseFloat(data.price);
+        const finalPrice = Math.round((rawPrice - goldOffset) * 100) / 100;
         const result = {
           symbol: sym,
-          price: parseFloat(data.price),
+          price: finalPrice,
           timestamp: Date.now(),
         };
         await hotCache.set(key, JSON.stringify(result), 2); // 2s TTL for ticker

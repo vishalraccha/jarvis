@@ -4,7 +4,7 @@
  * Ensures Saturday and closed-market states never fabricate fake candles.
  */
 
-export type MarketSchedule = '24_7' | 'traditional_metals' | 'cme_futures';
+export type MarketSchedule = '24_7' | 'traditional_metals' | 'cme_futures' | 'traditional_forex';
 
 export type SessionStatus = 'OPEN' | 'CLOSED' | 'BREAK' | 'STALE' | 'INDICATIVE';
 
@@ -17,6 +17,7 @@ export interface MarketSessionInfo {
   isWeekend: boolean;
   nextOpenUtc?: string;
   lastCloseUtc?: string;
+  lastCloseTimestampMs?: number;
   formattedSessionNotice: string;
 }
 
@@ -49,8 +50,10 @@ export class MarketSessionService {
     const closeHour = 21.0;
     const openHour = 22.0;
 
-    // 1. Saturday: Entire day is weekend closure
+    // 1. Saturday: Entire day is weekend closure (Friday 21:00 UTC was close)
     if (day === 6) {
+      const elapsedHours = (24 - closeHour) + timeDec;
+      const lastCloseMs = referenceDate.getTime() - Math.floor(elapsedHours * 3600 * 1000);
       return {
         schedule,
         isOpen: false,
@@ -59,6 +62,8 @@ export class MarketSessionService {
         reason: 'Traditional gold market is closed on Saturdays. Re-opens Sunday at 22:00 UTC.',
         isWeekend: true,
         nextOpenUtc: 'Sunday 22:00 UTC',
+        lastCloseUtc: 'Friday 21:00 UTC',
+        lastCloseTimestampMs: lastCloseMs,
         formattedSessionNotice: 'Market Closed (Weekend) • Resumes Sunday 22:00 UTC',
       };
     }
@@ -66,6 +71,8 @@ export class MarketSessionService {
     // 2. Sunday: Closed before 22:00 UTC, Open after 22:00 UTC
     if (day === 0) {
       if (timeDec < openHour) {
+        const elapsedHours = (48 - closeHour) + timeDec;
+        const lastCloseMs = referenceDate.getTime() - Math.floor(elapsedHours * 3600 * 1000);
         return {
           schedule,
           isOpen: false,
@@ -74,6 +81,8 @@ export class MarketSessionService {
           reason: `Weekend closure in effect. Re-opens today at ${openHour}:00 UTC.`,
           isWeekend: true,
           nextOpenUtc: 'Sunday 22:00 UTC',
+          lastCloseUtc: 'Friday 21:00 UTC',
+          lastCloseTimestampMs: lastCloseMs,
           formattedSessionNotice: 'Market Closed • Re-opens at 22:00 UTC',
         };
       }
@@ -91,6 +100,8 @@ export class MarketSessionService {
     // 3. Friday: Open before 21:00 UTC, Closed after 21:00 UTC
     if (day === 5) {
       if (timeDec >= closeHour) {
+        const elapsedHours = timeDec - closeHour;
+        const lastCloseMs = referenceDate.getTime() - Math.floor(elapsedHours * 3600 * 1000);
         return {
           schedule,
           isOpen: false,
@@ -99,6 +110,8 @@ export class MarketSessionService {
           reason: 'Weekly trading closed Friday at 21:00 UTC. Re-opens Sunday at 22:00 UTC.',
           isWeekend: true,
           nextOpenUtc: 'Sunday 22:00 UTC',
+          lastCloseUtc: 'Friday 21:00 UTC',
+          lastCloseTimestampMs: lastCloseMs,
           formattedSessionNotice: 'Market Closed (Weekend) • Resumes Sunday 22:00 UTC',
         };
       }
@@ -115,6 +128,8 @@ export class MarketSessionService {
 
     // 4. Monday through Thursday: Daily break between 21:00 and 22:00 UTC
     if (timeDec >= closeHour && timeDec < openHour) {
+      const elapsedHours = timeDec - closeHour;
+      const lastCloseMs = referenceDate.getTime() - Math.floor(elapsedHours * 3600 * 1000);
       return {
         schedule,
         isOpen: false,
@@ -123,6 +138,8 @@ export class MarketSessionService {
         reason: 'Daily settlement & exchange maintenance break (21:00 - 22:00 UTC).',
         isWeekend: false,
         nextOpenUtc: 'Today 22:00 UTC',
+        lastCloseUtc: 'Today 21:00 UTC',
+        lastCloseTimestampMs: lastCloseMs,
         formattedSessionNotice: 'Daily Break (21:00 - 22:00 UTC)',
       };
     }
@@ -137,6 +154,31 @@ export class MarketSessionService {
       isWeekend: false,
       formattedSessionNotice: 'Trading Active',
     };
+  }
+
+  /**
+   * Validates whether a specific candle timestamp falls within a closed market session
+   * (e.g. Saturday or Sunday before 22:00 UTC for traditional metals/futures).
+   * Used to purge and reject any synthetic weekend bars.
+   */
+  static isCandleInClosedSession(schedule: MarketSchedule, candleTimeSec: number): boolean {
+    if (schedule === '24_7') return false;
+    const d = new Date(candleTimeSec * 1000);
+    const day = d.getUTCDay();
+    const hours = d.getUTCHours();
+    const minutes = d.getUTCMinutes();
+    const timeDec = hours + minutes / 60;
+
+    // Saturday: always closed
+    if (day === 6) return true;
+    // Sunday: closed before 22:00 UTC
+    if (day === 0 && timeDec < 22.0) return true;
+    // Friday: closed after 21:00 UTC
+    if (day === 5 && timeDec >= 21.0) return true;
+    // Mon-Thu maintenance break: closed 21:00 - 22:00 UTC
+    if (timeDec >= 21.0 && timeDec < 22.0) return true;
+
+    return false;
   }
 
   /**
