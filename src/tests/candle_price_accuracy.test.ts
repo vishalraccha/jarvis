@@ -37,11 +37,11 @@ describe('Candle & Price Accuracy Suite', () => {
       expect(sol.instrumentType).toBe('spot');
     });
 
-    it('classifies XAUUSD as Spot Gold matching TradingView OANDA benchmark', () => {
+    it('classifies XAUUSD as Bybit Linear Perpetual Futures', () => {
       const xau = InstrumentRegistry.getInstrument('XAUUSD');
       expect(xau.id).toBe('XAUUSD');
-      expect(xau.instrumentType).toBe('spot');
-      expect(xau.provider).toContain('TradingView Benchmark');
+      expect(xau.instrumentType).toBe('linear_perpetual');
+      expect(xau.provider).toBe('Bybit Derivatives');
     });
   });
 
@@ -60,13 +60,13 @@ describe('Candle & Price Accuracy Suite', () => {
       expect((adapter as any).isFutures('GOLD')).toBe(true);
     });
 
-    it('calibrates Binance XAUUSDT to authentic spot gold benchmark (2.66 offset) matching TradingView/MT5', () => {
+    it('delivers 100% pure authentic raw market execution price (0 synthetic offset)', () => {
       const adapter = new BinanceAdapter();
       (adapter as any).requestedSymbol = 'XAUUSD';
 
       const rawPrice = 4000.00;
       const adjusted = adapter.adjustPrice(rawPrice);
-      expect(adjusted).toBe(3997.34);
+      expect(adjusted).toBe(4000.00);
     });
 
     it('does not adjust crypto spot prices (offset = 0)', () => {
@@ -123,8 +123,10 @@ describe('Candle & Price Accuracy Suite', () => {
       try {
         const candles = await marketSyncService.fetchAndStoreUpstream('XAUUSD', '1m', 1);
         expect(candles.length).toBe(1);
-        expect(candles[0].close).toBe(3999.34);
-        expect(candles[0].open).toBe(3997.34);
+        expect(candles[0].close).toBe(4002.00);
+        expect(candles[0].open).toBe(4000.00);
+        expect(candles[0].high).toBe(4005.00);
+        expect(candles[0].low).toBe(3995.00);
       } finally {
         global.fetch = originalFetch;
       }

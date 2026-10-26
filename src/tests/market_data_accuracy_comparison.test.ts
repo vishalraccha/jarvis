@@ -23,7 +23,7 @@ describe('Authoritative Market Data Accuracy & Comparison Suite', () => {
       { sym: 'SOLUSDT', expectedCategory: 'crypto', expectedProvider: 'Binance Spot', tick: 0.01 },
       { sym: 'BNBUSDT', expectedCategory: 'crypto', expectedProvider: 'Binance Spot', tick: 0.01 },
       { sym: 'GC', expectedCategory: 'futures', expectedProvider: 'COMEX (CME Globex)', tick: 0.1 },
-      { sym: 'XAUUSD', expectedCategory: 'metals', expectedProvider: 'OANDA (TradingView Benchmark)', tick: 0.01 },
+      { sym: 'XAUUSD', expectedCategory: 'metals', expectedProvider: 'Bybit Derivatives', tick: 0.01 },
       { sym: 'EURUSD', expectedCategory: 'forex', expectedProvider: 'Binance / Global FX', tick: 0.0001 },
       { sym: 'GBPUSD', expectedCategory: 'forex', expectedProvider: 'Binance / Global FX', tick: 0.0001 },
     ];

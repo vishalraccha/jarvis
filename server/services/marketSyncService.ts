@@ -226,18 +226,24 @@ export class MarketSyncService {
       return [];
     }
 
-    const spotGoldBasis = 2.66;
-    const offset = isGoldSpot ? spotGoldBasis : 0;
     const mult = 100;
 
-    const candles: StoredCandle[] = rawData.map((k) => ({
-      time: Math.floor(Number(k[0]) / 1000),
-      open: Math.round((parseFloat(k[1]) - offset) * mult) / mult,
-      high: Math.round((parseFloat(k[2]) - offset) * mult) / mult,
-      low: Math.round((parseFloat(k[3]) - offset) * mult) / mult,
-      close: Math.round((parseFloat(k[4]) - offset) * mult) / mult,
-      volume: parseFloat(k[5]),
-    }));
+    const candles: StoredCandle[] = rawData.map((k) => {
+      const open = Math.round(parseFloat(k[1]) * mult) / mult;
+      const rawHigh = Math.round(parseFloat(k[2]) * mult) / mult;
+      const rawLow = Math.round(parseFloat(k[3]) * mult) / mult;
+      const close = Math.round(parseFloat(k[4]) * mult) / mult;
+      const high = Math.max(open, rawHigh, rawLow, close);
+      const low = Math.min(open, rawHigh, rawLow, close);
+      return {
+        time: Math.floor(Number(k[0]) / 1000),
+        open,
+        high,
+        low,
+        close,
+        volume: parseFloat(k[5]),
+      };
+    });
 
     sqliteStore.insertCandles(sym, tf, candles);
     if (targetSym !== sym) {

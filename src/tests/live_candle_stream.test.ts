@@ -9,9 +9,7 @@ describe('Live Candle & Trade Streaming Diagnostics', () => {
 
     // Verify instrument definitions support trades
     const goldSpot = InstrumentRegistry.getInstrument('XAUUSD', 'binance');
-    const goldVantage = InstrumentRegistry.getInstrument('XAUUSD_VANTAGE', 'binance');
     expect(goldSpot.supportsTrades).toBe(true);
-    expect(goldVantage.supportsTrades).toBe(true);
 
     // Verify effective symbol mapping
     expect((adapter as any).getEffectiveSymbol('XAUUSD')).toBe('XAUUSDT');

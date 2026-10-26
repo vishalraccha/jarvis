@@ -140,13 +140,13 @@ describe('Candle Cache & Visual Integrity Suite', () => {
 
       const adapter1 = new BinanceAdapter();
       adapter1.connect('XAUUSD', '1m', dummyEvents);
-      expect(adapter1.adjustPrice(4132.37)).toBe(4129.71);
+      expect(adapter1.adjustPrice(4132.37)).toBe(4132.37);
       adapter1.disconnect();
 
-      // Simulate page reload: new instance reads identical calibrated basis
+      // Simulate page reload: new instance delivers identical 1:1 raw exchange price
       const adapter2 = new BinanceAdapter();
       adapter2.connect('XAUUSD', '1m', dummyEvents);
-      expect(adapter2.adjustPrice(4132.37)).toBe(4129.71);
+      expect(adapter2.adjustPrice(4132.37)).toBe(4132.37);
       adapter2.disconnect();
     });
 

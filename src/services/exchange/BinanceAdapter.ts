@@ -47,8 +47,8 @@ export class BinanceAdapter implements IExchangeAdapter {
   private events: ExchangeAdapterEvents | null = null;
   private connectionState: ConnectionState = 'DISCONNECTED';
 
-  // Universal MT5 / TradingView Basis Calibration: 1:1 direct real-time pricing matching TradingView & MT5
-  private spotBasisOffset: number = 2.66;
+  // Authentic 1:1 Exchange Market Execution: 0 synthetic offsets, 0 price manipulation
+  private spotBasisOffset: number = 0;
   private basisOffsets: Record<string, number> = {};
   private lastRawBinancePrice: number = 0;
   private calibrateIntervalId: number | null = null;
@@ -56,13 +56,8 @@ export class BinanceAdapter implements IExchangeAdapter {
   constructor() {
     try {
       localStorage.removeItem('jarvis_basis_offsets');
-      const savedGold = localStorage.getItem('jarvis_spot_basis_offset');
-      if (savedGold) {
-        const p = parseFloat(savedGold);
-        if (Number.isFinite(p) && p >= -20 && p <= 40) {
-          this.spotBasisOffset = p;
-        }
-      }
+      localStorage.removeItem('jarvis_spot_basis_offset');
+      this.spotBasisOffset = 0;
     } catch {}
   }
 
@@ -137,97 +132,26 @@ export class BinanceAdapter implements IExchangeAdapter {
   }
 
   /**
-   * Adjusts raw exchange price to true MT5 / TradingView benchmark price.
-   * STRICT INTEGRITY RULE: Crypto Spot (BTC, ETH, SOL, BNB, etc.) is NEVER offset!
-   * Only XAUUSD applies the calibrated constant 2.66 basis offset vs Binance/Bybit futures.
+   * Returns authentic 1:1 exchange execution price.
+   * STRICT INTEGRITY RULE: Prices are never altered, offset, or fabricated.
    */
-  adjustPrice(price: number, symbol?: string): number {
-    const s = (symbol || this.requestedSymbol || this.currentSymbol || '').toUpperCase().replace(/[-_/]/g, '');
-    const cleanSym = s.replace('SPOT', '');
-
-    if (!this.isGoldSpot(cleanSym)) {
-      return price;
-    }
-
-    if (this.spotBasisOffset !== 0 && Number.isFinite(this.spotBasisOffset)) {
-      return Math.round((price - this.spotBasisOffset) * 100) / 100;
-    }
+  adjustPrice(price: number, _symbol?: string): number {
     return price;
   }
 
   /**
-   * Universal calibration: returns spotBasisOffset for gold, 0 for crypto.
+   * Basis calibration: Returns 0 (no synthetic offsets).
    */
-  async calibrateBasis(symbol?: string): Promise<number> {
-    const sym = (symbol || this.requestedSymbol || this.currentSymbol || '').toUpperCase().replace(/[-_/]/g, '').replace('SPOT', '');
-    if (!sym || !this.isGoldSpot(sym)) {
-      return 0;
-    }
-    return this.spotBasisOffset;
+  async calibrateBasis(_symbol?: string): Promise<number> {
+    return 0;
   }
 
   /**
-   * Calibrate Spot Gold basis offset against live OTC spot benchmark (e.g. goldprice.dev)
+   * Basis calibration: Returns 0 (no synthetic offsets).
    */
   async calibrateSpotBasis(): Promise<number> {
-    const sym = this.requestedSymbol || this.currentSymbol;
-    if (!this.isGoldSpot(sym)) {
-      this.spotBasisOffset = 0;
-      return 0;
-    }
-
-    try {
-      let spotPrice: number | null = null;
-      try {
-        const spotRes = await fetch('/api/goldprice/v1/spot/XAU-USD-SPOT', {
-          signal: AbortSignal.timeout(2500),
-        }).catch(() => fetch('https://api.goldprice.dev/v1/spot/XAU-USD-SPOT', {
-          signal: AbortSignal.timeout(2500),
-        }));
-        if (spotRes && spotRes.ok) {
-          const spotData = await spotRes.json();
-          const compTime = spotData?.computed_at ? new Date(spotData.computed_at).getTime() : 0;
-          const isRecent = compTime > 0 && (Date.now() - compTime) < 7 * 86400000;
-          if ((isRecent || !spotData.is_stale) && spotData?.price) {
-            const p = parseFloat(spotData.price);
-            if (Number.isFinite(p) && p > 3000 && p < 6000) {
-              spotPrice = p;
-            }
-          }
-        }
-      } catch {}
-
-      let binancePrice: number | null = null;
-      try {
-        const bRes = await fetch('/api/fapi/fapi/v1/ticker/price?symbol=XAUUSDT', {
-          signal: AbortSignal.timeout(2500),
-        }).catch(() => fetch('https://fapi.binance.com/fapi/v1/ticker/price?symbol=XAUUSDT', {
-          signal: AbortSignal.timeout(2500),
-        }));
-        if (bRes && bRes.ok) {
-          const bData = await bRes.json();
-          const bp = parseFloat(bData.price);
-          if (Number.isFinite(bp) && bp > 3000) {
-            binancePrice = bp;
-          }
-        }
-      } catch {}
-
-      if (spotPrice !== null && binancePrice !== null) {
-        const measured = Math.round((binancePrice - spotPrice) * 100) / 100;
-        if (measured >= -20.0 && measured <= 35.0) {
-          this.spotBasisOffset = measured;
-          try {
-            localStorage.setItem('jarvis_spot_basis_offset', String(this.spotBasisOffset));
-          } catch {}
-          return this.spotBasisOffset;
-        }
-      }
-    } catch (e) {
-      console.warn('[BinanceAdapter] calibrateSpotBasis error:', e);
-    }
-
-    return this.spotBasisOffset;
+    this.spotBasisOffset = 0;
+    return 0;
   }
 
   private async fastFetch(proxyUrl: string, directUrl: string, timeoutMs: number = 3500): Promise<Response> {

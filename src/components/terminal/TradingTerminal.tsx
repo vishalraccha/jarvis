@@ -17,6 +17,7 @@ import { CacheSettingsModal } from '../settings/CacheSettingsModal';
 import { BinanceAdapter } from '../../services/exchange/BinanceAdapter';
 import { ComexAdapter } from '../../services/exchange/ComexAdapter';
 import { GoldPriceDevAdapter } from '../../services/exchange/GoldPriceDevAdapter';
+import { MT5Adapter } from '../../services/exchange/MT5Adapter';
 import { IExchangeAdapter } from '../../services/exchange/ExchangeAdapter';
 import { ExchangeId, Candle } from '../../types/market';
 import { InstrumentRegistry } from '../../services/market/InstrumentRegistry';
@@ -82,10 +83,12 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
   const binanceAdapterRef = useRef<BinanceAdapter>(new BinanceAdapter());
   const comexAdapterRef = useRef<ComexAdapter>(new ComexAdapter());
   const goldPriceDevAdapterRef = useRef<GoldPriceDevAdapter>(new GoldPriceDevAdapter());
+  const mt5AdapterRef = useRef<MT5Adapter>(new MT5Adapter());
 
   const getAdapter = useCallback((exchange: ExchangeId): IExchangeAdapter => {
     if (exchange === 'comex') return comexAdapterRef.current;
     if (exchange === 'goldprice_dev') return goldPriceDevAdapterRef.current;
+    if (exchange === 'mt5') return mt5AdapterRef.current;
     return binanceAdapterRef.current;
   }, []);
 

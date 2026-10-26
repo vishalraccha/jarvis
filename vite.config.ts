@@ -269,7 +269,7 @@ function redisFastCandleCachePlugin(): Plugin {
       } catch {}
     }
 
-    // 3. For XAUUSD (Spot Gold): Bybit Linear or Binance Futures
+    // 3. For XAUUSD (Gold Perpetual Futures): Bybit Linear or Binance Futures (0 synthetic offset)
     if (target.cleanSym === 'XAUUSD') {
       try {
         const res = await fetch('https://api.bybit.com/v5/market/tickers?category=linear&symbol=XAUUSDT', {
@@ -280,7 +280,7 @@ function redisFastCandleCachePlugin(): Plugin {
           const json: any = await res.json();
           const p = parseFloat(json?.result?.list?.[0]?.lastPrice);
           if (Number.isFinite(p) && p > 0) {
-            const payload = JSON.stringify({ symbol: target.cleanSym, price: Math.round((p - 2.66) * 100) / 100, timestamp: Date.now() });
+            const payload = JSON.stringify({ symbol: target.cleanSym, price: Math.round(p * 100) / 100, timestamp: Date.now() });
             memoryCache.set(tickerKey, { timestamp: Date.now(), data: payload });
             return;
           }
@@ -296,7 +296,7 @@ function redisFastCandleCachePlugin(): Plugin {
           const json: any = await res.json();
           const p = parseFloat(json?.price);
           if (Number.isFinite(p) && p > 0) {
-            const payload = JSON.stringify({ symbol: target.cleanSym, price: Math.round((p - 2.66) * 100) / 100, timestamp: Date.now() });
+            const payload = JSON.stringify({ symbol: target.cleanSym, price: Math.round(p * 100) / 100, timestamp: Date.now() });
             memoryCache.set(tickerKey, { timestamp: Date.now(), data: payload });
             return;
           }
@@ -410,11 +410,12 @@ function redisFastCandleCachePlugin(): Plugin {
                 for (const k of list) {
                   const rawSec = Math.floor(Number(k[0]) / 1000);
                   const time = Math.floor(rawSec / tfSec) * tfSec;
-                  const offset = target.isGoldSpot ? 2.66 : 0;
-                  const open = Math.round((parseFloat(k[1]) - offset) * mult) / mult;
-                  const high = Math.round((parseFloat(k[2]) - offset) * mult) / mult;
-                  const low = Math.round((parseFloat(k[3]) - offset) * mult) / mult;
-                  const close = Math.round((parseFloat(k[4]) - offset) * mult) / mult;
+                  const open = Math.round(parseFloat(k[1]) * mult) / mult;
+                  const rawHigh = Math.round(parseFloat(k[2]) * mult) / mult;
+                  const rawLow = Math.round(parseFloat(k[3]) * mult) / mult;
+                  const close = Math.round(parseFloat(k[4]) * mult) / mult;
+                  const high = Math.max(open, rawHigh, rawLow, close);
+                  const low = Math.min(open, rawHigh, rawLow, close);
                   const volume = parseFloat(k[5]) || 0;
 
                   if (Number.isFinite(time) && time > 0 && close > 0 && high >= low) {
