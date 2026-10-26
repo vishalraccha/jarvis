@@ -103,6 +103,34 @@ export class VwapEngine {
       };
     }
 
+    // Strictly sanitize, sort ascending by time, and deduplicate candles
+    const valid = candles
+      .filter((c) => c && Number.isFinite(c.time) && c.time > 0 && Number.isFinite(c.close) && c.close > 0)
+      .sort((a, b) => a.time - b.time);
+
+    const cleanCandles: Candle[] = [];
+    for (const c of valid) {
+      if (cleanCandles.length === 0 || c.time > cleanCandles[cleanCandles.length - 1].time) {
+        cleanCandles.push({ ...c });
+      } else {
+        const last = cleanCandles[cleanCandles.length - 1];
+        last.high = Math.max(last.high, c.high);
+        last.low = Math.min(last.low, c.low);
+        last.close = c.close;
+        last.volume = (last.volume || 0) + (c.volume || 0);
+      }
+    }
+
+    if (cleanCandles.length === 0) {
+      return {
+        vwap: vwapData,
+        upper1: upper1Data,
+        lower1: lower1Data,
+        upper2: upper2Data,
+        lower2: lower2Data,
+      };
+    }
+
     const mult1 = Math.max(0, settings.multiplier1 ?? 1.0);
     const mult2 = Math.max(0, settings.multiplier2 ?? 2.0);
     const showBands1 = settings.showBands1 !== false;
@@ -116,10 +144,8 @@ export class VwapEngine {
 
     let prevSec = 0;
 
-    for (let i = 0; i < candles.length; i++) {
-      const c = candles[i];
-      if (!c || c.time <= 0 || c.close <= 0) continue;
-
+    for (let i = 0; i < cleanCandles.length; i++) {
+      const c = cleanCandles[i];
       const currentSec = c.time;
       const isReset = i === 0 || this.isNewAnchorPeriod(currentSec, prevSec, settings.anchor);
 
@@ -148,20 +174,22 @@ export class VwapEngine {
 
       const t = currentSec as UTCTimestamp;
 
-      vwapData.push({ time: t, value: vwap });
+      if (vwapData.length === 0 || (t as number) > (vwapData[vwapData.length - 1].time as number)) {
+        vwapData.push({ time: t, value: vwap });
 
-      if (showBands1 && stdDev > 0) {
-        const u1 = Math.round((vwap + mult1 * stdDev) * 10000) / 10000;
-        const l1 = Math.round((vwap - mult1 * stdDev) * 10000) / 10000;
-        upper1Data.push({ time: t, value: u1 });
-        lower1Data.push({ time: t, value: l1 });
-      }
+        if (showBands1 && stdDev > 0) {
+          const u1 = Math.round((vwap + mult1 * stdDev) * 10000) / 10000;
+          const l1 = Math.round((vwap - mult1 * stdDev) * 10000) / 10000;
+          upper1Data.push({ time: t, value: u1 });
+          lower1Data.push({ time: t, value: l1 });
+        }
 
-      if (showBands2 && stdDev > 0) {
-        const u2 = Math.round((vwap + mult2 * stdDev) * 10000) / 10000;
-        const l2 = Math.round((vwap - mult2 * stdDev) * 10000) / 10000;
-        upper2Data.push({ time: t, value: u2 });
-        lower2Data.push({ time: t, value: l2 });
+        if (showBands2 && stdDev > 0) {
+          const u2 = Math.round((vwap + mult2 * stdDev) * 10000) / 10000;
+          const l2 = Math.round((vwap - mult2 * stdDev) * 10000) / 10000;
+          upper2Data.push({ time: t, value: u2 });
+          lower2Data.push({ time: t, value: l2 });
+        }
       }
 
       prevSec = currentSec;

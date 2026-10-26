@@ -30,7 +30,7 @@ function redisFastCandleCachePlugin(): Plugin {
     const isFx = cleanSym === 'EURUSD' || cleanSym === 'GBPUSD';
     const isGold = isGoldSpot || isComex;
     let targetSym = cleanSym;
-    if (isGoldSpot) targetSym = 'PAXGUSDT';
+    if (isGoldSpot) targetSym = 'XAUUSDT';
     else if (cleanSym === 'EURUSD') targetSym = 'EURUSDT';
     else if (cleanSym === 'GBPUSD') targetSym = 'GBPUSDT';
     else if (cleanSym === 'BTC') targetSym = 'BTCUSDT';
@@ -39,7 +39,7 @@ function redisFastCandleCachePlugin(): Plugin {
     else if (cleanSym === 'BNB') targetSym = 'BNBUSDT';
 
     const isCrypto = !isFx && !isGold;
-    const isFutures = !isFx && (raw.includes('PERP') || raw.includes('FUTURES'));
+    const isFutures = isGoldSpot || (!isFx && (raw.includes('PERP') || raw.includes('FUTURES')));
 
     return { cleanSym, targetSym, isGoldSpot, isComex, isFx, isGold, isCrypto, isFutures, priceOffset: 0 };
   }
@@ -53,7 +53,7 @@ function redisFastCandleCachePlugin(): Plugin {
     if (s === 'EURUSD' || s === 'EUR' || s === 'EURUSDT') return 'EURUSD=X';
     if (s === 'GBPUSD' || s === 'GBP' || s === 'GBPUSDT') return 'GBPUSD=X';
     if (s === 'GC' || s === 'CME' || s === 'COMEX') return 'GC=F';
-    if (s.startsWith('XAU') || s.startsWith('GOLD') || s === 'VANTAGE' || s === 'OANDA') return 'PAXG-USD';
+    if (s.startsWith('XAU') || s.startsWith('GOLD') || s === 'VANTAGE' || s === 'OANDA') return 'GC=F';
     return `${s}-USD`;
   }
 
@@ -96,7 +96,7 @@ function redisFastCandleCachePlugin(): Plugin {
     if (baseCrypto === 'BNB') {
       try {
         const byInterval = interval === '1d' ? 'D' : interval === '1h' ? '60' : interval === '15m' ? '15' : interval === '5m' ? '5' : '1';
-        const res = await fetch(`https://api.bybit.com/v5/market/kline?category=spot&symbol=BNBUSDT&interval=${byInterval}&limit=300`, {
+        const res = await fetch(`https://api.bybit.com/v5/market/kline?category=spot&symbol=BNBUSDT&interval=${byInterval}&limit=1000`, {
           headers: { 'User-Agent': 'Mozilla/5.0' },
           signal: AbortSignal.timeout(4000),
         });
@@ -121,8 +121,61 @@ function redisFastCandleCachePlugin(): Plugin {
       } catch {}
     }
 
-    // 3. Authoritative source for Gold & Forex: Yahoo Finance query1 (matches CME & Spot FX 1:1)
-    if (isComex || isGoldSpot || isFx) {
+    // 3. Authoritative source for XAUUSD (Spot Gold / OANDA / Vantage): Bybit Linear XAUUSDT & Binance Futures
+    if (isGoldSpot) {
+      try {
+        const byInterval = interval === '1d' ? 'D' : interval === '1h' ? '60' : interval === '15m' ? '15' : interval === '5m' ? '5' : '1';
+        const res = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=XAUUSDT&interval=${byInterval}&limit=1000`, {
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+          signal: AbortSignal.timeout(4000),
+        });
+        if (res.ok) {
+          const json: any = await res.json();
+          const bbList = json?.result?.list;
+          if (Array.isArray(bbList) && bbList.length > 0) {
+            const sorted = [...bbList].sort((a: any, b: any) => Number(a[0]) - Number(b[0]));
+            const list = sorted.map((k: any) => [
+              Number(k[0]),
+              k[1],
+              k[2],
+              k[3],
+              k[4],
+              k[5],
+            ]);
+            const text = JSON.stringify(list);
+            memoryCache.set(key, { timestamp: Date.now(), data: text });
+            return text;
+          }
+        }
+      } catch {}
+
+      // Secondary fallback for XAUUSD: Binance Futures fapi
+      try {
+        const res = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=XAUUSDT&interval=${interval}&limit=1000`, {
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+          signal: AbortSignal.timeout(4000),
+        });
+        if (res.ok) {
+          const raw = await res.json();
+          if (Array.isArray(raw) && raw.length > 0) {
+            const list = raw.map((k: any) => [
+              Number(k[0]),
+              k[1],
+              k[2],
+              k[3],
+              k[4],
+              k[5],
+            ]);
+            const text = JSON.stringify(list);
+            memoryCache.set(key, { timestamp: Date.now(), data: text });
+            return text;
+          }
+        }
+      } catch {}
+    }
+
+    // 4. Authoritative source for COMEX Gold Futures (GC) and Forex (EURUSD, GBPUSD): Yahoo Finance
+    if (isComex || isFx) {
       try {
         const yInterval = interval === '1d' ? '1d' : interval === '1h' ? '60m' : interval === '15m' ? '15m' : interval === '5m' ? '5m' : '1m';
         const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${yahooSym}?interval=${yInterval}&range=2d`, {
@@ -156,7 +209,7 @@ function redisFastCandleCachePlugin(): Plugin {
       } catch {}
     }
 
-    // 4. Secondary fallback source: Binance Vision
+    // 5. Secondary fallback source: Binance Vision
     try {
       const baseUrl = 'https://data-api.binance.vision/api/v3/klines';
       const res = await fetch(`${baseUrl}?symbol=${targetSym}&interval=${interval}&limit=1000`, {
@@ -216,7 +269,42 @@ function redisFastCandleCachePlugin(): Plugin {
       } catch {}
     }
 
-    // 3. For Gold and Forex: Yahoo Finance query1 MT5/TradingView spot
+    // 3. For XAUUSD (Spot Gold): Bybit Linear or Binance Futures
+    if (target.cleanSym === 'XAUUSD') {
+      try {
+        const res = await fetch('https://api.bybit.com/v5/market/tickers?category=linear&symbol=XAUUSDT', {
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+          signal: AbortSignal.timeout(3000),
+        });
+        if (res.ok) {
+          const json: any = await res.json();
+          const p = parseFloat(json?.result?.list?.[0]?.lastPrice);
+          if (Number.isFinite(p) && p > 0) {
+            const payload = JSON.stringify({ symbol: target.cleanSym, price: Math.round((p - 2.66) * 100) / 100, timestamp: Date.now() });
+            memoryCache.set(tickerKey, { timestamp: Date.now(), data: payload });
+            return;
+          }
+        }
+      } catch {}
+
+      try {
+        const res = await fetch('https://fapi.binance.com/fapi/v1/ticker/price?symbol=XAUUSDT', {
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+          signal: AbortSignal.timeout(3000),
+        });
+        if (res.ok) {
+          const json: any = await res.json();
+          const p = parseFloat(json?.price);
+          if (Number.isFinite(p) && p > 0) {
+            const payload = JSON.stringify({ symbol: target.cleanSym, price: Math.round((p - 2.66) * 100) / 100, timestamp: Date.now() });
+            memoryCache.set(tickerKey, { timestamp: Date.now(), data: payload });
+            return;
+          }
+        }
+      } catch {}
+    }
+
+    // 4. For COMEX (GC) and Forex: Yahoo Finance query1 MT5/TradingView spot
     const yahooSym = getYahooSymbol(target.cleanSym);
     try {
       const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${yahooSym}?interval=1m&range=1d`, {
@@ -315,19 +403,39 @@ function redisFastCandleCachePlugin(): Plugin {
             try {
               const list = JSON.parse(rawText);
               if (Array.isArray(list)) {
-                const sliced = limit > 0 ? list.slice(-limit) : list;
+                const tfSec = interval === '1d' ? 86400 : interval === '1h' ? 3600 : interval === '15m' ? 900 : interval === '5m' ? 300 : 60;
                 const mult = target.isFx ? 10000 : (target.isComex ? 10 : 100);
-                const formatted = sliced.map((k: any) => ({
-                  time: Math.floor(Number(k[0]) / 1000),
-                  open: Math.round(parseFloat(k[1]) * mult) / mult,
-                  high: Math.round(parseFloat(k[2]) * mult) / mult,
-                  low: Math.round(parseFloat(k[3]) * mult) / mult,
-                  close: Math.round(parseFloat(k[4]) * mult) / mult,
-                  volume: parseFloat(k[5]),
-                }));
+
+                const candleMap = new Map<number, any>();
+                for (const k of list) {
+                  const rawSec = Math.floor(Number(k[0]) / 1000);
+                  const time = Math.floor(rawSec / tfSec) * tfSec;
+                  const offset = target.isGoldSpot ? 2.66 : 0;
+                  const open = Math.round((parseFloat(k[1]) - offset) * mult) / mult;
+                  const high = Math.round((parseFloat(k[2]) - offset) * mult) / mult;
+                  const low = Math.round((parseFloat(k[3]) - offset) * mult) / mult;
+                  const close = Math.round((parseFloat(k[4]) - offset) * mult) / mult;
+                  const volume = parseFloat(k[5]) || 0;
+
+                  if (Number.isFinite(time) && time > 0 && close > 0 && high >= low) {
+                    if (!candleMap.has(time)) {
+                      candleMap.set(time, { time, open, high, low, close, volume });
+                    } else {
+                      const prev = candleMap.get(time);
+                      prev.high = Math.max(prev.high, high);
+                      prev.low = Math.min(prev.low, low);
+                      prev.close = close;
+                      prev.volume += volume;
+                    }
+                  }
+                }
+
+                const sorted = Array.from(candleMap.values()).sort((a, b) => a.time - b.time);
+                const sliced = limit > 0 ? sorted.slice(-limit) : sorted;
+
                 res.setHeader('Content-Type', 'application/json');
                 res.setHeader('X-Cache-Status', 'HIT-RAM-0MS');
-                res.end(JSON.stringify(formatted));
+                res.end(JSON.stringify(sliced));
                 return;
               }
             } catch {}

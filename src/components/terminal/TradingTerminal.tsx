@@ -402,6 +402,12 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
             }
           }
 
+          // Discard corrupted cache if more than 10% of bars are flat dashes (e.g. old PAXG tokens)
+          const flatCount = dbCached.filter((c) => c.open === c.close && c.high === c.low).length;
+          if (dbCached.length > 0 && flatCount > dbCached.length * 0.1) {
+            dbCached = [];
+          }
+
           if (
             dbCached.length > 0 &&
             symbol === preferencesRef.current.symbol &&
@@ -478,9 +484,10 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
               )
             : validBars;
 
-          // Step 4: Seamlessly merge fresh candles with existing buffer
-          const merged = latestCandlesRef.current.length > 0
-            ? mergeAndDeduplicateCandles(latestCandlesRef.current, validFresh, timeframe)
+          // Step 4: Seamlessly merge fresh candles with existing buffer, purging any zero-range flat bars
+          const existingFiltered = latestCandlesRef.current.filter((c) => !(c.open === c.close && c.high === c.low));
+          const merged = existingFiltered.length > 0
+            ? mergeAndDeduplicateCandles(existingFiltered, validFresh, timeframe)
             : validFresh;
 
           latestCandlesRef.current = merged;

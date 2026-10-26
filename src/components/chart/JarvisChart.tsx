@@ -619,20 +619,24 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
       });
 
       const vwapResult = VwapEngine.calculate(candles, vwapCfg);
-      vSeries.setData(vwapResult.vwap);
+      try {
+        vSeries.setData(vwapResult.vwap);
+      } catch (err) {
+        console.warn('[JarvisChart] vSeries.setData error:', err);
+      }
       if (showBands1) {
-        u1Series.setData(vwapResult.upper1);
-        l1Series.setData(vwapResult.lower1);
+        try { u1Series.setData(vwapResult.upper1); } catch {}
+        try { l1Series.setData(vwapResult.lower1); } catch {}
       } else {
-        u1Series.setData([]);
-        l1Series.setData([]);
+        try { u1Series.setData([]); } catch {}
+        try { l1Series.setData([]); } catch {}
       }
       if (showBands2) {
-        u2Series.setData(vwapResult.upper2);
-        l2Series.setData(vwapResult.lower2);
+        try { u2Series.setData(vwapResult.upper2); } catch {}
+        try { l2Series.setData(vwapResult.lower2); } catch {}
       } else {
-        u2Series.setData([]);
-        l2Series.setData([]);
+        try { u2Series.setData([]); } catch {}
+        try { l2Series.setData([]); } catch {}
       }
     }, [preferences.showVwap, preferences.vwap]);
 
@@ -701,6 +705,8 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         // Deduplicate and ensure strict ascending order by timestamp
         const sorted = [...cleanCandles].sort((a, b) => a.time - b.time);
         const tvData: CandlestickData[] = [];
+        const dedupedCandles: Candle[] = [];
+
         for (const c of sorted) {
           const t = c.time as UTCTimestamp;
           if (tvData.length === 0 || t > (tvData[tvData.length - 1].time as number)) {
@@ -711,13 +717,23 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
               low: c.low,
               close: c.close,
             });
+            dedupedCandles.push({ ...c });
           } else {
-            const last = tvData[tvData.length - 1];
-            last.high = Math.max(last.high, c.high);
-            last.low = Math.min(last.low, c.low);
-            last.close = c.close;
+            const lastTv = tvData[tvData.length - 1];
+            lastTv.high = Math.max(lastTv.high, c.high);
+            lastTv.low = Math.min(lastTv.low, c.low);
+            lastTv.close = c.close;
+
+            const lastDeduped = dedupedCandles[dedupedCandles.length - 1];
+            lastDeduped.high = lastTv.high;
+            lastDeduped.low = lastTv.low;
+            lastDeduped.close = c.close;
+            lastDeduped.volume = (lastDeduped.volume || 0) + (c.volume || 0);
           }
         }
+
+        allCandlesRef.current = dedupedCandles;
+        pendingCandlesRef.current = dedupedCandles;
 
         try {
           activeSeries.setData(tvData);
@@ -766,7 +782,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
           }
         }
 
-        refreshVwap(cleanCandles);
+        refreshVwap(dedupedCandles);
       },
       [
         chart,

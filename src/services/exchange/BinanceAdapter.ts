@@ -139,18 +139,16 @@ export class BinanceAdapter implements IExchangeAdapter {
   /**
    * Adjusts raw exchange price to true MT5 / TradingView benchmark price.
    * STRICT INTEGRITY RULE: Crypto Spot (BTC, ETH, SOL, BNB, etc.) is NEVER offset!
-   * Raw exchange prices directly represent authentic order-book matching engine execution.
+   * Only XAUUSD applies the calibrated constant 2.66 basis offset vs Binance/Bybit futures.
    */
   adjustPrice(price: number, symbol?: string): number {
     const s = (symbol || this.requestedSymbol || this.currentSymbol || '').toUpperCase().replace(/[-_/]/g, '');
     const cleanSym = s.replace('SPOT', '');
 
-    // 1. Strict guard: NEVER adjust or offset crypto spot or forex
     if (!this.isGoldSpot(cleanSym)) {
       return price;
     }
 
-    // 2. Only OTC Spot Gold (XAUUSD) has an OTC basis offset vs Binance futures/PaxG
     if (this.spotBasisOffset !== 0 && Number.isFinite(this.spotBasisOffset)) {
       return Math.round((price - this.spotBasisOffset) * 100) / 100;
     }
@@ -158,15 +156,14 @@ export class BinanceAdapter implements IExchangeAdapter {
   }
 
   /**
-   * Universal calibration against live MT5 / TradingView benchmark ticker
+   * Universal calibration: returns spotBasisOffset for gold, 0 for crypto.
    */
   async calibrateBasis(symbol?: string): Promise<number> {
     const sym = (symbol || this.requestedSymbol || this.currentSymbol || '').toUpperCase().replace(/[-_/]/g, '').replace('SPOT', '');
     if (!sym || !this.isGoldSpot(sym)) {
-      // NEVER calibrate or distort crypto spot or forex prices
       return 0;
     }
-    return this.calibrateSpotBasis();
+    return this.spotBasisOffset;
   }
 
   /**
@@ -1060,11 +1057,36 @@ export class BinanceAdapter implements IExchangeAdapter {
       } catch {}
     }
 
-    // 3. Direct browser fallback: Bybit Spot
+    // 3. Direct browser fallback: Bybit Spot (BNB)
     if (baseCrypto === 'BNB' && !startTime && !endTime) {
       try {
         const byInterval = interval === '1d' ? 'D' : interval === '1h' ? '60' : interval === '15m' ? '15' : interval === '5m' ? '5' : '1';
         const bbRes = await fetch(`https://api.bybit.com/v5/market/kline?category=spot&symbol=BNBUSDT&interval=${byInterval}&limit=300`, {
+          signal: AbortSignal.timeout(4000),
+        });
+        if (bbRes.ok) {
+          const json: any = await bbRes.json();
+          const bbList = json?.result?.list;
+          if (Array.isArray(bbList) && bbList.length > 0) {
+            const sorted = [...bbList].sort((a: any, b: any) => Number(a[0]) - Number(b[0]));
+            return sorted.map((k: any) => ({
+              time: Math.floor(Number(k[0]) / 1000),
+              open: parseFloat(k[1]),
+              high: parseFloat(k[2]),
+              low: parseFloat(k[3]),
+              close: parseFloat(k[4]),
+              volume: parseFloat(k[5]),
+            }));
+          }
+        }
+      } catch {}
+    }
+
+    // 4. Direct browser fallback: Bybit Linear XAUUSDT (continuous, high-liquidity gold spot)
+    if (this.isGoldSpot(this.requestedSymbol || sym) && !startTime && !endTime) {
+      try {
+        const byInterval = interval === '1d' ? 'D' : interval === '1h' ? '60' : interval === '15m' ? '15' : interval === '5m' ? '5' : '1';
+        const bbRes = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=XAUUSDT&interval=${byInterval}&limit=${Math.min(limit, 1000)}`, {
           signal: AbortSignal.timeout(4000),
         });
         if (bbRes.ok) {
