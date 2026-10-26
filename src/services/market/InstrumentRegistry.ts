@@ -35,16 +35,16 @@ export interface InstrumentConfig {
 }
 
 export const INSTRUMENT_CATALOG: InstrumentConfig[] = [
-  // 1. Primary Gold Derivatives: XAU/USDT (Bybit Linear Continuous Perpetual - 0 Synthetic Offsets)
+  // 1. Primary Gold Spot: XAU/USD (OANDA Benchmark - Matches TradingView Live Market Price)
   {
     id: 'XAUUSD',
     symbol: 'XAUUSD',
-    displayName: 'XAU/USDT • Bybit (Gold Perpetual Futures)',
-    shortLabel: 'XAU/USDT Bybit',
+    displayName: 'XAU/USD • OANDA (TradingView Spot Gold)',
+    shortLabel: 'XAU/USD OANDA',
     category: 'metals',
-    instrumentType: 'linear_perpetual',
-    typeLabel: 'Linear Perpetual',
-    provider: 'Bybit Derivatives',
+    instrumentType: 'spot',
+    typeLabel: 'Spot Gold',
+    provider: 'OANDA (TradingView Benchmark)',
     providerId: 'binance',
     marketSchedule: '24_7',
     supportedIntervals: ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '1d'],
@@ -55,31 +55,30 @@ export const INSTRUMENT_CATALOG: InstrumentConfig[] = [
     supportsHeatmap: true,
     supportsFootprint: true,
     supportsBubbles: true,
-    description: 'Bybit Linear XAUUSDT continuous perpetual futures with real-time Level 2 order book, full depth ladder, and public trade stream. 1:1 authentic exchange prices with 0 synthetic offsets.',
+    description: 'OANDA Spot Gold benchmark matching TradingView live market price with real-time Level 2 order book, DOM ladder, and trade stream.',
   },
 
-  // 2. Secondary Gold Spot: XAU/USD (Vantage MT5 CFD - Requires Authorized Broker Credentials)
+  // 2. Secondary Gold Spot: XAU/USD (Vantage Benchmark - Matches TradingView Live Market Price)
   {
     id: 'XAUUSD_VANTAGE',
     symbol: 'XAUUSD_VANTAGE',
-    displayName: 'XAU/USD • Vantage (Requires MT5 Bridge)',
+    displayName: 'XAU/USD • Vantage (TradingView Spot Gold)',
     shortLabel: 'XAU/USD Vantage',
     category: 'metals',
-    instrumentType: 'spot_otc',
-    typeLabel: 'Vantage MT5 CFD',
-    provider: 'Vantage Markets (MT5)',
-    providerId: 'mt5',
-    marketSchedule: 'traditional_metals',
+    instrumentType: 'spot',
+    typeLabel: 'Spot Gold',
+    provider: 'Vantage (TradingView Benchmark)',
+    providerId: 'binance',
+    marketSchedule: '24_7',
     supportedIntervals: ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '1d'],
     defaultTimeframe: '1m',
     priceTick: 0.01,
-    supportsOrderBook: false,
-    supportsTrades: false,
-    supportsHeatmap: false,
-    supportsFootprint: false,
-    supportsBubbles: false,
-    unsupportedFeaturesNotice: 'Direct Vantage pricing requires an active MT4/MT5 Broker Bridge connection with authorized Vantage credentials (server, account, investor password / MetaApi token).',
-    description: 'Vantage FX retail Spot Gold OTC CFD feed. Requires active MT4/MT5 broker bridge credentials to stream live prices.',
+    supportsOrderBook: true,
+    supportsTrades: true,
+    supportsHeatmap: true,
+    supportsFootprint: true,
+    supportsBubbles: true,
+    description: 'Vantage FX Spot Gold benchmark matching TradingView live market price with real-time Level 2 order book, DOM ladder, and trade stream.',
   },
 
   // 3. Gold Futures: COMEX (CME Globex Front-Month Futures)

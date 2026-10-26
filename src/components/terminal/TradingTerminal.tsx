@@ -747,19 +747,9 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
           return;
         }
 
-        // Keep latestCandlesRef synchronized on klines
         if (latestCandlesRef.current.length > 0) {
           const last = latestCandlesRef.current[latestCandlesRef.current.length - 1];
           if (last.time === alignedCandle.time) {
-            // Outlier check on klines: do not allow false wicks to exceed 4% of close
-            if (last.close > 0) {
-              if (alignedCandle.high / last.close > 1.04) {
-                alignedCandle.high = Math.min(alignedCandle.high, last.close * 1.02);
-              }
-              if (alignedCandle.low / last.close < 0.96) {
-                alignedCandle.low = Math.max(alignedCandle.low, last.close * 0.98);
-              }
-            }
             last.high = Math.max(last.high, alignedCandle.high);
             last.low = Math.min(last.low, alignedCandle.low);
             last.close = alignedCandle.close;
@@ -767,11 +757,11 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
           } else if (last.time < alignedCandle.time) {
             latestCandlesRef.current.push(alignedCandle);
           }
-        }
-
-        chartRef.current?.updateLiveCandle(alignedCandle);
-        if (instrument.supportsFootprint) {
-          footprintEngineRef.current.updateLiveCandle(alignedCandle, orderBookRef.current);
+          const active = latestCandlesRef.current[latestCandlesRef.current.length - 1];
+          chartRef.current?.updateLiveCandle(active);
+          if (instrument.supportsFootprint) {
+            footprintEngineRef.current.updateLiveCandle(active, orderBookRef.current);
+          }
         }
       },
       onConnectionChange: (state, metrics) => {
@@ -838,7 +828,11 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
               const merged = mergeAndDeduplicateCandles(latestCandlesRef.current, valid, curTf);
               if (merged.length > 0) {
                 latestCandlesRef.current = merged;
-                chartRef.current?.incrementalUpdateCandles(valid);
+                // Only pass confirmed closed bars to chart so delayed REST polling never overwrites the live forming bar!
+                const closedBars = valid.filter((c) => c.time < currentBarStart);
+                if (closedBars.length > 0) {
+                  chartRef.current?.incrementalUpdateCandles(closedBars);
+                }
                 if (syncTickCount % 12 === 0) {
                   indexedDBCache.saveCandles(curSymbol, curTf, merged, curExchange);
                 }

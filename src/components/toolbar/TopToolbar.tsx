@@ -295,8 +295,8 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
   };
 
   const getCompactSymbolLabel = (symbol: string): string => {
-    if (symbol === 'XAUUSD') return 'XAU/USDT Bybit';
-    if (symbol === 'XAUUSD_VANTAGE') return 'XAU/USD Vantage (MT5)';
+    if (symbol === 'XAUUSD') return 'XAU/USD (OANDA)';
+    if (symbol === 'XAUUSD_VANTAGE') return 'XAU/USD (Vantage)';
     if (symbol === 'GC') return 'GC Gold';
     return symbol.replace('USDT', '/USDT');
   };
@@ -309,11 +309,8 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
     if (selected === 'GC') {
       sym = 'GC';
       ex = 'comex';
-    } else if (selected === 'XAUUSD_VANTAGE') {
-      sym = 'XAUUSD_VANTAGE';
-      ex = 'mt5';
-    } else if (selected === 'XAUUSD') {
-      sym = 'XAUUSD';
+    } else if (selected === 'XAUUSD' || selected === 'XAUUSD_VANTAGE') {
+      sym = selected;
       ex = 'binance';
     }
 
@@ -429,10 +426,10 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
               >
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontWeight: 700 }}>XAU/USDT • Bybit</span>
-                    <span style={{ fontSize: 9, padding: '0 4px', borderRadius: 3, background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8' }}>Linear Perpetual</span>
+                    <span style={{ fontWeight: 700 }}>XAU/USD • OANDA</span>
+                    <span style={{ fontSize: 9, padding: '0 4px', borderRadius: 3, background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8' }}>Spot Gold</span>
                   </div>
-                  <span style={{ fontSize: 9.5, color: '#94a3b8' }}>Live Bybit Order Flow (0 Offset)</span>
+                  <span style={{ fontSize: 9.5, color: '#94a3b8' }}>TradingView OANDA Benchmark</span>
                 </div>
                 {preferences.symbol === 'XAUUSD' && <Check size={13} style={{ color: '#facc15' }} />}
               </div>
@@ -444,14 +441,14 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
                   color: preferences.symbol === 'XAUUSD_VANTAGE' ? '#fde047' : '#cbd5e1',
                   padding: '6px 12px',
                 }}
-                onClick={() => handleSelectSymbol('XAUUSD_VANTAGE', 'mt5')}
+                onClick={() => handleSelectSymbol('XAUUSD_VANTAGE', 'binance')}
               >
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                     <span style={{ fontWeight: 700 }}>XAU/USD • Vantage</span>
-                    <span style={{ fontSize: 9, padding: '0 4px', borderRadius: 3, background: 'rgba(234, 179, 8, 0.15)', color: '#facc15' }}>MT5 Bridge</span>
+                    <span style={{ fontSize: 9, padding: '0 4px', borderRadius: 3, background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8' }}>Spot Gold</span>
                   </div>
-                  <span style={{ fontSize: 9.5, color: '#94a3b8' }}>Requires Vantage Broker Credentials</span>
+                  <span style={{ fontSize: 9.5, color: '#94a3b8' }}>TradingView Vantage Benchmark</span>
                 </div>
                 {preferences.symbol === 'XAUUSD_VANTAGE' && <Check size={13} style={{ color: '#facc15' }} />}
               </div>

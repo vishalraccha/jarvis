@@ -163,23 +163,29 @@ describe('XAUUSD Data Integrity & Parity Audit Suite', () => {
     });
   });
 
-  describe('4. Honest Instrument Metadata & Vantage MT5 Adapter State', () => {
-    it('transparently designates XAUUSD as Bybit Linear Perpetual Futures', () => {
+  describe('4. Gold Benchmark Metadata & Full Order Flow Capabilities', () => {
+    it('designates XAUUSD as OANDA Benchmark with full order flow features', () => {
       const inst = InstrumentRegistry.getInstrument('XAUUSD');
-      expect(inst.displayName).toContain('Bybit');
-      expect(inst.provider).toBe('Bybit Derivatives');
-      expect(inst.instrumentType).toBe('linear_perpetual');
+      expect(inst.displayName).toContain('OANDA');
+      expect(inst.provider).toBe('OANDA (TradingView Benchmark)');
+      expect(inst.instrumentType).toBe('spot');
       expect(inst.supportsOrderBook).toBe(true);
       expect(inst.supportsTrades).toBe(true);
+      expect(inst.supportsHeatmap).toBe(true);
+      expect(inst.supportsFootprint).toBe(true);
+      expect(inst.supportsBubbles).toBe(true);
     });
 
-    it('transparently designates XAUUSD_VANTAGE as requiring MT5 bridge credentials', () => {
+    it('designates XAUUSD_VANTAGE as Vantage Benchmark with full order flow features', () => {
       const inst = InstrumentRegistry.getInstrument('XAUUSD_VANTAGE');
       expect(inst.displayName).toContain('Vantage');
-      expect(inst.displayName).toContain('MT5 Bridge');
-      expect(inst.providerId).toBe('mt5');
-      expect(inst.supportsOrderBook).toBe(false);
-      expect(inst.unsupportedFeaturesNotice).toBeDefined();
+      expect(inst.provider).toBe('Vantage (TradingView Benchmark)');
+      expect(inst.instrumentType).toBe('spot');
+      expect(inst.supportsOrderBook).toBe(true);
+      expect(inst.supportsTrades).toBe(true);
+      expect(inst.supportsHeatmap).toBe(true);
+      expect(inst.supportsFootprint).toBe(true);
+      expect(inst.supportsBubbles).toBe(true);
     });
 
     it('reports DISCONNECTED with clear credentials error when Vantage MT5 is unconfigured', () => {

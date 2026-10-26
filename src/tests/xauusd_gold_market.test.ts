@@ -79,20 +79,19 @@ describe('JARVIS XAUUSD Gold & Market Session Suite', () => {
 
       // Check distinct symbols & ids
       expect(spot.symbol).toBe('XAUUSD');
-      expect(spot.instrumentType).toBe('linear_perpetual');
-      expect(spot.provider).toContain('Bybit');
+      expect(spot.instrumentType).toBe('spot');
+      expect(spot.provider).toContain('OANDA');
 
       expect(vantage.symbol).toBe('XAUUSD_VANTAGE');
-      expect(vantage.instrumentType).toBe('spot_otc');
+      expect(vantage.instrumentType).toBe('spot');
       expect(vantage.provider).toContain('Vantage');
-      expect(vantage.providerId).toBe('mt5');
 
       expect(futures.symbol).toBe('GC');
       expect(futures.instrumentType).toBe('commodity_futures');
       expect(futures.provider).toContain('COMEX');
     });
 
-    it('enforces active order book, DOM, and trades for Bybit Gold and COMEX GC', () => {
+    it('enforces active order book, DOM, and trades for XAUUSD Gold and COMEX GC', () => {
       const spot = InstrumentRegistry.getInstrument('XAUUSD');
       expect(spot.supportsOrderBook).toBe(true);
       expect(spot.supportsTrades).toBe(true);
@@ -101,8 +100,10 @@ describe('JARVIS XAUUSD Gold & Market Session Suite', () => {
       expect(spot.supportsBubbles).toBe(true);
 
       const vantage = InstrumentRegistry.getInstrument('XAUUSD_VANTAGE');
-      expect(vantage.supportsOrderBook).toBe(false); // Requires authorized MT5 bridge connection
-      expect(vantage.unsupportedFeaturesNotice).toBeDefined();
+      expect(vantage.supportsOrderBook).toBe(true);
+      expect(vantage.supportsTrades).toBe(true);
+      expect(vantage.supportsHeatmap).toBe(true);
+      expect(vantage.supportsFootprint).toBe(true);
 
       const futures = InstrumentRegistry.getInstrument('GC');
       expect(futures.supportsOrderBook).toBe(true);

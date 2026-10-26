@@ -37,11 +37,11 @@ describe('Candle & Price Accuracy Suite', () => {
       expect(sol.instrumentType).toBe('spot');
     });
 
-    it('classifies XAUUSD as Bybit Linear Perpetual Futures', () => {
+    it('classifies XAUUSD as Spot Gold matching TradingView OANDA benchmark', () => {
       const xau = InstrumentRegistry.getInstrument('XAUUSD');
       expect(xau.id).toBe('XAUUSD');
-      expect(xau.instrumentType).toBe('linear_perpetual');
-      expect(xau.provider).toBe('Bybit Derivatives');
+      expect(xau.instrumentType).toBe('spot');
+      expect(xau.provider).toContain('OANDA (TradingView Benchmark)');
     });
   });
 
