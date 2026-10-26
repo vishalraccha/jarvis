@@ -57,42 +57,72 @@ function redisFastCandleCachePlugin(): Plugin {
     return `${s}-USD`;
   }
 
-  let cachedGoldBasis = { offset: 0, lastFetch: 0 };
+  async function fetchSpotGoldPrice(): Promise<number> {
+    // 1. Primary: Unmetered free real-time gold spot price from api.gold-api.com (matches MT5/TradingView)
+    try {
+      const res = await fetch('https://api.gold-api.com/price/XAU', {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+        signal: AbortSignal.timeout(3000),
+      });
+      if (res.ok) {
+        const json: any = await res.json();
+        const p = parseFloat(json?.price);
+        if (Number.isFinite(p) && p > 1000) {
+          return Math.round(p * 100) / 100;
+        }
+      }
+    } catch {}
+
+    // 2. Secondary fallback: api.goldprice.dev
+    try {
+      const res = await fetch('https://api.goldprice.dev/v1/spot/XAU-USD-SPOT', {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+        signal: AbortSignal.timeout(3000),
+      });
+      if (res.ok) {
+        const json: any = await res.json();
+        const p = parseFloat(json?.price);
+        if (Number.isFinite(p) && p > 1000) {
+          return Math.round(p * 100) / 100;
+        }
+      }
+    } catch {}
+
+    return 0;
+  }
+
+  let cachedGoldBasis = { offset: 0, lastFetch: 0, spotPrice: 0, bybitPrice: 0 };
   async function getLiveGoldBasis(): Promise<number> {
     const now = Date.now();
-    if (now - cachedGoldBasis.lastFetch < 20000 && cachedGoldBasis.offset !== 0) {
+    if (now - cachedGoldBasis.lastFetch < 10000 && cachedGoldBasis.offset > 0) {
       return cachedGoldBasis.offset;
     }
     try {
-      const spotRes = await fetch('https://api.goldprice.dev/v1/spot/XAU-USD-SPOT', {
-        headers: { 'User-Agent': 'Mozilla/5.0' },
-        signal: AbortSignal.timeout(3500),
-      });
-      let spotPrice = 0;
-      if (spotRes.ok) {
-        const spotJson: any = await spotRes.json();
-        spotPrice = parseFloat(spotJson?.price);
-      }
+      const spotPrice = await fetchSpotGoldPrice();
+      let bybitPrice = 0;
 
       const bybitRes = await fetch('https://api.bybit.com/v5/market/tickers?category=linear&symbol=XAUUSDT', {
         headers: { 'User-Agent': 'Mozilla/5.0' },
         signal: AbortSignal.timeout(3500),
       });
-      let bybitPrice = 0;
       if (bybitRes.ok) {
         const bybitJson: any = await bybitRes.json();
         bybitPrice = parseFloat(bybitJson?.result?.list?.[0]?.lastPrice);
       }
 
       if (spotPrice > 1000 && bybitPrice > 1000) {
-        const basis = Math.round((bybitPrice - spotPrice) * 100) / 100;
-        cachedGoldBasis = { offset: basis, lastFetch: now };
-        return basis;
+        const rawBasis = bybitPrice - spotPrice;
+        // Perpetual futures basis for gold floats smoothly between $1 and $22
+        if (rawBasis >= 0 && rawBasis <= 25) {
+          const basis = Math.round(rawBasis * 100) / 100;
+          cachedGoldBasis = { offset: basis, lastFetch: now, spotPrice, bybitPrice };
+          return basis;
+        }
       }
     } catch {
-      if (cachedGoldBasis.offset !== 0) return cachedGoldBasis.offset;
+      if (cachedGoldBasis.offset > 0) return cachedGoldBasis.offset;
     }
-    return cachedGoldBasis.offset;
+    return cachedGoldBasis.offset > 0 ? cachedGoldBasis.offset : 0;
   }
 
   async function fetchAndCache(symbol: string, interval: string, isFutures: boolean): Promise<string | null> {
@@ -309,21 +339,14 @@ function redisFastCandleCachePlugin(): Plugin {
       } catch {}
     }
 
-    // 3. For XAUUSD (Spot Gold Benchmark): Fetch Spot Gold price directly from goldprice.dev or calibrate bybit
+    // 3. For XAUUSD (Spot Gold Benchmark): Fetch authentic Spot Gold price directly from gold-api
     if (target.cleanSym === 'XAUUSD') {
       try {
-        const spotRes = await fetch('https://api.goldprice.dev/v1/spot/XAU-USD-SPOT', {
-          headers: { 'User-Agent': 'Mozilla/5.0' },
-          signal: AbortSignal.timeout(3000),
-        });
-        if (spotRes.ok) {
-          const json: any = await spotRes.json();
-          const p = parseFloat(json?.price);
-          if (Number.isFinite(p) && p > 1000) {
-            const payload = JSON.stringify({ symbol: target.cleanSym, price: Math.round(p * 100) / 100, timestamp: Date.now() });
-            memoryCache.set(tickerKey, { timestamp: Date.now(), data: payload });
-            return;
-          }
+        const spotP = await fetchSpotGoldPrice();
+        if (spotP > 1000) {
+          const payload = JSON.stringify({ symbol: target.cleanSym, price: spotP, timestamp: Date.now() });
+          memoryCache.set(tickerKey, { timestamp: Date.now(), data: payload });
+          return;
         }
       } catch {}
 
@@ -432,6 +455,18 @@ function redisFastCandleCachePlugin(): Plugin {
         if (req.url?.startsWith('/api/health')) {
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify({ status: 'ok', mode: 'vite-dev-server' }));
+          return;
+        }
+
+        if (req.url?.startsWith('/api/gold/basis')) {
+          const basis = await getLiveGoldBasis();
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({
+            basis,
+            spotPrice: cachedGoldBasis.spotPrice,
+            bybitPrice: cachedGoldBasis.bybitPrice,
+            timestamp: Date.now(),
+          }));
           return;
         }
 
@@ -627,6 +662,14 @@ export default defineConfig({
         target: 'https://api.goldprice.dev',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api\/goldprice/, ''),
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        },
+      },
+      '/api/goldapi': {
+        target: 'https://api.gold-api.com',
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/api\/goldapi/, ''),
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         },

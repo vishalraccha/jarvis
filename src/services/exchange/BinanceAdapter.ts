@@ -160,21 +160,36 @@ export class BinanceAdapter implements IExchangeAdapter {
   }
 
   /**
-   * Real-time dynamic calibration: fetches live spot gold reference from goldprice.dev
-   * and computes dynamic basis against live Bybit futures price.
+   * Real-time dynamic calibration: syncs with /api/gold/basis for 100% parity with candles
+   * or fetches unmetered live spot reference from api.gold-api.com.
    */
   async calibrateSpotBasis(): Promise<number> {
     try {
       const now = Date.now();
-      if (now - this.lastBasisFetch < 15000 && this.spotBasisOffset !== 0) {
+      if (now - this.lastBasisFetch < 10000 && this.spotBasisOffset !== 0) {
         return this.spotBasisOffset;
       }
 
-      // 1. Fetch live Spot Gold reference (TradingView benchmark)
+      // 1. Primary: Sync directly with backend /api/gold/basis for identical candle & stream alignment
+      try {
+        const srvRes = await fetch('/api/gold/basis', { signal: AbortSignal.timeout(2000) });
+        if (srvRes.ok) {
+          const srvData = await srvRes.json();
+          const b = parseFloat(srvData?.basis);
+          if (Number.isFinite(b) && b >= 0 && b <= 25) {
+            this.spotBasisOffset = b;
+            this.lastBasisFetch = now;
+            try { localStorage.setItem('jarvis_spot_basis_offset', String(b)); } catch {}
+            return b;
+          }
+        }
+      } catch {}
+
+      // 2. Fallback: Direct unmetered live spot reference from api.gold-api.com
       const spotRes = await this.fastFetch(
-        '/api/goldprice/v1/spot/XAU-USD-SPOT',
-        'https://api.goldprice.dev/v1/spot/XAU-USD-SPOT',
-        3000
+        '/api/goldapi/price/XAU',
+        'https://api.gold-api.com/price/XAU',
+        2500
       );
       let spotPrice = 0;
       if (spotRes && spotRes.ok) {
@@ -182,11 +197,26 @@ export class BinanceAdapter implements IExchangeAdapter {
         spotPrice = parseFloat(spotData?.price);
       }
 
-      // 2. Fetch live Bybit price or use last trade tick
+      // 3. Fallback: api.goldprice.dev
+      if (!spotPrice || spotPrice <= 1000) {
+        try {
+          const fallbackRes = await this.fastFetch(
+            '/api/goldprice/v1/spot/XAU-USD-SPOT',
+            'https://api.goldprice.dev/v1/spot/XAU-USD-SPOT',
+            2500
+          );
+          if (fallbackRes && fallbackRes.ok) {
+            const data = await fallbackRes.json();
+            spotPrice = parseFloat(data?.price);
+          }
+        } catch {}
+      }
+
+      // 4. Fetch live Bybit price or use last trade tick
       let bybitPrice = this.lastRawBinancePrice;
       if (!bybitPrice || bybitPrice <= 0) {
         const bbRes = await fetch('https://api.bybit.com/v5/market/tickers?category=linear&symbol=XAUUSDT', {
-          signal: AbortSignal.timeout(3000),
+          signal: AbortSignal.timeout(2500),
         });
         if (bbRes.ok) {
           const bbData = await bbRes.json();
@@ -195,13 +225,16 @@ export class BinanceAdapter implements IExchangeAdapter {
       }
 
       if (spotPrice > 1000 && bybitPrice > 1000) {
-        const basis = Math.round((bybitPrice - spotPrice) * 100) / 100;
-        this.spotBasisOffset = basis;
-        this.lastBasisFetch = now;
-        try {
-          localStorage.setItem('jarvis_spot_basis_offset', String(basis));
-        } catch {}
-        return basis;
+        const rawBasis = bybitPrice - spotPrice;
+        if (rawBasis >= 0 && rawBasis <= 25) {
+          const basis = Math.round(rawBasis * 100) / 100;
+          this.spotBasisOffset = basis;
+          this.lastBasisFetch = now;
+          try {
+            localStorage.setItem('jarvis_spot_basis_offset', String(basis));
+          } catch {}
+          return basis;
+        }
       }
     } catch {}
     return this.spotBasisOffset;

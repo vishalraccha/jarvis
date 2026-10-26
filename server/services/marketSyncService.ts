@@ -229,16 +229,34 @@ export class MarketSyncService {
     let goldBasis = 0;
     if (isGoldSpot && rawData.length > 0) {
       try {
-        const spotRes = await fetch('https://api.goldprice.dev/v1/spot/XAU-USD-SPOT', {
-          headers: { 'User-Agent': 'Mozilla/5.0' },
-          signal: AbortSignal.timeout(2500),
-        });
-        if (spotRes.ok) {
-          const spotJson: any = await spotRes.json();
-          const spotP = parseFloat(spotJson?.price);
-          const rawLast = parseFloat(rawData[rawData.length - 1][4]);
-          if (spotP > 1000 && rawLast > 1000) {
-            goldBasis = Math.round((rawLast - spotP) * 100) / 100;
+        let spotP = 0;
+        try {
+          const res = await fetch('https://api.gold-api.com/price/XAU', {
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+            signal: AbortSignal.timeout(2500),
+          });
+          if (res.ok) {
+            const json: any = await res.json();
+            spotP = parseFloat(json?.price);
+          }
+        } catch {}
+
+        if (!spotP || spotP <= 1000) {
+          const spotRes = await fetch('https://api.goldprice.dev/v1/spot/XAU-USD-SPOT', {
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+            signal: AbortSignal.timeout(2500),
+          });
+          if (spotRes.ok) {
+            const spotJson: any = await spotRes.json();
+            spotP = parseFloat(spotJson?.price);
+          }
+        }
+
+        const rawLast = parseFloat(rawData[rawData.length - 1][4]);
+        if (spotP > 1000 && rawLast > 1000) {
+          const b = Math.round((rawLast - spotP) * 100) / 100;
+          if (b >= 0 && b <= 25) {
+            goldBasis = b;
           }
         }
       } catch {}
