@@ -226,13 +226,31 @@ export class MarketSyncService {
       return [];
     }
 
+    let goldBasis = 0;
+    if (isGoldSpot && rawData.length > 0) {
+      try {
+        const spotRes = await fetch('https://api.goldprice.dev/v1/spot/XAU-USD-SPOT', {
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+          signal: AbortSignal.timeout(2500),
+        });
+        if (spotRes.ok) {
+          const spotJson: any = await spotRes.json();
+          const spotP = parseFloat(spotJson?.price);
+          const rawLast = parseFloat(rawData[rawData.length - 1][4]);
+          if (spotP > 1000 && rawLast > 1000) {
+            goldBasis = Math.round((rawLast - spotP) * 100) / 100;
+          }
+        }
+      } catch {}
+    }
+
     const mult = 100;
 
     const candles: StoredCandle[] = rawData.map((k) => {
-      const open = Math.round(parseFloat(k[1]) * mult) / mult;
-      const rawHigh = Math.round(parseFloat(k[2]) * mult) / mult;
-      const rawLow = Math.round(parseFloat(k[3]) * mult) / mult;
-      const close = Math.round(parseFloat(k[4]) * mult) / mult;
+      const open = Math.round((parseFloat(k[1]) - goldBasis) * mult) / mult;
+      const rawHigh = Math.round((parseFloat(k[2]) - goldBasis) * mult) / mult;
+      const rawLow = Math.round((parseFloat(k[3]) - goldBasis) * mult) / mult;
+      const close = Math.round((parseFloat(k[4]) - goldBasis) * mult) / mult;
       const high = Math.max(open, rawHigh, rawLow, close);
       const low = Math.min(open, rawHigh, rawLow, close);
       return {

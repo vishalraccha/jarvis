@@ -83,10 +83,10 @@ describe('Candle & Price Accuracy Suite', () => {
     it('correctly maps upstream endpoints: spot for crypto, fapi for gold futures', async () => {
       // Mock global fetch
       const originalFetch = global.fetch;
-      let requestedUrl = '';
+      const requestedUrls: string[] = [];
 
       global.fetch = vi.fn().mockImplementation((url: string) => {
-        requestedUrl = url;
+        requestedUrls.push(url);
         // Return dummy kline
         return Promise.resolve({
           ok: true,
@@ -98,12 +98,10 @@ describe('Candle & Price Accuracy Suite', () => {
 
       try {
         await marketSyncService.fetchAndStoreUpstream('BTCUSDT', '1m', 10);
-        expect(requestedUrl).toContain('api.binance.com/api/v3/klines');
-        expect(requestedUrl).toContain('symbol=BTCUSDT');
+        expect(requestedUrls.some((u) => u.includes('api.binance.com/api/v3/klines') && u.includes('symbol=BTCUSDT'))).toBe(true);
 
         await marketSyncService.fetchAndStoreUpstream('XAUUSD', '1m', 10);
-        expect(requestedUrl).toContain('fapi.binance.com/fapi/v1/klines');
-        expect(requestedUrl).toContain('symbol=XAUUSDT');
+        expect(requestedUrls.some((u) => u.includes('fapi.binance.com/fapi/v1/klines') && u.includes('symbol=XAUUSDT'))).toBe(true);
       } finally {
         global.fetch = originalFetch;
       }

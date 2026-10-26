@@ -24,33 +24,31 @@ if (typeof globalThis.localStorage === 'undefined') {
 }
 
 describe('XAUUSD Data Integrity & Parity Audit Suite', () => {
-  describe('1. Elimination of Fabricated Offsets & 1:1 Market Execution', () => {
-    it('proves adjustPrice performs ZERO modification (0.00 offset) on XAUUSD prices', () => {
+  describe('1. Dynamic Real-Time Spot-Futures Basis Calibration (No Static Offsets)', () => {
+    it('guarantees adjustPrice performs 1:1 execution on non-gold canonical instruments', () => {
+      const adapter = new BinanceAdapter();
+      (adapter as any).spotBasisOffset = 8.5; // Even if a gold basis is active
+      expect(adapter.adjustPrice(80729.45, 'BTCUSDT')).toBe(80729.45);
+      expect(adapter.adjustPrice(2364.12, 'ETHUSDT')).toBe(2364.12);
+      expect(adapter.adjustPrice(102.55, 'SOLUSDT')).toBe(102.55);
+      expect(adapter.adjustPrice(2740.50, 'GC')).toBe(2740.50);
+    });
+
+    it('calibrates XAUUSD using dynamic spot basis offset', () => {
       const adapter = new BinanceAdapter();
       (adapter as any).requestedSymbol = 'XAUUSD';
+      (adapter as any).spotBasisOffset = 9.62; // Live dynamic spread at user observation time
 
-      // Test prices around the Oct 26, 2026 21:14 IST period
-      const bybitPerpPrices = [4022.86, 4020.20, 4016.93, 4029.13, 4031.39];
-      for (const p of bybitPerpPrices) {
-        expect(adapter.adjustPrice(p)).toBe(p);
-      }
+      // Bybit Linear 4029.59 adjusts to authentic Spot Gold 4019.97
+      expect(adapter.adjustPrice(4029.59)).toBe(4019.97);
+      expect(adapter.adjustPrice(4027.17, 'XAUUSD_VANTAGE')).toBe(4017.55);
     });
 
-    it('proves calibrateBasis and calibrateSpotBasis return 0 without synthetic offsets', async () => {
+    it('loads previously calibrated dynamic basis from localStorage on warm start', () => {
+      localStorage.setItem('jarvis_spot_basis_offset', '7.99');
       const adapter = new BinanceAdapter();
-      const basis = await adapter.calibrateBasis('XAUUSD');
-      expect(basis).toBe(0);
-
-      const spotBasis = await adapter.calibrateSpotBasis();
-      expect(spotBasis).toBe(0);
-    });
-
-    it('verifies localStorage offset key is completely deleted and never used', () => {
-      localStorage.setItem('jarvis_spot_basis_offset', '2.66');
-      const adapter = new BinanceAdapter();
-      // Constructor purges any lingering synthetic offset
-      expect((adapter as any).spotBasisOffset).toBe(0);
-      expect(adapter.adjustPrice(4020.00)).toBe(4020.00);
+      expect((adapter as any).spotBasisOffset).toBe(7.99);
+      expect(adapter.adjustPrice(4028.17, 'XAUUSD')).toBe(4020.18);
     });
   });
 

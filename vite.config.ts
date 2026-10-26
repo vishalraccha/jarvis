@@ -57,6 +57,44 @@ function redisFastCandleCachePlugin(): Plugin {
     return `${s}-USD`;
   }
 
+  let cachedGoldBasis = { offset: 0, lastFetch: 0 };
+  async function getLiveGoldBasis(): Promise<number> {
+    const now = Date.now();
+    if (now - cachedGoldBasis.lastFetch < 20000 && cachedGoldBasis.offset !== 0) {
+      return cachedGoldBasis.offset;
+    }
+    try {
+      const spotRes = await fetch('https://api.goldprice.dev/v1/spot/XAU-USD-SPOT', {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+        signal: AbortSignal.timeout(3500),
+      });
+      let spotPrice = 0;
+      if (spotRes.ok) {
+        const spotJson: any = await spotRes.json();
+        spotPrice = parseFloat(spotJson?.price);
+      }
+
+      const bybitRes = await fetch('https://api.bybit.com/v5/market/tickers?category=linear&symbol=XAUUSDT', {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+        signal: AbortSignal.timeout(3500),
+      });
+      let bybitPrice = 0;
+      if (bybitRes.ok) {
+        const bybitJson: any = await bybitRes.json();
+        bybitPrice = parseFloat(bybitJson?.result?.list?.[0]?.lastPrice);
+      }
+
+      if (spotPrice > 1000 && bybitPrice > 1000) {
+        const basis = Math.round((bybitPrice - spotPrice) * 100) / 100;
+        cachedGoldBasis = { offset: basis, lastFetch: now };
+        return basis;
+      }
+    } catch {
+      if (cachedGoldBasis.offset !== 0) return cachedGoldBasis.offset;
+    }
+    return cachedGoldBasis.offset;
+  }
+
   async function fetchAndCache(symbol: string, interval: string, isFutures: boolean): Promise<string | null> {
     const { cleanSym, targetSym, isComex, isGoldSpot, isFx } = parseInstrumentTarget(symbol);
     const key = `${cleanSym}_${interval}_${isFutures ? 'fut' : 'spot'}`;
@@ -134,12 +172,13 @@ function redisFastCandleCachePlugin(): Plugin {
           const bbList = json?.result?.list;
           if (Array.isArray(bbList) && bbList.length > 0) {
             const sorted = [...bbList].sort((a: any, b: any) => Number(a[0]) - Number(b[0]));
+            const basisOffset = await getLiveGoldBasis();
             const list = sorted.map((k: any) => [
               Number(k[0]),
-              k[1],
-              k[2],
-              k[3],
-              k[4],
+              String(Math.round((parseFloat(k[1]) - basisOffset) * 100) / 100),
+              String(Math.round((parseFloat(k[2]) - basisOffset) * 100) / 100),
+              String(Math.round((parseFloat(k[3]) - basisOffset) * 100) / 100),
+              String(Math.round((parseFloat(k[4]) - basisOffset) * 100) / 100),
               k[5],
             ]);
             const text = JSON.stringify(list);
@@ -158,12 +197,13 @@ function redisFastCandleCachePlugin(): Plugin {
         if (res.ok) {
           const raw = await res.json();
           if (Array.isArray(raw) && raw.length > 0) {
+            const basisOffset = await getLiveGoldBasis();
             const list = raw.map((k: any) => [
               Number(k[0]),
-              k[1],
-              k[2],
-              k[3],
-              k[4],
+              String(Math.round((parseFloat(k[1]) - basisOffset) * 100) / 100),
+              String(Math.round((parseFloat(k[2]) - basisOffset) * 100) / 100),
+              String(Math.round((parseFloat(k[3]) - basisOffset) * 100) / 100),
+              String(Math.round((parseFloat(k[4]) - basisOffset) * 100) / 100),
               k[5],
             ]);
             const text = JSON.stringify(list);
@@ -269,8 +309,24 @@ function redisFastCandleCachePlugin(): Plugin {
       } catch {}
     }
 
-    // 3. For XAUUSD (Gold Perpetual Futures): Bybit Linear or Binance Futures (0 synthetic offset)
+    // 3. For XAUUSD (Spot Gold Benchmark): Fetch Spot Gold price directly from goldprice.dev or calibrate bybit
     if (target.cleanSym === 'XAUUSD') {
+      try {
+        const spotRes = await fetch('https://api.goldprice.dev/v1/spot/XAU-USD-SPOT', {
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+          signal: AbortSignal.timeout(3000),
+        });
+        if (spotRes.ok) {
+          const json: any = await spotRes.json();
+          const p = parseFloat(json?.price);
+          if (Number.isFinite(p) && p > 1000) {
+            const payload = JSON.stringify({ symbol: target.cleanSym, price: Math.round(p * 100) / 100, timestamp: Date.now() });
+            memoryCache.set(tickerKey, { timestamp: Date.now(), data: payload });
+            return;
+          }
+        }
+      } catch {}
+
       try {
         const res = await fetch('https://api.bybit.com/v5/market/tickers?category=linear&symbol=XAUUSDT', {
           headers: { 'User-Agent': 'Mozilla/5.0' },
@@ -280,7 +336,8 @@ function redisFastCandleCachePlugin(): Plugin {
           const json: any = await res.json();
           const p = parseFloat(json?.result?.list?.[0]?.lastPrice);
           if (Number.isFinite(p) && p > 0) {
-            const payload = JSON.stringify({ symbol: target.cleanSym, price: Math.round(p * 100) / 100, timestamp: Date.now() });
+            const basis = await getLiveGoldBasis();
+            const payload = JSON.stringify({ symbol: target.cleanSym, price: Math.round((p - basis) * 100) / 100, timestamp: Date.now() });
             memoryCache.set(tickerKey, { timestamp: Date.now(), data: payload });
             return;
           }
@@ -296,7 +353,8 @@ function redisFastCandleCachePlugin(): Plugin {
           const json: any = await res.json();
           const p = parseFloat(json?.price);
           if (Number.isFinite(p) && p > 0) {
-            const payload = JSON.stringify({ symbol: target.cleanSym, price: Math.round(p * 100) / 100, timestamp: Date.now() });
+            const basis = await getLiveGoldBasis();
+            const payload = JSON.stringify({ symbol: target.cleanSym, price: Math.round((p - basis) * 100) / 100, timestamp: Date.now() });
             memoryCache.set(tickerKey, { timestamp: Date.now(), data: payload });
             return;
           }

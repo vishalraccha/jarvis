@@ -47,17 +47,22 @@ export class BinanceAdapter implements IExchangeAdapter {
   private events: ExchangeAdapterEvents | null = null;
   private connectionState: ConnectionState = 'DISCONNECTED';
 
-  // Authentic 1:1 Exchange Market Execution: 0 synthetic offsets, 0 price manipulation
+  // Dynamic Real-Time Spot-Futures Basis Calibration (Floating live basis against authentic spot gold)
   private spotBasisOffset: number = 0;
+  private lastBasisFetch: number = 0;
   private basisOffsets: Record<string, number> = {};
   private lastRawBinancePrice: number = 0;
   private calibrateIntervalId: number | null = null;
 
   constructor() {
     try {
-      localStorage.removeItem('jarvis_basis_offsets');
-      localStorage.removeItem('jarvis_spot_basis_offset');
-      this.spotBasisOffset = 0;
+      const saved = localStorage.getItem('jarvis_spot_basis_offset');
+      if (saved) {
+        const parsed = parseFloat(saved);
+        if (Number.isFinite(parsed) && parsed > 0 && parsed < 50) {
+          this.spotBasisOffset = parsed;
+        }
+      }
     } catch {}
   }
 
@@ -132,26 +137,74 @@ export class BinanceAdapter implements IExchangeAdapter {
   }
 
   /**
-   * Returns authentic 1:1 exchange execution price.
-   * STRICT INTEGRITY RULE: Prices are never altered, offset, or fabricated.
+   * Adjusts price for Spot Gold benchmarks using live dynamic basis calibration.
+   * Canonical crypto spot, GC futures, and Forex prices remain 1:1 untouched.
    */
-  adjustPrice(price: number, _symbol?: string): number {
+  adjustPrice(price: number, symbol?: string): number {
+    const sym = symbol || this.requestedSymbol || this.currentSymbol;
+    if (this.isGoldSpot(sym) && this.spotBasisOffset !== 0) {
+      return Math.round((price - this.spotBasisOffset) * 100) / 100;
+    }
     return price;
   }
 
   /**
-   * Basis calibration: Returns 0 (no synthetic offsets).
+   * Dynamically calibrates basis between Bybit linear perpetual futures and authentic spot gold.
    */
-  async calibrateBasis(_symbol?: string): Promise<number> {
+  async calibrateBasis(symbol?: string): Promise<number> {
+    const sym = symbol || this.requestedSymbol || this.currentSymbol;
+    if (this.isGoldSpot(sym)) {
+      return this.calibrateSpotBasis();
+    }
     return 0;
   }
 
   /**
-   * Basis calibration: Returns 0 (no synthetic offsets).
+   * Real-time dynamic calibration: fetches live spot gold reference from goldprice.dev
+   * and computes dynamic basis against live Bybit futures price.
    */
   async calibrateSpotBasis(): Promise<number> {
-    this.spotBasisOffset = 0;
-    return 0;
+    try {
+      const now = Date.now();
+      if (now - this.lastBasisFetch < 15000 && this.spotBasisOffset !== 0) {
+        return this.spotBasisOffset;
+      }
+
+      // 1. Fetch live Spot Gold reference (TradingView benchmark)
+      const spotRes = await this.fastFetch(
+        '/api/goldprice/v1/spot/XAU-USD-SPOT',
+        'https://api.goldprice.dev/v1/spot/XAU-USD-SPOT',
+        3000
+      );
+      let spotPrice = 0;
+      if (spotRes && spotRes.ok) {
+        const spotData = await spotRes.json();
+        spotPrice = parseFloat(spotData?.price);
+      }
+
+      // 2. Fetch live Bybit price or use last trade tick
+      let bybitPrice = this.lastRawBinancePrice;
+      if (!bybitPrice || bybitPrice <= 0) {
+        const bbRes = await fetch('https://api.bybit.com/v5/market/tickers?category=linear&symbol=XAUUSDT', {
+          signal: AbortSignal.timeout(3000),
+        });
+        if (bbRes.ok) {
+          const bbData = await bbRes.json();
+          bybitPrice = parseFloat(bbData?.result?.list?.[0]?.lastPrice);
+        }
+      }
+
+      if (spotPrice > 1000 && bybitPrice > 1000) {
+        const basis = Math.round((bybitPrice - spotPrice) * 100) / 100;
+        this.spotBasisOffset = basis;
+        this.lastBasisFetch = now;
+        try {
+          localStorage.setItem('jarvis_spot_basis_offset', String(basis));
+        } catch {}
+        return basis;
+      }
+    } catch {}
+    return this.spotBasisOffset;
   }
 
   private async fastFetch(proxyUrl: string, directUrl: string, timeoutMs: number = 3500): Promise<Response> {
@@ -1020,10 +1073,10 @@ export class BinanceAdapter implements IExchangeAdapter {
             const sorted = [...bbList].sort((a: any, b: any) => Number(a[0]) - Number(b[0]));
             return sorted.map((k: any) => ({
               time: Math.floor(Number(k[0]) / 1000),
-              open: parseFloat(k[1]),
-              high: parseFloat(k[2]),
-              low: parseFloat(k[3]),
-              close: parseFloat(k[4]),
+              open: this.adjustPrice(parseFloat(k[1]), this.requestedSymbol),
+              high: this.adjustPrice(parseFloat(k[2]), this.requestedSymbol),
+              low: this.adjustPrice(parseFloat(k[3]), this.requestedSymbol),
+              close: this.adjustPrice(parseFloat(k[4]), this.requestedSymbol),
               volume: parseFloat(k[5]),
             }));
           }
