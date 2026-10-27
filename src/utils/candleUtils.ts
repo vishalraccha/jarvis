@@ -67,12 +67,24 @@ export function mergeAndDeduplicateCandles(
     candleMap.set(c.time, c);
   }
 
-  // Overwrite or append with new candles
+  // Merge or append with new candles, strictly preserving maximal highs and minimal lows
   for (const c of validNew) {
     if (benchmarkPrice > 0 && (c.close < benchmarkPrice * 0.3 || c.close > benchmarkPrice * 3.0)) {
       continue;
     }
-    candleMap.set(c.time, c);
+    if (candleMap.has(c.time)) {
+      const existing = candleMap.get(c.time)!;
+      candleMap.set(c.time, {
+        ...c,
+        open: existing.open ?? c.open,
+        high: Math.max(existing.high, c.high),
+        low: Math.min(existing.low, c.low),
+        close: c.close ?? existing.close,
+        volume: Math.max(existing.volume || 0, c.volume || 0),
+      });
+    } else {
+      candleMap.set(c.time, c);
+    }
   }
 
   return Array.from(candleMap.values()).sort((a, b) => a.time - b.time);

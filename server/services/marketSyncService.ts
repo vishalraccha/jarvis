@@ -170,12 +170,38 @@ export class MarketSyncService {
       }
     }
 
-    // 2. Binance Spot & Futures Pipeline
+    // 2. Gold Futures Pipeline (Authoritative Provider: Bybit Linear XAUUSDT)
     const isGoldSpot = sym.startsWith('XAU') || sym.startsWith('GOLD') || sym === 'VANTAGE' || sym === 'OANDA';
     const isFutures = isGoldSpot || sym.includes('PERP') || sym.includes('FUTURES');
     let targetSym = sym;
     if (isGoldSpot) {
       targetSym = 'XAUUSDT';
+    }
+
+    let rawData: any[][] | null = null;
+
+    if (isGoldSpot) {
+      try {
+        const byInterval = tf === '1d' ? 'D' : tf === '1h' ? '60' : tf === '15m' ? '15' : tf === '5m' ? '5' : '1';
+        let byUrl = `https://api.bybit.com/v5/market/kline?category=linear&symbol=XAUUSDT&interval=${byInterval}&limit=${Math.min(limit, 1000)}`;
+        if (endTime && Number.isFinite(endTime) && endTime > 0) {
+          byUrl += `&end=${Math.floor(endTime * 1000)}`;
+        }
+        const res = await fetch(byUrl, {
+          headers: { 'User-Agent': 'Mozilla/5.0 JARVIS-Trading-Terminal/2.0' },
+          signal: AbortSignal.timeout(4500),
+        });
+        if (res.ok) {
+          const json: any = await res.json();
+          const bbList = json?.result?.list;
+          if (Array.isArray(bbList) && bbList.length > 0) {
+            const sorted = [...bbList].sort((a: any, b: any) => Number(a[0]) - Number(b[0]));
+            rawData = sorted;
+          }
+        }
+      } catch (err) {
+        console.warn('[MarketSyncService] Bybit XAUUSDT fetch error, attempting fallback:', err);
+      }
     }
 
     let endpoint = isFutures
@@ -186,17 +212,16 @@ export class MarketSyncService {
       endpoint += `&endTime=${Math.floor(endTime * 1000)}`;
     }
 
-    let rawData: any[][] | null = null;
+    if (!rawData) {
+      try {
+        const res = await fetch(endpoint, {
+          headers: { 'User-Agent': 'Mozilla/5.0 JARVIS-Trading-Terminal/2.0' },
+          signal: AbortSignal.timeout(4500),
+        });
 
-    try {
-      const res = await fetch(endpoint, {
-        headers: { 'User-Agent': 'Mozilla/5.0 JARVIS-Trading-Terminal/2.0' },
-        signal: AbortSignal.timeout(4500),
-      });
-
-      if (res.ok) {
-        rawData = (await res.json()) as any[][];
-      } else if (!isFutures && (res.status === 451 || res.status === 403)) {
+        if (res.ok) {
+          rawData = (await res.json()) as any[][];
+        } else if (!isFutures && (res.status === 451 || res.status === 403)) {
         // Fallback for cloud hosts (e.g. Render US IP blocked by standard api.binance.com)
         const visionEndpoint = endpoint.replace('api.binance.com', 'data-api.binance.vision');
         const fallbackRes = await fetch(visionEndpoint, {
@@ -221,6 +246,7 @@ export class MarketSyncService {
         } catch {}
       }
     }
+  }
 
     if (!Array.isArray(rawData) || rawData.length === 0) {
       return [];

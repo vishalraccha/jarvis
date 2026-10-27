@@ -403,26 +403,11 @@ export class BinanceAdapter implements IExchangeAdapter {
 
       if (price !== null && Number.isFinite(price) && price > 0) {
         const adjustedPrice = alreadyAdjusted ? price : this.adjustPrice(price);
-        const qty = Math.max(0.001, Math.round((Math.random() * 0.5 + 0.05) * 1000) / 1000);
-        const isUp = this.lastEmittedPrice > 0 ? adjustedPrice >= this.lastEmittedPrice : true;
         this.lastEmittedPrice = adjustedPrice;
-
-        const trade: MarketTrade = {
-          id: `fallback_${now}_${Math.floor(Math.random() * 1000)}`,
-          timestamp: now,
-          price: adjustedPrice,
-          quantity: qty,
-          notional: adjustedPrice * qty,
-          side: isUp ? 'buy' : 'sell',
-          isBuyerMaker: !isUp,
-          exchange: 'binance',
-          symbol: this.requestedSymbol || this.currentSymbol || effSym,
-          marketType: isFut ? 'linear_perpetual' : 'spot',
-        };
-
         this.messagesInSecond++;
         this.metrics.totalMessagesProcessed++;
-        this.events?.onTrade(trade);
+        // NOTE: Strictly NEVER fabricate synthetic trades with Math.random().
+        // Only real exchange trades from WebSocket/REST may be emitted as MarketTrade.
       }
     } catch {}
   }
@@ -430,26 +415,64 @@ export class BinanceAdapter implements IExchangeAdapter {
   private async fetchFallbackKline(): Promise<void> {
     if (!this.currentSymbol || !this.currentTimeframe) return;
     const effSym = this.getEffectiveSymbol(this.currentSymbol).toUpperCase();
+    const isGold = this.isGoldSpot(this.currentSymbol) || effSym.includes('XAU');
     const isFut = this.isFutures(effSym);
     const tf = this.currentTimeframe;
 
     try {
       let rawKline: any[] | null = null;
-      // 1. Try server RAM cache (< 0.2ms)
+      // 1. Try server endpoint first
       try {
-        const cacheRes = await fetch(`/api/cache/klines?symbol=${effSym}&interval=${tf}&limit=2`, {
+        const cacheRes = await fetch(`/api/candles?symbol=${this.requestedSymbol || effSym}&timeframe=${tf}&limit=2`, {
           signal: AbortSignal.timeout(1200),
         });
         if (cacheRes.ok) {
           const list = await cacheRes.json();
           if (Array.isArray(list) && list.length > 0) {
-            rawKline = list[list.length - 1];
+            const item = list[list.length - 1];
+            if (item && typeof item === 'object') {
+              const candle: Candle = {
+                time: Number(item.time || Math.floor(Number(item[0]) / 1000)),
+                open: parseFloat(item.open ?? item[1]),
+                high: parseFloat(item.high ?? item[2]),
+                low: parseFloat(item.low ?? item[3]),
+                close: parseFloat(item.close ?? item[4]),
+                volume: parseFloat(item.volume ?? item[5] ?? 0),
+              };
+              this.events?.onKline?.(candle);
+              return;
+            }
           }
         }
       } catch {}
 
-      // 2. Direct REST fallback
-      if (!rawKline) {
+      // 2. Direct exchange fallback (Bybit Linear for gold; Binance Spot/Futures for crypto)
+      if (isGold) {
+        try {
+          const byInterval = BYBIT_INTERVAL_MAP[tf] || '1';
+          const bbRes = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=XAUUSDT&interval=${byInterval}&limit=2`, {
+            signal: AbortSignal.timeout(2000),
+          });
+          if (bbRes.ok) {
+            const json: any = await bbRes.json();
+            const list = json?.result?.list;
+            if (Array.isArray(list) && list.length > 0) {
+              const sorted = [...list].sort((a: any, b: any) => Number(a[0]) - Number(b[0]));
+              const k = sorted[sorted.length - 1];
+              const candle: Candle = {
+                time: Math.floor(Number(k[0]) / 1000),
+                open: parseFloat(k[1]),
+                high: parseFloat(k[2]),
+                low: parseFloat(k[3]),
+                close: parseFloat(k[4]),
+                volume: parseFloat(k[5]),
+              };
+              this.events?.onKline?.(candle);
+              return;
+            }
+          }
+        } catch {}
+      } else {
         const proxyBase = isFut ? '/api/fapi/fapi/v1/klines' : '/api/binance/api/v3/klines';
         const directBase = isFut ? 'https://fapi.binance.me/fapi/v1/klines' : 'https://data-api.binance.vision/api/v3/klines';
         const res = await this.fastFetch(
@@ -468,10 +491,10 @@ export class BinanceAdapter implements IExchangeAdapter {
       if (rawKline && Array.isArray(rawKline)) {
         const candle: Candle = {
           time: Math.floor(Number(rawKline[0]) / 1000),
-          open: this.adjustPrice(parseFloat(rawKline[1])),
-          high: this.adjustPrice(parseFloat(rawKline[2])),
-          low: this.adjustPrice(parseFloat(rawKline[3])),
-          close: this.adjustPrice(parseFloat(rawKline[4])),
+          open: parseFloat(rawKline[1]),
+          high: parseFloat(rawKline[2]),
+          low: parseFloat(rawKline[3]),
+          close: parseFloat(rawKline[4]),
           volume: parseFloat(rawKline[5]),
           tradeCount: Number(rawKline[8]) || undefined,
           buyVolume: parseFloat(rawKline[9]) || undefined,

@@ -1094,14 +1094,15 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
             console.warn('[JarvisChart] updateLiveCandle newBar error:', e);
           }
         } else {
-          // Exchange kline is authoritative — use its OHLC directly (not monotonic expand)
-          // This prevents stale basis offsets from creating false wicks
+          // Maintain canonical intra-candle high and low: wicks cannot shrink during active candle lifetime
           const barOpen = cur.open ?? open;
+          const barHigh = Math.max(cur.high ?? 0, high, barOpen, close);
+          const barLow = (cur.low && cur.low > 0) ? Math.min(cur.low, low, barOpen, close) : Math.min(low, barOpen, close);
           const bar: CandlestickData = {
             time: cur.time,
             open: barOpen,
-            high: Math.max(high, barOpen, close),
-            low: Math.min(low, barOpen, close),
+            high: barHigh,
+            low: barLow,
             close,
           };
           currentCandleRef.current = bar;

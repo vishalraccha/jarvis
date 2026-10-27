@@ -729,13 +729,12 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         if (latestCandlesRef.current.length > 0) {
           const last = latestCandlesRef.current[latestCandlesRef.current.length - 1];
           if (last.time === alignedCandle.time) {
-            // Exchange kline is authoritative — REPLACE OHLC entirely (not expand)
-            // This prevents stale basis offsets from creating false wicks
-            last.open = alignedCandle.open;
-            last.high = alignedCandle.high;
-            last.low = alignedCandle.low;
+            // Maintain canonical intra-candle high and low: wicks cannot shrink during active candle lifetime
+            last.open = last.open ?? alignedCandle.open;
+            last.high = Math.max(last.high, alignedCandle.high);
+            last.low = Math.min(last.low, alignedCandle.low);
             last.close = alignedCandle.close;
-            if (alignedCandle.volume) last.volume = alignedCandle.volume;
+            if (alignedCandle.volume) last.volume = Math.max(last.volume || 0, alignedCandle.volume);
           } else if (last.time < alignedCandle.time) {
             latestCandlesRef.current.push(alignedCandle);
           }
