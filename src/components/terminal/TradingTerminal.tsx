@@ -676,11 +676,12 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
                 return;
               }
             }
+            const openPrice = last.close > 0 ? last.close : trade.price;
             latestCandlesRef.current.push({
               time: barTime,
-              open: trade.price,
-              high: trade.price,
-              low: trade.price,
+              open: openPrice,
+              high: Math.max(openPrice, trade.price),
+              low: Math.min(openPrice, trade.price),
               close: trade.price,
               volume: trade.quantity || 0,
             });
@@ -715,17 +716,24 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         if (latestCandlesRef.current.length > 0) {
           const last = latestCandlesRef.current[latestCandlesRef.current.length - 1];
           if (last.time === alignedCandle.time) {
-            // Maintain canonical intra-candle high and low: wicks cannot shrink during active candle lifetime
-            // Canonical open adopts authoritative exchange kline open to prevent tiny candle body deformations
-            if (alignedCandle.open > 0) {
-              last.open = alignedCandle.open;
-            }
-            last.high = Math.max(last.high, alignedCandle.high, last.open, alignedCandle.close);
-            last.low = Math.min(last.low, alignedCandle.low, last.open, alignedCandle.close);
+            // Keep established open of this bar so there is never an artificial gap
+            const openPrice = last.open > 0 ? last.open : (alignedCandle.open > 0 ? alignedCandle.open : alignedCandle.close);
+            last.open = openPrice;
             last.close = alignedCandle.close;
+            last.high = Math.max(alignedCandle.high, openPrice, alignedCandle.close);
+            last.low = Math.min(alignedCandle.low, openPrice, alignedCandle.close);
             if (alignedCandle.volume) last.volume = Math.max(last.volume || 0, alignedCandle.volume);
           } else if (last.time < alignedCandle.time) {
-            latestCandlesRef.current.push(alignedCandle);
+            // Advance to new bar: open must strictly equal previous bar's close for seamless continuity
+            const prevClose = last.close > 0 ? last.close : (alignedCandle.open > 0 ? alignedCandle.open : alignedCandle.close);
+            latestCandlesRef.current.push({
+              time: alignedCandle.time,
+              open: prevClose,
+              high: Math.max(alignedCandle.high, prevClose, alignedCandle.close),
+              low: Math.min(alignedCandle.low, prevClose, alignedCandle.close),
+              close: alignedCandle.close,
+              volume: alignedCandle.volume || 0,
+            });
           }
           const active = latestCandlesRef.current[latestCandlesRef.current.length - 1];
           chartRef.current?.updateLiveCandle(active);

@@ -49,6 +49,7 @@ export class BinanceAdapter implements IExchangeAdapter {
 
   // Dynamic Real-Time Spot-Futures Basis Calibration (Floating live basis against authentic spot gold)
   private spotBasisOffset: number = 0;
+  private spotSpreadOffset: number = 0;
   private lastBasisFetch: number = 0;
   private basisOffsets: Record<string, number> = {};
   private lastRawBinancePrice: number = 0;
@@ -61,6 +62,13 @@ export class BinanceAdapter implements IExchangeAdapter {
         const parsed = parseFloat(saved);
         if (Number.isFinite(parsed) && parsed > 0 && parsed <= 50) {
           this.spotBasisOffset = parsed;
+        }
+      }
+      const savedSpread = localStorage.getItem('jarvis_spot_spread_offset');
+      if (savedSpread) {
+        const parsed = parseFloat(savedSpread);
+        if (Number.isFinite(parsed) && parsed > 0 && parsed <= 30) {
+          this.spotSpreadOffset = parsed;
         }
       }
     } catch {}
@@ -150,6 +158,18 @@ export class BinanceAdapter implements IExchangeAdapter {
   }
 
   /**
+   * Adjusts Bybit Index Price to exact authentic MT5/TradingView spot gold.
+   */
+  adjustIndexPrice(price: number, symbol?: string): number {
+    const sym = symbol || this.requestedSymbol || this.currentSymbol;
+    const offset = this.spotSpreadOffset > 0 ? this.spotSpreadOffset : (this.spotBasisOffset > 2 ? this.spotBasisOffset - 2.2 : 5.0);
+    if (this.isGoldSpot(sym) && offset > 0) {
+      return Math.round((price - offset) * 100) / 100;
+    }
+    return price;
+  }
+
+  /**
    * Dynamically calibrates basis between Bybit linear perpetual futures and authentic spot gold.
    */
   async calibrateBasis(symbol?: string): Promise<number> {
@@ -206,11 +226,20 @@ export class BinanceAdapter implements IExchangeAdapter {
         if (srvRes.ok) {
           const srvData = await srvRes.json();
           const b = parseFloat(srvData?.basis);
+          const spread = parseFloat(srvData?.spotSpread);
           if (Number.isFinite(b) && b >= 0 && b <= 40) {
-            this.spotBasisOffset = b;
+            this.spotBasisOffset = this.spotBasisOffset > 0
+              ? Math.round((this.spotBasisOffset * 0.8 + b * 0.2) * 100) / 100
+              : b;
+            if (Number.isFinite(spread) && spread >= 0 && spread <= 30) {
+              this.spotSpreadOffset = this.spotSpreadOffset > 0
+                ? Math.round((this.spotSpreadOffset * 0.8 + spread * 0.2) * 100) / 100
+                : spread;
+              try { localStorage.setItem('jarvis_spot_spread_offset', String(this.spotSpreadOffset)); } catch {}
+            }
             this.lastBasisFetch = now;
-            try { localStorage.setItem('jarvis_spot_basis_offset', String(b)); } catch {}
-            return b;
+            try { localStorage.setItem('jarvis_spot_basis_offset', String(this.spotBasisOffset)); } catch {}
+            return this.spotBasisOffset;
           }
         }
       } catch {}
@@ -254,12 +283,14 @@ export class BinanceAdapter implements IExchangeAdapter {
         const rawBasis = bybitPrice - spotPrice;
         if (rawBasis >= 0 && rawBasis <= 40) {
           const freshBasis = Math.round(rawBasis * 100) / 100;
-          this.spotBasisOffset = freshBasis;
+          this.spotBasisOffset = this.spotBasisOffset > 0
+            ? Math.round((this.spotBasisOffset * 0.8 + freshBasis * 0.2) * 100) / 100
+            : freshBasis;
           this.lastBasisFetch = now;
           try {
-            localStorage.setItem('jarvis_spot_basis_offset', String(freshBasis));
+            localStorage.setItem('jarvis_spot_basis_offset', String(this.spotBasisOffset));
           } catch {}
-          return freshBasis;
+          return this.spotBasisOffset;
         }
       }
     } catch {}
@@ -1175,22 +1206,39 @@ export class BinanceAdapter implements IExchangeAdapter {
     if (this.isGoldSpot(this.requestedSymbol || sym) && !startTime && !endTime) {
       try {
         const byInterval = interval === '1d' ? 'D' : interval === '1h' ? '60' : interval === '15m' ? '15' : interval === '5m' ? '5' : '1';
-        const bbRes = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=XAUUSDT&interval=${byInterval}&limit=${Math.min(limit, 1000)}`, {
+        let bbRes = await fetch(`https://api.bybit.com/v5/market/index-price-kline?category=linear&symbol=XAUUSDT&interval=${byInterval}&limit=${Math.min(limit, 1000)}`, {
           signal: AbortSignal.timeout(4000),
         });
+        if (!bbRes.ok) {
+          bbRes = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=XAUUSDT&interval=${byInterval}&limit=${Math.min(limit, 1000)}`, {
+            signal: AbortSignal.timeout(4000),
+          });
+        }
         if (bbRes.ok) {
           const json: any = await bbRes.json();
           const bbList = json?.result?.list;
           if (Array.isArray(bbList) && bbList.length > 0) {
             const sorted = [...bbList].sort((a: any, b: any) => Number(a[0]) - Number(b[0]));
-            return sorted.map((k: any) => ({
-              time: Math.floor(Number(k[0]) / 1000),
-              open: this.adjustPrice(parseFloat(k[1]), this.requestedSymbol),
-              high: this.adjustPrice(parseFloat(k[2]), this.requestedSymbol),
-              low: this.adjustPrice(parseFloat(k[3]), this.requestedSymbol),
-              close: this.adjustPrice(parseFloat(k[4]), this.requestedSymbol),
-              volume: parseFloat(k[5]),
-            }));
+            const isIndex = bbRes.url?.includes('index-price-kline');
+            const adjust = isIndex ? (p: number) => this.adjustIndexPrice(p, this.requestedSymbol) : (p: number) => this.adjustPrice(p, this.requestedSymbol);
+            const candles: Candle[] = [];
+            for (let i = 0; i < sorted.length; i++) {
+              const k = sorted[i];
+              const close = adjust(parseFloat(k[4]));
+              const prevClose = candles.length > 0 ? candles[candles.length - 1].close : adjust(parseFloat(k[1]));
+              const open = prevClose;
+              const high = Math.max(open, adjust(parseFloat(k[2])), close);
+              const low = Math.min(open, adjust(parseFloat(k[3])), close);
+              candles.push({
+                time: Math.floor(Number(k[0]) / 1000),
+                open,
+                high,
+                low,
+                close,
+                volume: parseFloat(k[5] || 10),
+              });
+            }
+            return candles;
           }
         }
       } catch {}

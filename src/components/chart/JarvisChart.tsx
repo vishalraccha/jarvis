@@ -974,19 +974,22 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
           const low = Number.isFinite(c.low) && c.low > 0 ? Math.min(c.low, open, close) : Math.min(open, close);
 
           if (!cur || barTime > (cur.time as number)) {
-            const newBar: CandlestickData = { time: barTime, open, high, low, close };
+            const prevClose = (cur && cur.close > 0) ? cur.close : open;
+            const kHigh = Math.max(high, prevClose, close);
+            const kLow = Math.min(low, prevClose, close);
+            const newBar: CandlestickData = { time: barTime, open: prevClose, high: kHigh, low: kLow, close };
             currentCandleRef.current = newBar;
             if (allCandlesRef.current.length > 0) {
               const lastCandle = allCandlesRef.current[allCandlesRef.current.length - 1];
               if (lastCandle.time === barTime) {
-                lastCandle.high = Math.max(lastCandle.high, high);
-                lastCandle.low = Math.min(lastCandle.low, low);
+                lastCandle.high = Math.max(lastCandle.high, kHigh);
+                lastCandle.low = Math.min(lastCandle.low, kLow);
                 lastCandle.close = close;
               } else if (lastCandle.time < barTime) {
-                allCandlesRef.current.push({ time: barTime, open, high, low, close, volume: c.volume || 0 });
+                allCandlesRef.current.push({ time: barTime, open: prevClose, high: kHigh, low: kLow, close, volume: c.volume || 0 });
               }
             }
-            const isUp = close >= open;
+            const isUp = close >= prevClose;
             syncPriceLineColor(isUp ? '#00e676' : '#ff2d55');
             try {
               activeSeries.update(newBar);
@@ -994,7 +997,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
               console.warn('[JarvisChart] incrementalUpdateCandles newBar error:', e);
             }
           } else {
-            const barOpen = cur.open ?? open;
+            const barOpen = (cur && cur.open > 0) ? cur.open : open;
             const kHigh = Math.max(cur.high, high, barOpen, close);
             const kLow = Math.min(cur.low, low, barOpen, close);
             const bar: CandlestickData = { time: cur.time, open: barOpen, high: kHigh, low: kLow, close };
@@ -1002,6 +1005,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
             if (allCandlesRef.current.length > 0) {
               const lastCandle = allCandlesRef.current[allCandlesRef.current.length - 1];
               if (lastCandle.time === cur.time) {
+                lastCandle.open = barOpen;
                 lastCandle.high = kHigh;
                 lastCandle.low = kLow;
                 lastCandle.close = close;
@@ -1061,32 +1065,35 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         }
 
         if (!cur || barTime > (cur.time as number)) {
+          const prevClose = (cur && cur.close > 0) ? cur.close : (open > 0 ? open : close);
+          const barHigh = Math.max(high, prevClose, close);
+          const barLow = Math.min(low, prevClose, close);
           const newBar: CandlestickData = {
             time: barTime,
-            open,
-            high,
-            low,
+            open: prevClose,
+            high: barHigh,
+            low: barLow,
             close,
           };
           currentCandleRef.current = newBar;
           if (allCandlesRef.current.length > 0) {
             const lastCandle = allCandlesRef.current[allCandlesRef.current.length - 1];
             if (lastCandle.time === barTime) {
-              lastCandle.high = Math.max(lastCandle.high, high);
-              lastCandle.low = Math.min(lastCandle.low, low);
+              lastCandle.high = Math.max(lastCandle.high, barHigh);
+              lastCandle.low = Math.min(lastCandle.low, barLow);
               lastCandle.close = close;
             } else if (lastCandle.time < barTime) {
               allCandlesRef.current.push({
                 time: barTime,
-                open,
-                high,
-                low,
+                open: prevClose,
+                high: barHigh,
+                low: barLow,
                 close,
                 volume: candle.volume || 0,
               });
             }
           }
-          const isUp = close >= open;
+          const isUp = close >= prevClose;
           syncPriceLineColor(isUp ? '#00e676' : '#ff2d55');
           try {
             activeSeries.update(newBar);
@@ -1094,10 +1101,10 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
             console.warn('[JarvisChart] updateLiveCandle newBar error:', e);
           }
         } else {
-          // Maintain canonical intra-candle high and low: wicks cannot shrink during active candle lifetime
-          const barOpen = open > 0 ? open : (cur.open > 0 ? cur.open : close);
-          const barHigh = Math.max(cur.high ?? 0, high, barOpen, close);
-          const barLow = (cur.low && cur.low > 0) ? Math.min(cur.low, low, barOpen, close) : Math.min(low, barOpen, close);
+          // Authoritative candle from exchange: keep established open of current bar
+          const barOpen = (cur && cur.open > 0) ? cur.open : (open > 0 ? open : close);
+          const barHigh = Math.max(high, barOpen, close);
+          const barLow = Math.min(low, barOpen, close);
           const bar: CandlestickData = {
             time: cur.time,
             open: barOpen,
@@ -1110,8 +1117,8 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
             const lastCandle = allCandlesRef.current[allCandlesRef.current.length - 1];
             if (lastCandle.time === cur.time) {
               lastCandle.open = barOpen;
-              lastCandle.high = bar.high;
-              lastCandle.low = bar.low;
+              lastCandle.high = barHigh;
+              lastCandle.low = barLow;
               lastCandle.close = close;
             }
           }
@@ -1167,15 +1174,16 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         }
 
         if (!cur || barTime > (cur.time as number)) {
-          // A new candle boundary has elapsed! Immediately open the new bar
+          // A new candle boundary has elapsed! Immediately open the new bar at previous bar's close
+          const openPrice = (cur && cur.close > 0) ? cur.close : price;
           const newBar: CandlestickData = {
             time: barTime,
-            open: price,
-            high: price,
-            low: price,
+            open: openPrice,
+            high: Math.max(openPrice, price),
+            low: Math.min(openPrice, price),
             close: price,
           };
-          const isUp = cur ? price >= cur.close : true;
+          const isUp = price >= openPrice;
           currentCandleRef.current = newBar;
           if (allCandlesRef.current.length > 0) {
             const lastCandle = allCandlesRef.current[allCandlesRef.current.length - 1];
@@ -1186,9 +1194,9 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
             } else if (lastCandle.time < barTime) {
               allCandlesRef.current.push({
                 time: barTime,
-                open: price,
-                high: price,
-                low: price,
+                open: openPrice,
+                high: Math.max(openPrice, price),
+                low: Math.min(openPrice, price),
                 close: price,
                 volume: 0,
               });
@@ -1218,6 +1226,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
           if (allCandlesRef.current.length > 0) {
             const lastCandle = allCandlesRef.current[allCandlesRef.current.length - 1];
             if (lastCandle.time === cur.time) {
+              lastCandle.open = barOpen;
               lastCandle.high = high;
               lastCandle.low = low;
               lastCandle.close = close;
