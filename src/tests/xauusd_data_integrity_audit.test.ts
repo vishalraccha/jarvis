@@ -24,31 +24,29 @@ if (typeof globalThis.localStorage === 'undefined') {
 }
 
 describe('XAUUSD Data Integrity & Parity Audit Suite', () => {
-  describe('1. Dynamic Real-Time Spot-Futures Basis Calibration (No Static Offsets)', () => {
-    it('guarantees adjustPrice performs 1:1 execution on non-gold canonical instruments', () => {
+  describe('1. Raw 1:1 Market Data Integrity (Zero Synthetic Offsets / Zero Price Fabrication)', () => {
+    it('guarantees adjustPrice performs 1:1 raw execution on all instruments without modification', () => {
       const adapter = new BinanceAdapter();
-      (adapter as any).spotBasisOffset = 8.5; // Even if a gold basis is active
       expect(adapter.adjustPrice(80729.45, 'BTCUSDT')).toBe(80729.45);
       expect(adapter.adjustPrice(2364.12, 'ETHUSDT')).toBe(2364.12);
       expect(adapter.adjustPrice(102.55, 'SOLUSDT')).toBe(102.55);
       expect(adapter.adjustPrice(2740.50, 'GC')).toBe(2740.50);
     });
 
-    it('calibrates XAUUSD using dynamic spot basis offset', () => {
+    it('preserves authentic raw Bybit exchange price for XAUUSD without synthetic offset', () => {
       const adapter = new BinanceAdapter();
       (adapter as any).requestedSymbol = 'XAUUSD';
-      (adapter as any).spotBasisOffset = 9.62; // Live dynamic spread at user observation time
 
-      // Bybit Linear 4029.59 adjusts to authentic Spot Gold 4019.97
-      expect(adapter.adjustPrice(4029.59)).toBe(4019.97);
-      expect(adapter.adjustPrice(4027.17, 'XAUUSD_VANTAGE')).toBe(4017.55);
+      // Authentic exchange price is preserved 1:1 without synthetic offset manipulation
+      expect(adapter.adjustPrice(4029.59)).toBe(4029.59);
+      expect(adapter.adjustPrice(4027.17, 'XAUUSD_VANTAGE')).toBe(4027.17);
     });
 
-    it('loads previously calibrated dynamic basis from localStorage on warm start', () => {
+    it('purges legacy stale basis offsets from localStorage on initialization', () => {
       localStorage.setItem('jarvis_spot_basis_offset', '7.99');
       const adapter = new BinanceAdapter();
-      expect((adapter as any).spotBasisOffset).toBe(7.99);
-      expect(adapter.adjustPrice(4028.17, 'XAUUSD')).toBe(4020.18);
+      expect(localStorage.getItem('jarvis_spot_basis_offset')).toBeNull();
+      expect(adapter.adjustPrice(4028.17, 'XAUUSD')).toBe(4028.17);
     });
   });
 

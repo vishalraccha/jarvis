@@ -189,7 +189,7 @@ function redisFastCandleCachePlugin(): Plugin {
       } catch {}
     }
 
-    // 3. Authoritative source for XAUUSD (Spot Gold / OANDA / Vantage): Bybit Linear XAUUSDT & Binance Futures
+    // 3. XAUUSD: Bybit Linear XAUUSDT raw data (no basis adjustment — genuine perpetual price)
     if (isGoldSpot) {
       try {
         const byInterval = interval === '1d' ? 'D' : interval === '1h' ? '60' : interval === '15m' ? '15' : interval === '5m' ? '5' : '1';
@@ -202,14 +202,13 @@ function redisFastCandleCachePlugin(): Plugin {
           const bbList = json?.result?.list;
           if (Array.isArray(bbList) && bbList.length > 0) {
             const sorted = [...bbList].sort((a: any, b: any) => Number(a[0]) - Number(b[0]));
-            const basisOffset = await getLiveGoldBasis();
             const list = sorted.map((k: any) => [
               Number(k[0]),
-              String(Math.round((parseFloat(k[1]) - basisOffset) * 100) / 100),
-              String(Math.round((parseFloat(k[2]) - basisOffset) * 100) / 100),
-              String(Math.round((parseFloat(k[3]) - basisOffset) * 100) / 100),
-              String(Math.round((parseFloat(k[4]) - basisOffset) * 100) / 100),
-              k[5],
+              k[1],  // open
+              k[2],  // high
+              k[3],  // low
+              k[4],  // close
+              k[5],  // volume
             ]);
             const text = JSON.stringify(list);
             memoryCache.set(key, { timestamp: Date.now(), data: text });
@@ -218,7 +217,7 @@ function redisFastCandleCachePlugin(): Plugin {
         }
       } catch {}
 
-      // Secondary fallback for XAUUSD: Binance Futures fapi
+      // Secondary fallback for XAUUSD: Binance Futures fapi (raw data, no basis adjustment)
       try {
         const res = await fetch(`https://fapi.binance.com/fapi/v1/klines?symbol=XAUUSDT&interval=${interval}&limit=1000`, {
           headers: { 'User-Agent': 'Mozilla/5.0' },
@@ -227,16 +226,7 @@ function redisFastCandleCachePlugin(): Plugin {
         if (res.ok) {
           const raw = await res.json();
           if (Array.isArray(raw) && raw.length > 0) {
-            const basisOffset = await getLiveGoldBasis();
-            const list = raw.map((k: any) => [
-              Number(k[0]),
-              String(Math.round((parseFloat(k[1]) - basisOffset) * 100) / 100),
-              String(Math.round((parseFloat(k[2]) - basisOffset) * 100) / 100),
-              String(Math.round((parseFloat(k[3]) - basisOffset) * 100) / 100),
-              String(Math.round((parseFloat(k[4]) - basisOffset) * 100) / 100),
-              k[5],
-            ]);
-            const text = JSON.stringify(list);
+            const text = JSON.stringify(raw);
             memoryCache.set(key, { timestamp: Date.now(), data: text });
             return text;
           }

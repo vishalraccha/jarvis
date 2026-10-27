@@ -47,7 +47,11 @@ export class BinanceAdapter implements IExchangeAdapter {
   private events: ExchangeAdapterEvents | null = null;
   private connectionState: ConnectionState = 'DISCONNECTED';
 
-  // Dynamic Real-Time Spot-Futures Basis Calibration (Floating live basis against authentic spot gold)
+  // Dynamic Real-Time Spot-Futures Basis Calibration
+  // NOTE: Basis adjustment DISABLED — raw Bybit XAUUSDT perpetual data is displayed as-is.
+  // The ~$1-2 futures premium over spot is genuine market data, not an error.
+  // Previously, variable basis offsets applied at different times to different code paths
+  // caused inconsistent candles and price jumps on every refresh.
   private spotBasisOffset: number = 0;
   private lastBasisFetch: number = 0;
   private basisOffsets: Record<string, number> = {};
@@ -55,15 +59,8 @@ export class BinanceAdapter implements IExchangeAdapter {
   private calibrateIntervalId: number | null = null;
 
   constructor() {
-    try {
-      const saved = localStorage.getItem('jarvis_spot_basis_offset');
-      if (saved) {
-        const parsed = parseFloat(saved);
-        if (Number.isFinite(parsed) && parsed > 0 && parsed < 50) {
-          this.spotBasisOffset = parsed;
-        }
-      }
-    } catch {}
+    // Clean up stale basis offset from localStorage
+    try { localStorage.removeItem('jarvis_spot_basis_offset'); } catch {}
   }
 
   // Metrics
@@ -137,14 +134,10 @@ export class BinanceAdapter implements IExchangeAdapter {
   }
 
   /**
-   * Adjusts price for Spot Gold benchmarks using live dynamic basis calibration.
-   * Canonical crypto spot, GC futures, and Forex prices remain 1:1 untouched.
+   * Returns price as-is. Basis adjustment removed to prevent false candles.
+   * The raw Bybit XAUUSDT perpetual price is genuine market data.
    */
-  adjustPrice(price: number, symbol?: string): number {
-    const sym = symbol || this.requestedSymbol || this.currentSymbol;
-    if (this.isGoldSpot(sym) && this.spotBasisOffset !== 0) {
-      return Math.round((price - this.spotBasisOffset) * 100) / 100;
-    }
+  adjustPrice(price: number, _symbol?: string): number {
     return price;
   }
 
@@ -276,10 +269,9 @@ export class BinanceAdapter implements IExchangeAdapter {
 
     this.disconnect(false);
 
-    this.calibrateBasis(symbol).catch(() => {});
-    this.calibrateIntervalId = (setInterval as any)(() => {
-      this.calibrateBasis(this.requestedSymbol || this.currentSymbol).catch(() => {});
-    }, 10000);
+    // Basis calibration disabled — raw Bybit data shown as-is
+    // this.calibrateBasis(symbol).catch(() => {});
+    // this.calibrateIntervalId = ...;
 
     this.syncServerTime().catch(() => {});
     this.initWebSocket();
@@ -1011,10 +1003,8 @@ export class BinanceAdapter implements IExchangeAdapter {
   ): Promise<Candle[]> {
     this.requestedSymbol = symbol;
 
-    // Trigger non-blocking background basis calibration
-    if (this.isGoldSpot(symbol)) {
-      this.calibrateSpotBasis().catch(() => {});
-    }
+    // Basis calibration disabled — raw Bybit data shown as-is
+    // No offset needed; the perpetual futures price is genuine market data
 
     const sym = this.getEffectiveSymbol(symbol);
     const isFut = this.isFutures(sym);

@@ -226,49 +226,13 @@ export class MarketSyncService {
       return [];
     }
 
-    let goldBasis = 0;
-    if (isGoldSpot && rawData.length > 0) {
-      try {
-        let spotP = 0;
-        try {
-          const res = await fetch('https://api.gold-api.com/price/XAU', {
-            headers: { 'User-Agent': 'Mozilla/5.0' },
-            signal: AbortSignal.timeout(2500),
-          });
-          if (res.ok) {
-            const json: any = await res.json();
-            spotP = parseFloat(json?.price);
-          }
-        } catch {}
-
-        if (!spotP || spotP <= 1000) {
-          const spotRes = await fetch('https://api.goldprice.dev/v1/spot/XAU-USD-SPOT', {
-            headers: { 'User-Agent': 'Mozilla/5.0' },
-            signal: AbortSignal.timeout(2500),
-          });
-          if (spotRes.ok) {
-            const spotJson: any = await spotRes.json();
-            spotP = parseFloat(spotJson?.price);
-          }
-        }
-
-        const rawLast = parseFloat(rawData[rawData.length - 1][4]);
-        if (spotP > 1000 && rawLast > 1000) {
-          const b = Math.round((rawLast - spotP) * 100) / 100;
-          if (b >= 0 && b <= 25) {
-            goldBasis = b;
-          }
-        }
-      } catch {}
-    }
-
     const mult = 100;
 
     const candles: StoredCandle[] = rawData.map((k) => {
-      const open = Math.round((parseFloat(k[1]) - goldBasis) * mult) / mult;
-      const rawHigh = Math.round((parseFloat(k[2]) - goldBasis) * mult) / mult;
-      const rawLow = Math.round((parseFloat(k[3]) - goldBasis) * mult) / mult;
-      const close = Math.round((parseFloat(k[4]) - goldBasis) * mult) / mult;
+      const open = Math.round(parseFloat(k[1]) * mult) / mult;
+      const rawHigh = Math.round(parseFloat(k[2]) * mult) / mult;
+      const rawLow = Math.round(parseFloat(k[3]) * mult) / mult;
+      const close = Math.round(parseFloat(k[4]) * mult) / mult;
       const high = Math.max(open, rawHigh, rawLow, close);
       const low = Math.min(open, rawHigh, rawLow, close);
       return {

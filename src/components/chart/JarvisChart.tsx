@@ -1094,23 +1094,22 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
             console.warn('[JarvisChart] updateLiveCandle newBar error:', e);
           }
         } else {
-          // Kline update within active candle: High only expands up, Low only expands down
+          // Exchange kline is authoritative — use its OHLC directly (not monotonic expand)
+          // This prevents stale basis offsets from creating false wicks
           const barOpen = cur.open ?? open;
-          const kHigh = Math.max(cur.high, high, barOpen, close);
-          const kLow = Math.min(cur.low, low, barOpen, close);
           const bar: CandlestickData = {
             time: cur.time,
             open: barOpen,
-            high: kHigh,
-            low: kLow,
+            high: Math.max(high, barOpen, close),
+            low: Math.min(low, barOpen, close),
             close,
           };
           currentCandleRef.current = bar;
           if (allCandlesRef.current.length > 0) {
             const lastCandle = allCandlesRef.current[allCandlesRef.current.length - 1];
             if (lastCandle.time === cur.time) {
-              lastCandle.high = kHigh;
-              lastCandle.low = kLow;
+              lastCandle.high = bar.high;
+              lastCandle.low = bar.low;
               lastCandle.close = close;
             }
           }

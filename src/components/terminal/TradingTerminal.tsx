@@ -368,7 +368,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
           exchange === preferencesRef.current.exchange &&
           timeframe === preferencesRef.current.timeframe
         ) {
-          // Purge any rogue cross-symbol outliers, closed session weekend bars, and align timestamps to timeframe grid
+          // Filter: valid OHLC, correct relationship, skip closed-session bars, align to timeframe grid
           dbCached = dbCached.filter((c) =>
             Number.isFinite(c.time) && c.time > 0 &&
             Number.isFinite(c.open) && c.open > 0 &&
@@ -377,19 +377,12 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
             Number.isFinite(c.close) && c.close > 0 &&
             c.low <= c.high &&
             !MarketSessionService.isCandleInClosedSession(targetInst.marketSchedule, c.time)
-          ).map((c) => {
-            const alignedTime = (Math.floor(c.time / tfSec) * tfSec) as any;
-            const maxBody = Math.max(c.open, c.close);
-            const minBody = Math.min(c.open, c.close);
-            const sanitizedHigh = c.high > maxBody * 1.05 ? maxBody * 1.015 : c.high;
-            const sanitizedLow = c.low < minBody * 0.95 ? minBody * 0.985 : c.low;
-            return {
-              ...c,
-              time: alignedTime,
-              high: Math.max(sanitizedHigh, maxBody),
-              low: Math.min(sanitizedLow, minBody),
-            };
-          });
+          ).map((c) => ({
+            ...c,
+            time: (Math.floor(c.time / tfSec) * tfSec) as any,
+            high: Math.max(c.high, c.open, c.close),
+            low: Math.min(c.low, c.open, c.close),
+          }));
           const sample = dbCached.slice(-30).map((c) => c.close).sort((a, b) => a - b);
           const median = sample[Math.floor(sample.length / 2)];
           if (median > 0) {
@@ -397,18 +390,11 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
             const isContaminated = isGold && (median > 15000 || median < 500);
             if (!isContaminated) {
               dbCached = dbCached.filter((c) =>
-                c.close >= median * 0.5 && c.close <= median * 2.0 &&
-                c.low >= median * 0.5 && c.high <= median * 2.0
+                c.close >= median * 0.5 && c.close <= median * 2.0
               );
             } else {
               dbCached = [];
             }
-          }
-
-          // Discard corrupted cache if more than 10% of bars are flat dashes (e.g. old PAXG tokens)
-          const flatCount = dbCached.filter((c) => c.open === c.close && c.high === c.low).length;
-          if (dbCached.length > 0 && flatCount > dbCached.length * 0.1) {
-            dbCached = [];
           }
 
           if (
@@ -448,7 +434,8 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
             return;
           }
 
-          // Filter out cross-symbol outliers, closed session weekend bars, zero/negative prices, and align to timeframe grid
+          // Filter: valid OHLC, correct relationship, skip closed-session bars, align to timeframe grid
+          // NEVER sanitize wicks — the exchange data is the truth
           const isGold = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase() === 'GC';
           const tfSec = TIMEFRAME_SECONDS[timeframe] || 60;
           const validBars = freshCandles.filter((c) =>
@@ -459,19 +446,12 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
             Number.isFinite(c.close) && c.close > 0 &&
             c.low <= c.high &&
             !MarketSessionService.isCandleInClosedSession(targetInst.marketSchedule, c.time)
-          ).map((c) => {
-            const alignedTime = (Math.floor(c.time / tfSec) * tfSec) as any;
-            const maxBody = Math.max(c.open, c.close);
-            const minBody = Math.min(c.open, c.close);
-            const sanitizedHigh = c.high > maxBody * 1.05 ? maxBody * 1.015 : c.high;
-            const sanitizedLow = c.low < minBody * 0.95 ? minBody * 0.985 : c.low;
-            return {
-              ...c,
-              time: alignedTime,
-              high: Math.max(sanitizedHigh, maxBody),
-              low: Math.min(sanitizedLow, minBody),
-            };
-          });
+          ).map((c) => ({
+            ...c,
+            time: (Math.floor(c.time / tfSec) * tfSec) as any,
+            high: Math.max(c.high, c.open, c.close),
+            low: Math.min(c.low, c.open, c.close),
+          }));
           const sample = validBars.slice(-30).map((c) => c.close).sort((a, b) => a - b);
           const median = sample[Math.floor(sample.length / 2)];
 
@@ -482,13 +462,12 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
 
           const validFresh = median > 0
             ? validBars.filter((c) =>
-                c.close >= median * 0.5 && c.close <= median * 2.0 &&
-                c.low >= median * 0.5 && c.high <= median * 2.0
+                c.close >= median * 0.5 && c.close <= median * 2.0
               )
             : validBars;
 
-          // Step 4: Seamlessly merge fresh candles with existing buffer, purging any zero-range flat bars
-          const existingFiltered = latestCandlesRef.current.filter((c) => !(c.open === c.close && c.high === c.low));
+          // Step 4: Seamlessly merge fresh candles with existing buffer
+          const existingFiltered = latestCandlesRef.current;
           const merged = existingFiltered.length > 0
             ? mergeAndDeduplicateCandles(existingFiltered, validFresh, timeframe)
             : validFresh;
@@ -750,8 +729,11 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         if (latestCandlesRef.current.length > 0) {
           const last = latestCandlesRef.current[latestCandlesRef.current.length - 1];
           if (last.time === alignedCandle.time) {
-            last.high = Math.max(last.high, alignedCandle.high);
-            last.low = Math.min(last.low, alignedCandle.low);
+            // Exchange kline is authoritative — REPLACE OHLC entirely (not expand)
+            // This prevents stale basis offsets from creating false wicks
+            last.open = alignedCandle.open;
+            last.high = alignedCandle.high;
+            last.low = alignedCandle.low;
             last.close = alignedCandle.close;
             if (alignedCandle.volume) last.volume = alignedCandle.volume;
           } else if (last.time < alignedCandle.time) {
