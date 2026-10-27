@@ -716,9 +716,12 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
           const last = latestCandlesRef.current[latestCandlesRef.current.length - 1];
           if (last.time === alignedCandle.time) {
             // Maintain canonical intra-candle high and low: wicks cannot shrink during active candle lifetime
-            last.open = last.open ?? alignedCandle.open;
-            last.high = Math.max(last.high, alignedCandle.high);
-            last.low = Math.min(last.low, alignedCandle.low);
+            // Canonical open adopts authoritative exchange kline open to prevent tiny candle body deformations
+            if (alignedCandle.open > 0) {
+              last.open = alignedCandle.open;
+            }
+            last.high = Math.max(last.high, alignedCandle.high, last.open, alignedCandle.close);
+            last.low = Math.min(last.low, alignedCandle.low, last.open, alignedCandle.close);
             last.close = alignedCandle.close;
             if (alignedCandle.volume) last.volume = Math.max(last.volume || 0, alignedCandle.volume);
           } else if (last.time < alignedCandle.time) {

@@ -759,13 +759,13 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
             const baseCobW = preferences.depthProfile?.widthPx || 220;
             const cobW = isCob ? (dimensions.width > 0 && dimensions.width < 600 ? Math.min(baseCobW, 140) : baseCobW) : 0;
             const isFp = isFootprintActive;
-            const targetSpacing = isFp ? 72 : 14;
+            const targetSpacing = isFp ? 72 : 18;
             const rightOffset = isCob ? Math.ceil(cobW / targetSpacing) + 2 : (isFp ? 3 : 6);
 
             activeChart.timeScale().applyOptions({
               rightOffset,
               barSpacing: targetSpacing,
-              minBarSpacing: 0.5,
+              minBarSpacing: 2.5,
             });
 
             if (!hasInitializedViewRef.current) {
@@ -1095,7 +1095,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
           }
         } else {
           // Maintain canonical intra-candle high and low: wicks cannot shrink during active candle lifetime
-          const barOpen = cur.open ?? open;
+          const barOpen = open > 0 ? open : (cur.open > 0 ? cur.open : close);
           const barHigh = Math.max(cur.high ?? 0, high, barOpen, close);
           const barLow = (cur.low && cur.low > 0) ? Math.min(cur.low, low, barOpen, close) : Math.min(low, barOpen, close);
           const bar: CandlestickData = {
@@ -1109,6 +1109,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
           if (allCandlesRef.current.length > 0) {
             const lastCandle = allCandlesRef.current[allCandlesRef.current.length - 1];
             if (lastCandle.time === cur.time) {
+              lastCandle.open = barOpen;
               lastCandle.high = bar.high;
               lastCandle.low = bar.low;
               lastCandle.close = close;
@@ -1201,7 +1202,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
           }
         } else {
           // Tick within active candle: High can only expand, Low can only decrease
-          const barOpen = cur.open ?? price;
+          const barOpen = cur.open > 0 ? cur.open : price;
           const high = Math.max(cur.high, price, barOpen);
           const low = Math.min(cur.low, price, barOpen);
           const close = price;

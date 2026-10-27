@@ -33,52 +33,73 @@ export class MarketSyncService {
       return this.cachedGoldBasis.offset;
     }
     try {
-      let spotPrice = 0;
-      // 1. Primary: TradingView CFD quote (TVC:GOLD / OANDA:XAUUSD)
-      try {
-        const tvRes = await fetch('https://scanner.tradingview.com/cfd/scan', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
-          body: JSON.stringify({ symbols: { tickers: ['TVC:GOLD', 'OANDA:XAUUSD'] }, columns: ['close'] }),
-          signal: AbortSignal.timeout(2000),
-        });
-        if (tvRes.ok) {
-          const json: any = await tvRes.json();
-          const p = parseFloat(json?.data?.[0]?.d?.[0]);
-          if (Number.isFinite(p) && p > 1000) spotPrice = p;
-        }
-      } catch {}
+      const [spotPrice, bybitRes] = await Promise.all([
+        (async () => {
+          try {
+            const tvRes = await fetch('https://scanner.tradingview.com/cfd/scan', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
+              body: JSON.stringify({
+                symbols: { tickers: ['OANDA:XAUUSD', 'TVC:GOLD', 'PEPPERSTONE:XAUUSD'] },
+                columns: ['bid', 'ask', 'close'],
+              }),
+              signal: AbortSignal.timeout(2000),
+            });
+            if (tvRes.ok) {
+              const json: any = await tvRes.json();
+              for (const row of json?.data || []) {
+                const bid = parseFloat(row?.d?.[0]);
+                const ask = parseFloat(row?.d?.[1]);
+                if (Number.isFinite(bid) && Number.isFinite(ask) && bid > 1000 && ask > 1000) {
+                  return Math.round(((bid + ask) / 2) * 100) / 100;
+                }
+                const close = parseFloat(row?.d?.[2]);
+                if (Number.isFinite(close) && close > 1000) {
+                  return Math.round(close * 100) / 100;
+                }
+              }
+            }
+          } catch {}
 
-      // 2. Fallback: api.gold-api.com
-      if (!spotPrice || spotPrice <= 1000) {
-        try {
-          const spotRes = await fetch('https://api.gold-api.com/price/XAU', {
-            headers: { 'User-Agent': 'Mozilla/5.0' },
-            signal: AbortSignal.timeout(2000),
-          });
-          if (spotRes.ok) {
-            const json: any = await spotRes.json();
-            const p = parseFloat(json?.price);
-            if (Number.isFinite(p) && p > 1000) spotPrice = p;
-          }
-        } catch {}
-      }
-
-      let bybitPrice = 0;
-      try {
-        const bbRes = await fetch('https://api.bybit.com/v5/market/tickers?category=linear&symbol=XAUUSDT', {
+          try {
+            const spotRes = await fetch('https://api.gold-api.com/price/XAU', {
+              headers: { 'User-Agent': 'Mozilla/5.0' },
+              signal: AbortSignal.timeout(2000),
+            });
+            if (spotRes.ok) {
+              const json: any = await spotRes.json();
+              const p = parseFloat(json?.price);
+              if (Number.isFinite(p) && p > 1000) return Math.round(p * 100) / 100;
+            }
+          } catch {}
+          return 0;
+        })(),
+        fetch('https://api.bybit.com/v5/market/tickers?category=linear&symbol=XAUUSDT', {
           headers: { 'User-Agent': 'Mozilla/5.0' },
           signal: AbortSignal.timeout(2000),
-        });
-        if (bbRes.ok) {
-          const json: any = await bbRes.json();
-          const p = parseFloat(json?.result?.list?.[0]?.lastPrice);
-          if (Number.isFinite(p) && p > 1000) bybitPrice = p;
-        }
-      } catch {}
+        }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      ]);
 
-      if (spotPrice > 1000 && bybitPrice > 1000) {
-        const diff = bybitPrice - spotPrice;
+      let bybitPrice = 0;
+      let effectiveSpot = spotPrice;
+
+      if (bybitRes) {
+        const item = bybitRes?.result?.list?.[0];
+        const last = parseFloat(item?.lastPrice);
+        const bid = parseFloat(item?.bid1Price);
+        const ask = parseFloat(item?.ask1Price);
+        bybitPrice = (Number.isFinite(bid) && Number.isFinite(ask) && bid > 1000 && ask > 1000)
+          ? (bid + ask) / 2
+          : last;
+
+        if ((!effectiveSpot || effectiveSpot <= 1000) && item?.indexPrice) {
+          const idx = parseFloat(item.indexPrice);
+          if (Number.isFinite(idx) && idx > 1000) effectiveSpot = idx;
+        }
+      }
+
+      if (effectiveSpot > 1000 && bybitPrice > 1000) {
+        const diff = bybitPrice - effectiveSpot;
         if (diff >= 0 && diff <= 40) {
           const freshBasis = Math.round(diff * 100) / 100;
           this.cachedGoldBasis = { offset: freshBasis, lastFetch: now };

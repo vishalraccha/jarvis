@@ -58,19 +58,29 @@ function redisFastCandleCachePlugin(): Plugin {
   }
 
   async function fetchSpotGoldPrice(): Promise<number> {
-    // 1. Primary: TradingView official CFD quote (TVC:GOLD / OANDA:XAUUSD) — 100% exact parity with TradingView & MT5
+    // 1. Primary: TradingView official CFD quote (OANDA:XAUUSD / TVC:GOLD / PEPPERSTONE:XAUUSD) — 100% exact parity with TradingView & MT5
     try {
       const tvRes = await fetch('https://scanner.tradingview.com/cfd/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
-        body: JSON.stringify({ symbols: { tickers: ['TVC:GOLD', 'OANDA:XAUUSD'] }, columns: ['close'] }),
+        body: JSON.stringify({
+          symbols: { tickers: ['OANDA:XAUUSD', 'TVC:GOLD', 'PEPPERSTONE:XAUUSD'] },
+          columns: ['bid', 'ask', 'close'],
+        }),
         signal: AbortSignal.timeout(2000),
       });
       if (tvRes.ok) {
         const json: any = await tvRes.json();
-        const p = parseFloat(json?.data?.[0]?.d?.[0]);
-        if (Number.isFinite(p) && p > 1000) {
-          return Math.round(p * 100) / 100;
+        for (const row of json?.data || []) {
+          const bid = parseFloat(row?.d?.[0]);
+          const ask = parseFloat(row?.d?.[1]);
+          if (Number.isFinite(bid) && Number.isFinite(ask) && bid > 1000 && ask > 1000) {
+            return Math.round(((bid + ask) / 2) * 100) / 100;
+          }
+          const close = parseFloat(row?.d?.[2]);
+          if (Number.isFinite(close) && close > 1000) {
+            return Math.round(close * 100) / 100;
+          }
         }
       }
     } catch {}
@@ -112,28 +122,37 @@ function redisFastCandleCachePlugin(): Plugin {
 
   async function refreshGoldBasis(): Promise<number> {
     try {
-      let spotPrice = await fetchSpotGoldPrice();
-      let bybitPrice = 0;
+      const [spotPrice, bybitRes] = await Promise.all([
+        fetchSpotGoldPrice(),
+        fetch('https://api.bybit.com/v5/market/tickers?category=linear&symbol=XAUUSDT', {
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+          signal: AbortSignal.timeout(2000),
+        }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      ]);
 
-      const bybitRes = await fetch('https://api.bybit.com/v5/market/tickers?category=linear&symbol=XAUUSDT', {
-        headers: { 'User-Agent': 'Mozilla/5.0' },
-        signal: AbortSignal.timeout(2000),
-      });
-      if (bybitRes.ok) {
-        const bybitJson: any = await bybitRes.json();
-        const item = bybitJson?.result?.list?.[0];
-        bybitPrice = parseFloat(item?.lastPrice);
-        if ((!spotPrice || spotPrice <= 1000) && item?.indexPrice) {
+      let bybitPrice = 0;
+      let effectiveSpot = spotPrice;
+
+      if (bybitRes) {
+        const item = (bybitRes as any)?.result?.list?.[0];
+        const last = parseFloat(item?.lastPrice);
+        const bid = parseFloat(item?.bid1Price);
+        const ask = parseFloat(item?.ask1Price);
+        bybitPrice = (Number.isFinite(bid) && Number.isFinite(ask) && bid > 1000 && ask > 1000)
+          ? (bid + ask) / 2
+          : last;
+
+        if ((!effectiveSpot || effectiveSpot <= 1000) && item?.indexPrice) {
           const idx = parseFloat(item.indexPrice);
-          if (Number.isFinite(idx) && idx > 1000) spotPrice = idx;
+          if (Number.isFinite(idx) && idx > 1000) effectiveSpot = idx;
         }
       }
 
-      if (spotPrice > 1000 && bybitPrice > 1000) {
-        const rawBasis = bybitPrice - spotPrice;
+      if (effectiveSpot > 1000 && bybitPrice > 1000) {
+        const rawBasis = bybitPrice - effectiveSpot;
         if (rawBasis >= 0 && rawBasis <= 40) {
           const freshBasis = Math.round(rawBasis * 100) / 100;
-          cachedGoldBasis = { offset: freshBasis, lastFetch: Date.now(), spotPrice, bybitPrice };
+          cachedGoldBasis = { offset: freshBasis, lastFetch: Date.now(), spotPrice: effectiveSpot, bybitPrice };
           return freshBasis;
         }
       }
@@ -143,8 +162,8 @@ function redisFastCandleCachePlugin(): Plugin {
 
   async function getLiveGoldBasis(): Promise<number> {
     const now = Date.now();
-    // 0ms instant return if fresh (< 4000ms old)
-    if (now - cachedGoldBasis.lastFetch < 4000 && cachedGoldBasis.offset > 0) {
+    // 0ms instant return if fresh (< 2000ms old)
+    if (now - cachedGoldBasis.lastFetch < 2000 && cachedGoldBasis.offset > 0) {
       return cachedGoldBasis.offset;
     }
     // If cached exists, return immediately and trigger non-blocking background refresh
@@ -456,13 +475,13 @@ function redisFastCandleCachePlugin(): Plugin {
     }
   }, 100)?.unref();
 
-  // Fast background ticker & basis refresh every 3 seconds for zero latency
+  // Fast background ticker & basis refresh every 1.5 seconds for sub-second synchronization
   setInterval(() => {
     refreshGoldBasis().catch(() => {});
     for (const s of ALL_CANONICAL_SYMBOLS) {
       fetchAndCacheTicker(s).catch(() => {});
     }
-  }, 3000)?.unref();
+  }, 1500)?.unref();
 
   // Background candle refresh every 10 seconds for real-time gold & crypto synchronization
   setInterval(() => {

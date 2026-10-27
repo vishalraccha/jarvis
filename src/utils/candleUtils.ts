@@ -74,12 +74,16 @@ export function mergeAndDeduplicateCandles(
     }
     if (candleMap.has(c.time)) {
       const existing = candleMap.get(c.time)!;
+      const open = c.open > 0 ? c.open : existing.open;
+      const close = c.close > 0 ? c.close : existing.close;
+      const high = Math.max(existing.high, c.high, open, close);
+      const low = Math.min(existing.low, c.low, open, close);
       candleMap.set(c.time, {
         ...c,
-        open: existing.open ?? c.open,
-        high: Math.max(existing.high, c.high),
-        low: Math.min(existing.low, c.low),
-        close: c.close ?? existing.close,
+        open,
+        high,
+        low,
+        close,
         volume: Math.max(existing.volume || 0, c.volume || 0),
       });
     } else {
