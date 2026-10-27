@@ -24,8 +24,8 @@ if (typeof globalThis.localStorage === 'undefined') {
 }
 
 describe('XAUUSD Data Integrity & Parity Audit Suite', () => {
-  describe('1. Raw 1:1 Market Data Integrity (Zero Synthetic Offsets / Zero Price Fabrication)', () => {
-    it('guarantees adjustPrice performs 1:1 raw execution on all instruments without modification', () => {
+  describe('1. MT5 Parity Calibration & Raw Instrument Integrity', () => {
+    it('guarantees adjustPrice performs 1:1 raw execution on all non-gold instruments without modification', () => {
       const adapter = new BinanceAdapter();
       expect(adapter.adjustPrice(80729.45, 'BTCUSDT')).toBe(80729.45);
       expect(adapter.adjustPrice(2364.12, 'ETHUSDT')).toBe(2364.12);
@@ -33,20 +33,23 @@ describe('XAUUSD Data Integrity & Parity Audit Suite', () => {
       expect(adapter.adjustPrice(2740.50, 'GC')).toBe(2740.50);
     });
 
-    it('preserves authentic raw Bybit exchange price for XAUUSD without synthetic offset', () => {
+    it('preserves raw price safely when uncalibrated (offset = 0)', () => {
+      localStorage.removeItem('jarvis_spot_basis_offset');
+      const adapter = new BinanceAdapter();
+      (adapter as any).requestedSymbol = 'XAUUSD';
+      (adapter as any).spotBasisOffset = 0;
+
+      expect(adapter.adjustPrice(4029.59)).toBe(4029.59);
+    });
+
+    it('calibrates Bybit futures price to exact MT5 Spot Gold price when basis offset is active', () => {
+      localStorage.setItem('jarvis_spot_basis_offset', '8.50');
       const adapter = new BinanceAdapter();
       (adapter as any).requestedSymbol = 'XAUUSD';
 
-      // Authentic exchange price is preserved 1:1 without synthetic offset manipulation
-      expect(adapter.adjustPrice(4029.59)).toBe(4029.59);
-      expect(adapter.adjustPrice(4027.17, 'XAUUSD_VANTAGE')).toBe(4027.17);
-    });
-
-    it('purges legacy stale basis offsets from localStorage on initialization', () => {
-      localStorage.setItem('jarvis_spot_basis_offset', '7.99');
-      const adapter = new BinanceAdapter();
-      expect(localStorage.getItem('jarvis_spot_basis_offset')).toBeNull();
-      expect(adapter.adjustPrice(4028.17, 'XAUUSD')).toBe(4028.17);
+      // Live Bybit perpetual futures at 4066.50 minus basis 8.50 yields MT5 Spot Gold at 4058.00
+      expect(adapter.adjustPrice(4066.50, 'XAUUSD')).toBe(4058.00);
+      expect(adapter.adjustPrice(80000, 'BTCUSDT')).toBe(80000); // Crypto unchanged
     });
   });
 

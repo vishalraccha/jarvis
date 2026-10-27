@@ -25,6 +25,55 @@ export class MarketSyncService {
     this.startBackgroundSync();
   }
 
+  private cachedGoldBasis = { offset: 0, lastFetch: 0 };
+
+  async getLiveGoldBasis(): Promise<number> {
+    const now = Date.now();
+    if (now - this.cachedGoldBasis.lastFetch < 10000 && this.cachedGoldBasis.offset > 0) {
+      return this.cachedGoldBasis.offset;
+    }
+    try {
+      let spotPrice = 0;
+      try {
+        const spotRes = await fetch('https://api.gold-api.com/price/XAU', {
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+          signal: AbortSignal.timeout(3000),
+        });
+        if (spotRes.ok) {
+          const json: any = await spotRes.json();
+          const p = parseFloat(json?.price);
+          if (Number.isFinite(p) && p > 1000) spotPrice = p;
+        }
+      } catch {}
+
+      let bybitPrice = 0;
+      try {
+        const bbRes = await fetch('https://api.bybit.com/v5/market/tickers?category=linear&symbol=XAUUSDT', {
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+          signal: AbortSignal.timeout(3000),
+        });
+        if (bbRes.ok) {
+          const json: any = await bbRes.json();
+          const p = parseFloat(json?.result?.list?.[0]?.lastPrice);
+          if (Number.isFinite(p) && p > 1000) bybitPrice = p;
+        }
+      } catch {}
+
+      if (spotPrice > 1000 && bybitPrice > 1000) {
+        const diff = bybitPrice - spotPrice;
+        if (diff >= 0 && diff <= 40) {
+          const freshBasis = Math.round(diff * 100) / 100;
+          const basis = this.cachedGoldBasis.offset > 0
+            ? Math.round((this.cachedGoldBasis.offset * 0.7 + freshBasis * 0.3) * 100) / 100
+            : freshBasis;
+          this.cachedGoldBasis = { offset: basis, lastFetch: now };
+          return basis;
+        }
+      }
+    } catch {}
+    return this.cachedGoldBasis.offset > 0 ? this.cachedGoldBasis.offset : 0;
+  }
+
   private getYahooSymbol(cleanSym: string): string {
     const s = cleanSym.toUpperCase().replace(/[-_/]/g, '');
     if (s === 'EURUSD' || s === 'EUR' || s === 'EURUSDT') return 'EURUSD=X';
@@ -253,12 +302,13 @@ export class MarketSyncService {
     }
 
     const mult = 100;
+    const goldBasis = isGoldSpot ? await this.getLiveGoldBasis() : 0;
 
     const candles: StoredCandle[] = rawData.map((k) => {
-      const open = Math.round(parseFloat(k[1]) * mult) / mult;
-      const rawHigh = Math.round(parseFloat(k[2]) * mult) / mult;
-      const rawLow = Math.round(parseFloat(k[3]) * mult) / mult;
-      const close = Math.round(parseFloat(k[4]) * mult) / mult;
+      const open = Math.round((parseFloat(k[1]) - goldBasis) * mult) / mult;
+      const rawHigh = Math.round((parseFloat(k[2]) - goldBasis) * mult) / mult;
+      const rawLow = Math.round((parseFloat(k[3]) - goldBasis) * mult) / mult;
+      const close = Math.round((parseFloat(k[4]) - goldBasis) * mult) / mult;
       const high = Math.max(open, rawHigh, rawLow, close);
       const low = Math.min(open, rawHigh, rawLow, close);
       return {
@@ -277,7 +327,15 @@ export class MarketSyncService {
     }
 
     const proxyKey = `klines_raw_${sym}_${tf}`;
-    await hotCache.set(proxyKey, JSON.stringify(rawData), 5);
+    const formattedRaw = candles.map((c) => [
+      c.time * 1000,
+      c.open.toString(),
+      c.high.toString(),
+      c.low.toString(),
+      c.close.toString(),
+      c.volume.toString(),
+    ]);
+    await hotCache.set(proxyKey, JSON.stringify(formattedRaw), 5);
 
     return candles;
   }

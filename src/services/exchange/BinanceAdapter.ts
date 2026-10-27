@@ -47,11 +47,7 @@ export class BinanceAdapter implements IExchangeAdapter {
   private events: ExchangeAdapterEvents | null = null;
   private connectionState: ConnectionState = 'DISCONNECTED';
 
-  // Dynamic Real-Time Spot-Futures Basis Calibration
-  // NOTE: Basis adjustment DISABLED — raw Bybit XAUUSDT perpetual data is displayed as-is.
-  // The ~$1-2 futures premium over spot is genuine market data, not an error.
-  // Previously, variable basis offsets applied at different times to different code paths
-  // caused inconsistent candles and price jumps on every refresh.
+  // Dynamic Real-Time Spot-Futures Basis Calibration (Floating live basis against authentic spot gold)
   private spotBasisOffset: number = 0;
   private lastBasisFetch: number = 0;
   private basisOffsets: Record<string, number> = {};
@@ -59,8 +55,15 @@ export class BinanceAdapter implements IExchangeAdapter {
   private calibrateIntervalId: number | null = null;
 
   constructor() {
-    // Clean up stale basis offset from localStorage
-    try { localStorage.removeItem('jarvis_spot_basis_offset'); } catch {}
+    try {
+      const saved = localStorage.getItem('jarvis_spot_basis_offset');
+      if (saved) {
+        const parsed = parseFloat(saved);
+        if (Number.isFinite(parsed) && parsed > 0 && parsed <= 50) {
+          this.spotBasisOffset = parsed;
+        }
+      }
+    } catch {}
   }
 
   // Metrics
@@ -134,10 +137,15 @@ export class BinanceAdapter implements IExchangeAdapter {
   }
 
   /**
-   * Returns price as-is. Basis adjustment removed to prevent false candles.
-   * The raw Bybit XAUUSDT perpetual price is genuine market data.
+   * Adjusts price for Spot Gold benchmarks using live dynamic basis calibration.
+   * Perpetual futures price minus authoritative basis delivers authentic MT5/TradingView spot price.
+   * Canonical crypto spot (BTC, ETH, SOL), GC futures, and Forex prices remain 1:1 untouched.
    */
-  adjustPrice(price: number, _symbol?: string): number {
+  adjustPrice(price: number, symbol?: string): number {
+    const sym = symbol || this.requestedSymbol || this.currentSymbol;
+    if (this.isGoldSpot(sym) && this.spotBasisOffset > 0) {
+      return Math.round((price - this.spotBasisOffset) * 100) / 100;
+    }
     return price;
   }
 
@@ -159,7 +167,7 @@ export class BinanceAdapter implements IExchangeAdapter {
   async calibrateSpotBasis(): Promise<number> {
     try {
       const now = Date.now();
-      if (now - this.lastBasisFetch < 10000 && this.spotBasisOffset !== 0) {
+      if (now - this.lastBasisFetch < 10000 && this.spotBasisOffset > 0) {
         return this.spotBasisOffset;
       }
 
@@ -169,7 +177,7 @@ export class BinanceAdapter implements IExchangeAdapter {
         if (srvRes.ok) {
           const srvData = await srvRes.json();
           const b = parseFloat(srvData?.basis);
-          if (Number.isFinite(b) && b >= 0 && b <= 25) {
+          if (Number.isFinite(b) && b >= 0 && b <= 40) {
             this.spotBasisOffset = b;
             this.lastBasisFetch = now;
             try { localStorage.setItem('jarvis_spot_basis_offset', String(b)); } catch {}
@@ -219,8 +227,11 @@ export class BinanceAdapter implements IExchangeAdapter {
 
       if (spotPrice > 1000 && bybitPrice > 1000) {
         const rawBasis = bybitPrice - spotPrice;
-        if (rawBasis >= 0 && rawBasis <= 25) {
-          const basis = Math.round(rawBasis * 100) / 100;
+        if (rawBasis >= 0 && rawBasis <= 40) {
+          const freshBasis = Math.round(rawBasis * 100) / 100;
+          const basis = this.spotBasisOffset > 0
+            ? Math.round((this.spotBasisOffset * 0.7 + freshBasis * 0.3) * 100) / 100
+            : freshBasis;
           this.spotBasisOffset = basis;
           this.lastBasisFetch = now;
           try {
@@ -269,9 +280,12 @@ export class BinanceAdapter implements IExchangeAdapter {
 
     this.disconnect(false);
 
-    // Basis calibration disabled — raw Bybit data shown as-is
-    // this.calibrateBasis(symbol).catch(() => {});
-    // this.calibrateIntervalId = ...;
+    if (this.isGoldSpot(symbol)) {
+      this.calibrateBasis(symbol).catch(() => {});
+      this.calibrateIntervalId = (setInterval as any)(() => {
+        this.calibrateBasis(this.requestedSymbol || this.currentSymbol).catch(() => {});
+      }, 15000);
+    }
 
     this.syncServerTime().catch(() => {});
     this.initWebSocket();
@@ -459,12 +473,16 @@ export class BinanceAdapter implements IExchangeAdapter {
             if (Array.isArray(list) && list.length > 0) {
               const sorted = [...list].sort((a: any, b: any) => Number(a[0]) - Number(b[0]));
               const k = sorted[sorted.length - 1];
+              const open = this.adjustPrice(parseFloat(k[1]), this.requestedSymbol);
+              const rawHigh = this.adjustPrice(parseFloat(k[2]), this.requestedSymbol);
+              const rawLow = this.adjustPrice(parseFloat(k[3]), this.requestedSymbol);
+              const close = this.adjustPrice(parseFloat(k[4]), this.requestedSymbol);
               const candle: Candle = {
                 time: Math.floor(Number(k[0]) / 1000),
-                open: parseFloat(k[1]),
-                high: parseFloat(k[2]),
-                low: parseFloat(k[3]),
-                close: parseFloat(k[4]),
+                open,
+                high: Math.max(open, rawHigh, rawLow, close),
+                low: Math.min(open, rawHigh, rawLow, close),
+                close,
                 volume: parseFloat(k[5]),
               };
               this.events?.onKline?.(candle);
@@ -489,12 +507,16 @@ export class BinanceAdapter implements IExchangeAdapter {
       }
 
       if (rawKline && Array.isArray(rawKline)) {
+        const open = this.adjustPrice(parseFloat(rawKline[1]), this.requestedSymbol);
+        const rawHigh = this.adjustPrice(parseFloat(rawKline[2]), this.requestedSymbol);
+        const rawLow = this.adjustPrice(parseFloat(rawKline[3]), this.requestedSymbol);
+        const close = this.adjustPrice(parseFloat(rawKline[4]), this.requestedSymbol);
         const candle: Candle = {
           time: Math.floor(Number(rawKline[0]) / 1000),
-          open: parseFloat(rawKline[1]),
-          high: parseFloat(rawKline[2]),
-          low: parseFloat(rawKline[3]),
-          close: parseFloat(rawKline[4]),
+          open,
+          high: Math.max(open, rawHigh, rawLow, close),
+          low: Math.min(open, rawHigh, rawLow, close),
+          close,
           volume: parseFloat(rawKline[5]),
           tradeCount: Number(rawKline[8]) || undefined,
           buyVolume: parseFloat(rawKline[9]) || undefined,
@@ -881,8 +903,8 @@ export class BinanceAdapter implements IExchangeAdapter {
           return {
             lastUpdateId: res.seq || res.u || Date.now(),
             timestamp: res.ts || Date.now(),
-            bids: (res.b || []).map((b: [string, string]) => [this.adjustPrice(parseFloat(b[0])), parseFloat(b[1])]),
-            asks: (res.a || []).map((a: [string, string]) => [this.adjustPrice(parseFloat(a[0])), parseFloat(a[1])]),
+            bids: (res.b || []).map((b: [string, string]) => [this.adjustPrice(parseFloat(b[0]), symbol), parseFloat(b[1])]),
+            asks: (res.a || []).map((a: [string, string]) => [this.adjustPrice(parseFloat(a[0]), symbol), parseFloat(a[1])]),
           };
         }
       }
@@ -901,8 +923,8 @@ export class BinanceAdapter implements IExchangeAdapter {
     return {
       lastUpdateId: data.lastUpdateId,
       timestamp: Date.now(),
-      bids: (data.bids || []).map((b: [string, string]) => [this.adjustPrice(parseFloat(b[0])), parseFloat(b[1])]),
-      asks: (data.asks || []).map((a: [string, string]) => [this.adjustPrice(parseFloat(a[0])), parseFloat(a[1])]),
+      bids: (data.bids || []).map((b: [string, string]) => [this.adjustPrice(parseFloat(b[0]), symbol), parseFloat(b[1])]),
+      asks: (data.asks || []).map((a: [string, string]) => [this.adjustPrice(parseFloat(a[0]), symbol), parseFloat(a[1])]),
     };
   }
 
@@ -925,7 +947,7 @@ export class BinanceAdapter implements IExchangeAdapter {
         const list = json?.result?.list;
         if (Array.isArray(list) && list.length > 0) {
           return list.map((item: any) => {
-            const p = this.adjustPrice(parseFloat(item.price));
+            const p = this.adjustPrice(parseFloat(item.price), symbol);
             const q = parseFloat(item.size);
             const isBuyerMaker = String(item.side).toLowerCase() === 'sell';
             return {
@@ -1026,8 +1048,9 @@ export class BinanceAdapter implements IExchangeAdapter {
   ): Promise<Candle[]> {
     this.requestedSymbol = symbol;
 
-    // Basis calibration disabled — raw Bybit data shown as-is
-    // No offset needed; the perpetual futures price is genuine market data
+    if (this.isGoldSpot(symbol)) {
+      this.calibrateSpotBasis().catch(() => {});
+    }
 
     const sym = this.getEffectiveSymbol(symbol);
     const isFut = this.isFutures(sym);

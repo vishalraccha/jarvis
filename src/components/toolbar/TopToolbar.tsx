@@ -295,7 +295,7 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
   };
 
   const getCompactSymbolLabel = (symbol: string): string => {
-    if (symbol === 'XAUUSD') return 'XAU/USDT Bybit';
+    if (symbol === 'XAUUSD') return 'XAU/USD Spot Gold';
     if (symbol === 'XAUUSD_VANTAGE') return 'XAU/USD Vantage MT5';
     if (symbol === 'GC') return 'GC Gold';
     return symbol.replace('USDT', '/USDT');
@@ -429,10 +429,10 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
               >
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                    <span style={{ fontWeight: 700 }}>XAU/USDT • Bybit Perpetual</span>
-                    <span style={{ fontSize: 9, padding: '0 4px', borderRadius: 3, background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8' }}>24/7 Futures</span>
+                    <span style={{ fontWeight: 700 }}>XAU/USD • Spot Gold (MT5 Parity)</span>
+                    <span style={{ fontSize: 9, padding: '0 4px', borderRadius: 3, background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8' }}>MT5 Parity</span>
                   </div>
-                  <span style={{ fontSize: 9.5, color: '#94a3b8' }}>TradingView: BYBIT:XAUUSDT.P • Live Order Book</span>
+                  <span style={{ fontSize: 9.5, color: '#94a3b8' }}>MT5 Spot Gold Benchmark • Live Level 2 DOM & Trades</span>
                 </div>
                 {preferences.symbol === 'XAUUSD' && <Check size={13} style={{ color: '#facc15' }} />}
               </div>

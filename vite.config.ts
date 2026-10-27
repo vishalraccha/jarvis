@@ -112,9 +112,12 @@ function redisFastCandleCachePlugin(): Plugin {
 
       if (spotPrice > 1000 && bybitPrice > 1000) {
         const rawBasis = bybitPrice - spotPrice;
-        // Perpetual futures basis for gold floats smoothly between $1 and $22
-        if (rawBasis >= 0 && rawBasis <= 25) {
-          const basis = Math.round(rawBasis * 100) / 100;
+        // Perpetual futures basis for gold floats smoothly between $0 and $40
+        if (rawBasis >= 0 && rawBasis <= 40) {
+          const freshBasis = Math.round(rawBasis * 100) / 100;
+          const basis = cachedGoldBasis.offset > 0
+            ? Math.round((cachedGoldBasis.offset * 0.7 + freshBasis * 0.3) * 100) / 100
+            : freshBasis;
           cachedGoldBasis = { offset: basis, lastFetch: now, spotPrice, bybitPrice };
           return basis;
         }
@@ -488,15 +491,16 @@ function redisFastCandleCachePlugin(): Plugin {
               if (Array.isArray(list)) {
                 const tfSec = interval === '1d' ? 86400 : interval === '1h' ? 3600 : interval === '15m' ? 900 : interval === '5m' ? 300 : 60;
                 const mult = target.isFx ? 10000 : (target.isComex ? 10 : 100);
+                const goldBasis = target.isGoldSpot ? await getLiveGoldBasis() : 0;
 
                 const candleMap = new Map<number, any>();
                 for (const k of list) {
                   const rawSec = Math.floor(Number(k[0]) / 1000);
                   const time = Math.floor(rawSec / tfSec) * tfSec;
-                  const open = Math.round(parseFloat(k[1]) * mult) / mult;
-                  const rawHigh = Math.round(parseFloat(k[2]) * mult) / mult;
-                  const rawLow = Math.round(parseFloat(k[3]) * mult) / mult;
-                  const close = Math.round(parseFloat(k[4]) * mult) / mult;
+                  const open = Math.round((parseFloat(k[1]) - goldBasis) * mult) / mult;
+                  const rawHigh = Math.round((parseFloat(k[2]) - goldBasis) * mult) / mult;
+                  const rawLow = Math.round((parseFloat(k[3]) - goldBasis) * mult) / mult;
+                  const close = Math.round((parseFloat(k[4]) - goldBasis) * mult) / mult;
                   const high = Math.max(open, rawHigh, rawLow, close);
                   const low = Math.min(open, rawHigh, rawLow, close);
                   const volume = parseFloat(k[5]) || 0;
@@ -519,6 +523,9 @@ function redisFastCandleCachePlugin(): Plugin {
 
                 res.setHeader('Content-Type', 'application/json');
                 res.setHeader('X-Cache-Status', 'HIT-RAM-0MS');
+                if (target.isGoldSpot) {
+                  res.setHeader('X-Gold-Basis', String(goldBasis));
+                }
                 res.end(JSON.stringify(sliced));
                 return;
               }
@@ -583,13 +590,29 @@ function redisFastCandleCachePlugin(): Plugin {
         const cached = memoryCache.get(key);
         const now = Date.now();
 
-        const formatRawKlines = (rawString: string) => {
-          if (limit > 0 && limit < 1000) {
-            try {
-              const list = JSON.parse(rawString);
-              if (Array.isArray(list)) return JSON.stringify(list.slice(-limit));
-            } catch {}
-          }
+        const formatRawKlines = async (rawString: string) => {
+          try {
+            let list = JSON.parse(rawString);
+            if (Array.isArray(list)) {
+              if (target.isGoldSpot) {
+                const basis = await getLiveGoldBasis();
+                if (basis > 0) {
+                  list = list.map((k: any) => [
+                    k[0],
+                    String(Math.round((parseFloat(k[1]) - basis) * 100) / 100),
+                    String(Math.round((parseFloat(k[2]) - basis) * 100) / 100),
+                    String(Math.round((parseFloat(k[3]) - basis) * 100) / 100),
+                    String(Math.round((parseFloat(k[4]) - basis) * 100) / 100),
+                    k[5],
+                  ]);
+                }
+              }
+              if (limit > 0 && limit < 1000) {
+                list = list.slice(-limit);
+              }
+              return JSON.stringify(list);
+            }
+          } catch {}
           return rawString;
         };
 
@@ -597,7 +620,7 @@ function redisFastCandleCachePlugin(): Plugin {
         if (cached) {
           res.setHeader('Content-Type', 'application/json');
           res.setHeader('X-Cache-Status', (now - cached.timestamp < 3000) ? 'HIT-RAM-0MS' : 'HIT-STALE-REVALIDATING');
-          res.end(formatRawKlines(cached.data));
+          res.end(await formatRawKlines(cached.data));
           if (now - cached.timestamp >= 2000) {
             fetchAndCache(target.targetSym, interval, target.isFutures).catch(() => {});
           }
@@ -609,7 +632,7 @@ function redisFastCandleCachePlugin(): Plugin {
         if (fresh) {
           res.setHeader('Content-Type', 'application/json');
           res.setHeader('X-Cache-Status', 'MISS-FETCHED');
-          res.end(formatRawKlines(fresh));
+          res.end(await formatRawKlines(fresh));
           return;
         }
 
