@@ -58,11 +58,28 @@ function redisFastCandleCachePlugin(): Plugin {
   }
 
   async function fetchSpotGoldPrice(): Promise<number> {
-    // 1. Primary: Unmetered free real-time gold spot price from api.gold-api.com (matches MT5/TradingView)
+    // 1. Primary: TradingView official CFD quote (TVC:GOLD / OANDA:XAUUSD) — 100% exact parity with TradingView & MT5
+    try {
+      const tvRes = await fetch('https://scanner.tradingview.com/cfd/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
+        body: JSON.stringify({ symbols: { tickers: ['TVC:GOLD', 'OANDA:XAUUSD'] }, columns: ['close'] }),
+        signal: AbortSignal.timeout(2000),
+      });
+      if (tvRes.ok) {
+        const json: any = await tvRes.json();
+        const p = parseFloat(json?.data?.[0]?.d?.[0]);
+        if (Number.isFinite(p) && p > 1000) {
+          return Math.round(p * 100) / 100;
+        }
+      }
+    } catch {}
+
+    // 2. Secondary fallback: Unmetered free real-time gold spot price from api.gold-api.com
     try {
       const res = await fetch('https://api.gold-api.com/price/XAU', {
         headers: { 'User-Agent': 'Mozilla/5.0' },
-        signal: AbortSignal.timeout(3000),
+        signal: AbortSignal.timeout(2000),
       });
       if (res.ok) {
         const json: any = await res.json();
@@ -73,11 +90,11 @@ function redisFastCandleCachePlugin(): Plugin {
       }
     } catch {}
 
-    // 2. Secondary fallback: api.goldprice.dev
+    // 3. Tertiary fallback: api.goldprice.dev
     try {
       const res = await fetch('https://api.goldprice.dev/v1/spot/XAU-USD-SPOT', {
         headers: { 'User-Agent': 'Mozilla/5.0' },
-        signal: AbortSignal.timeout(3000),
+        signal: AbortSignal.timeout(2000),
       });
       if (res.ok) {
         const json: any = await res.json();
@@ -92,40 +109,51 @@ function redisFastCandleCachePlugin(): Plugin {
   }
 
   let cachedGoldBasis = { offset: 0, lastFetch: 0, spotPrice: 0, bybitPrice: 0 };
-  async function getLiveGoldBasis(): Promise<number> {
-    const now = Date.now();
-    if (now - cachedGoldBasis.lastFetch < 10000 && cachedGoldBasis.offset > 0) {
-      return cachedGoldBasis.offset;
-    }
+
+  async function refreshGoldBasis(): Promise<number> {
     try {
-      const spotPrice = await fetchSpotGoldPrice();
+      let spotPrice = await fetchSpotGoldPrice();
       let bybitPrice = 0;
 
       const bybitRes = await fetch('https://api.bybit.com/v5/market/tickers?category=linear&symbol=XAUUSDT', {
         headers: { 'User-Agent': 'Mozilla/5.0' },
-        signal: AbortSignal.timeout(3500),
+        signal: AbortSignal.timeout(2000),
       });
       if (bybitRes.ok) {
         const bybitJson: any = await bybitRes.json();
-        bybitPrice = parseFloat(bybitJson?.result?.list?.[0]?.lastPrice);
+        const item = bybitJson?.result?.list?.[0];
+        bybitPrice = parseFloat(item?.lastPrice);
+        if ((!spotPrice || spotPrice <= 1000) && item?.indexPrice) {
+          const idx = parseFloat(item.indexPrice);
+          if (Number.isFinite(idx) && idx > 1000) spotPrice = idx;
+        }
       }
 
       if (spotPrice > 1000 && bybitPrice > 1000) {
         const rawBasis = bybitPrice - spotPrice;
-        // Perpetual futures basis for gold floats smoothly between $0 and $40
         if (rawBasis >= 0 && rawBasis <= 40) {
           const freshBasis = Math.round(rawBasis * 100) / 100;
-          const basis = cachedGoldBasis.offset > 0
-            ? Math.round((cachedGoldBasis.offset * 0.7 + freshBasis * 0.3) * 100) / 100
-            : freshBasis;
-          cachedGoldBasis = { offset: basis, lastFetch: now, spotPrice, bybitPrice };
-          return basis;
+          cachedGoldBasis = { offset: freshBasis, lastFetch: Date.now(), spotPrice, bybitPrice };
+          return freshBasis;
         }
       }
-    } catch {
-      if (cachedGoldBasis.offset > 0) return cachedGoldBasis.offset;
+    } catch {}
+    return cachedGoldBasis.offset;
+  }
+
+  async function getLiveGoldBasis(): Promise<number> {
+    const now = Date.now();
+    // 0ms instant return if fresh (< 4000ms old)
+    if (now - cachedGoldBasis.lastFetch < 4000 && cachedGoldBasis.offset > 0) {
+      return cachedGoldBasis.offset;
     }
-    return cachedGoldBasis.offset > 0 ? cachedGoldBasis.offset : 0;
+    // If cached exists, return immediately and trigger non-blocking background refresh
+    if (cachedGoldBasis.offset > 0) {
+      refreshGoldBasis().catch(() => {});
+      return cachedGoldBasis.offset;
+    }
+    // Cold start initial sync
+    return refreshGoldBasis();
   }
 
   async function fetchAndCache(symbol: string, interval: string, isFutures: boolean): Promise<string | null> {
@@ -420,6 +448,7 @@ function redisFastCandleCachePlugin(): Plugin {
 
   // Gentle pre-warm on server start (both tickers & candles for instant 0.1ms load)
   setTimeout(() => {
+    refreshGoldBasis().catch(() => {});
     for (const s of ALL_CANONICAL_SYMBOLS) {
       fetchAndCacheTicker(s).catch(() => {});
       fetchAndCache(s, '1m', false).catch(() => {});
@@ -427,19 +456,20 @@ function redisFastCandleCachePlugin(): Plugin {
     }
   }, 100)?.unref();
 
-  // Fast background ticker refresh every 3 seconds for zero latency
+  // Fast background ticker & basis refresh every 3 seconds for zero latency
   setInterval(() => {
+    refreshGoldBasis().catch(() => {});
     for (const s of ALL_CANONICAL_SYMBOLS) {
       fetchAndCacheTicker(s).catch(() => {});
     }
   }, 3000)?.unref();
 
-  // Background candle refresh every 15 seconds
+  // Background candle refresh every 10 seconds for real-time gold & crypto synchronization
   setInterval(() => {
     for (const s of ALL_CANONICAL_SYMBOLS) {
       fetchAndCache(s, '1m', false).catch(() => {});
     }
-  }, 15000)?.unref();
+  }, 10000)?.unref();
 
   return {
     name: 'redis-fast-candle-cache',

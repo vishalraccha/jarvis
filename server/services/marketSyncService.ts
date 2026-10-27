@@ -29,28 +29,46 @@ export class MarketSyncService {
 
   async getLiveGoldBasis(): Promise<number> {
     const now = Date.now();
-    if (now - this.cachedGoldBasis.lastFetch < 10000 && this.cachedGoldBasis.offset > 0) {
+    if (now - this.cachedGoldBasis.lastFetch < 4000 && this.cachedGoldBasis.offset > 0) {
       return this.cachedGoldBasis.offset;
     }
     try {
       let spotPrice = 0;
+      // 1. Primary: TradingView CFD quote (TVC:GOLD / OANDA:XAUUSD)
       try {
-        const spotRes = await fetch('https://api.gold-api.com/price/XAU', {
-          headers: { 'User-Agent': 'Mozilla/5.0' },
-          signal: AbortSignal.timeout(3000),
+        const tvRes = await fetch('https://scanner.tradingview.com/cfd/scan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
+          body: JSON.stringify({ symbols: { tickers: ['TVC:GOLD', 'OANDA:XAUUSD'] }, columns: ['close'] }),
+          signal: AbortSignal.timeout(2000),
         });
-        if (spotRes.ok) {
-          const json: any = await spotRes.json();
-          const p = parseFloat(json?.price);
+        if (tvRes.ok) {
+          const json: any = await tvRes.json();
+          const p = parseFloat(json?.data?.[0]?.d?.[0]);
           if (Number.isFinite(p) && p > 1000) spotPrice = p;
         }
       } catch {}
+
+      // 2. Fallback: api.gold-api.com
+      if (!spotPrice || spotPrice <= 1000) {
+        try {
+          const spotRes = await fetch('https://api.gold-api.com/price/XAU', {
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+            signal: AbortSignal.timeout(2000),
+          });
+          if (spotRes.ok) {
+            const json: any = await spotRes.json();
+            const p = parseFloat(json?.price);
+            if (Number.isFinite(p) && p > 1000) spotPrice = p;
+          }
+        } catch {}
+      }
 
       let bybitPrice = 0;
       try {
         const bbRes = await fetch('https://api.bybit.com/v5/market/tickers?category=linear&symbol=XAUUSDT', {
           headers: { 'User-Agent': 'Mozilla/5.0' },
-          signal: AbortSignal.timeout(3000),
+          signal: AbortSignal.timeout(2000),
         });
         if (bbRes.ok) {
           const json: any = await bbRes.json();
@@ -63,11 +81,8 @@ export class MarketSyncService {
         const diff = bybitPrice - spotPrice;
         if (diff >= 0 && diff <= 40) {
           const freshBasis = Math.round(diff * 100) / 100;
-          const basis = this.cachedGoldBasis.offset > 0
-            ? Math.round((this.cachedGoldBasis.offset * 0.7 + freshBasis * 0.3) * 100) / 100
-            : freshBasis;
-          this.cachedGoldBasis = { offset: basis, lastFetch: now };
-          return basis;
+          this.cachedGoldBasis = { offset: freshBasis, lastFetch: now };
+          return freshBasis;
         }
       }
     } catch {}

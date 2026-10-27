@@ -160,20 +160,37 @@ export class BinanceAdapter implements IExchangeAdapter {
     return 0;
   }
 
+  private async fetchTradingViewSpot(): Promise<number> {
+    try {
+      const tvRes = await fetch('https://scanner.tradingview.com/cfd/scan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbols: { tickers: ['TVC:GOLD', 'OANDA:XAUUSD'] }, columns: ['close'] }),
+        signal: AbortSignal.timeout(2000),
+      });
+      if (tvRes.ok) {
+        const tvJson: any = await tvRes.json();
+        const p = parseFloat(tvJson?.data?.[0]?.d?.[0]);
+        if (Number.isFinite(p) && p > 1000) return Math.round(p * 100) / 100;
+      }
+    } catch {}
+    return 0;
+  }
+
   /**
    * Real-time dynamic calibration: syncs with /api/gold/basis for 100% parity with candles
-   * or fetches unmetered live spot reference from api.gold-api.com.
+   * or fetches live spot reference from TradingView CFD quote.
    */
   async calibrateSpotBasis(): Promise<number> {
     try {
       const now = Date.now();
-      if (now - this.lastBasisFetch < 10000 && this.spotBasisOffset > 0) {
+      if (now - this.lastBasisFetch < 4000 && this.spotBasisOffset > 0) {
         return this.spotBasisOffset;
       }
 
       // 1. Primary: Sync directly with backend /api/gold/basis for identical candle & stream alignment
       try {
-        const srvRes = await fetch('/api/gold/basis', { signal: AbortSignal.timeout(2000) });
+        const srvRes = await fetch('/api/gold/basis', { signal: AbortSignal.timeout(1500) });
         if (srvRes.ok) {
           const srvData = await srvRes.json();
           const b = parseFloat(srvData?.basis);
@@ -186,38 +203,27 @@ export class BinanceAdapter implements IExchangeAdapter {
         }
       } catch {}
 
-      // 2. Fallback: Direct unmetered live spot reference from api.gold-api.com
-      const spotRes = await this.fastFetch(
-        '/api/goldapi/price/XAU',
-        'https://api.gold-api.com/price/XAU',
-        2500
-      );
-      let spotPrice = 0;
-      if (spotRes && spotRes.ok) {
-        const spotData = await spotRes.json();
-        spotPrice = parseFloat(spotData?.price);
-      }
+      // 2. Direct TradingView spot reference (TVC:GOLD / OANDA:XAUUSD)
+      let spotPrice = await this.fetchTradingViewSpot();
 
-      // 3. Fallback: api.goldprice.dev
+      // 3. Fallback: Direct unmetered live spot reference from api.gold-api.com
       if (!spotPrice || spotPrice <= 1000) {
-        try {
-          const fallbackRes = await this.fastFetch(
-            '/api/goldprice/v1/spot/XAU-USD-SPOT',
-            'https://api.goldprice.dev/v1/spot/XAU-USD-SPOT',
-            2500
-          );
-          if (fallbackRes && fallbackRes.ok) {
-            const data = await fallbackRes.json();
-            spotPrice = parseFloat(data?.price);
-          }
-        } catch {}
+        const spotRes = await this.fastFetch(
+          '/api/goldapi/price/XAU',
+          'https://api.gold-api.com/price/XAU',
+          2000
+        );
+        if (spotRes && spotRes.ok) {
+          const spotData = await spotRes.json();
+          spotPrice = parseFloat(spotData?.price);
+        }
       }
 
       // 4. Fetch live Bybit price or use last trade tick
       let bybitPrice = this.lastRawBinancePrice;
       if (!bybitPrice || bybitPrice <= 0) {
         const bbRes = await fetch('https://api.bybit.com/v5/market/tickers?category=linear&symbol=XAUUSDT', {
-          signal: AbortSignal.timeout(2500),
+          signal: AbortSignal.timeout(2000),
         });
         if (bbRes.ok) {
           const bbData = await bbRes.json();
@@ -229,15 +235,12 @@ export class BinanceAdapter implements IExchangeAdapter {
         const rawBasis = bybitPrice - spotPrice;
         if (rawBasis >= 0 && rawBasis <= 40) {
           const freshBasis = Math.round(rawBasis * 100) / 100;
-          const basis = this.spotBasisOffset > 0
-            ? Math.round((this.spotBasisOffset * 0.7 + freshBasis * 0.3) * 100) / 100
-            : freshBasis;
-          this.spotBasisOffset = basis;
+          this.spotBasisOffset = freshBasis;
           this.lastBasisFetch = now;
           try {
-            localStorage.setItem('jarvis_spot_basis_offset', String(basis));
+            localStorage.setItem('jarvis_spot_basis_offset', String(freshBasis));
           } catch {}
-          return basis;
+          return freshBasis;
         }
       }
     } catch {}

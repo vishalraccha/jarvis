@@ -355,75 +355,61 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
       }
     }
 
-    // TIER 2: IndexedDB Local Cache (< 3ms) if not already rendered from RAM
-    if (!hasRendered) {
-      try {
-        let dbCached = await indexedDBCache.loadCandles(symbol, timeframe, exchange);
-        const tfSec = TIMEFRAME_SECONDS[timeframe] || 60;
-        const isGold = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase() === 'GC';
-        if (
-          dbCached &&
-          dbCached.length > 0 &&
-          symbol === preferencesRef.current.symbol &&
-          exchange === preferencesRef.current.exchange &&
-          timeframe === preferencesRef.current.timeframe
-        ) {
-          // Filter: valid OHLC, correct relationship, skip closed-session bars, align to timeframe grid
-          dbCached = dbCached.filter((c) =>
-            Number.isFinite(c.time) && c.time > 0 &&
-            Number.isFinite(c.open) && c.open > 0 &&
-            Number.isFinite(c.high) && c.high > 0 &&
-            Number.isFinite(c.low) && c.low > 0 &&
-            Number.isFinite(c.close) && c.close > 0 &&
-            c.low <= c.high &&
-            !MarketSessionService.isCandleInClosedSession(targetInst.marketSchedule, c.time)
-          ).map((c) => ({
-            ...c,
-            time: (Math.floor(c.time / tfSec) * tfSec) as any,
-            high: Math.max(c.high, c.open, c.close),
-            low: Math.min(c.low, c.open, c.close),
-          }));
-          const sample = dbCached.slice(-30).map((c) => c.close).sort((a, b) => a - b);
-          const median = sample[Math.floor(sample.length / 2)];
-          if (median > 0) {
-            // Discard only true cross-symbol contamination (e.g. BTC prices in gold)
-            const isContaminated = isGold && (median > 15000 || median < 500);
-            if (!isContaminated) {
-              dbCached = dbCached.filter((c) =>
-                c.close >= median * 0.5 && c.close <= median * 2.0
-              );
-            } else {
-              dbCached = [];
-            }
-          }
-
-          if (
-            dbCached.length > 0 &&
-            symbol === preferencesRef.current.symbol &&
-            exchange === preferencesRef.current.exchange &&
-            timeframe === preferencesRef.current.timeframe
-          ) {
-            latestCandlesRef.current = dbCached;
-            setRenderedCandles(dbCached);
-            chartRef.current?.updateCandles(dbCached);
-            seedEngines(dbCached, symbol, timeframe, exchange);
-            hasRendered = true;
-          }
-        }
-      } catch (e) {
-        console.warn('[TradingTerminal] Local cache read error:', e);
-      }
-    }
-
     // Deduplicate in-flight requests for same symbol/timeframe
     if (inFlightCandleLoadsRef.current.has(cacheKey)) {
       return inFlightCandleLoadsRef.current.get(cacheKey);
     }
 
     const fetchPromise = (async () => {
+      // 1. Kick off authoritative network fetch immediately in parallel (300 candles for instant < 20ms rendering)
+      const networkFetch = adapter.fetchHistoricalCandles(symbol, timeframe, undefined, undefined, 300);
+
+      // 2. Concurrently check IndexedDB local cache if not already rendered from RAM
+      if (!hasRendered) {
+        try {
+          const dbCached = await indexedDBCache.loadCandles(symbol, timeframe, exchange);
+          const tfSec = TIMEFRAME_SECONDS[timeframe] || 60;
+          const isGold = symbol.toUpperCase().includes('XAU') || symbol.toUpperCase() === 'GC';
+          if (
+            dbCached &&
+            dbCached.length > 0 &&
+            !hasRendered &&
+            symbol === preferencesRef.current.symbol &&
+            exchange === preferencesRef.current.exchange &&
+            timeframe === preferencesRef.current.timeframe
+          ) {
+            const validDb = dbCached.filter((c) =>
+              Number.isFinite(c.time) && c.time > 0 &&
+              Number.isFinite(c.open) && c.open > 0 &&
+              Number.isFinite(c.high) && c.high > 0 &&
+              Number.isFinite(c.low) && c.low > 0 &&
+              Number.isFinite(c.close) && c.close > 0 &&
+              c.low <= c.high &&
+              !MarketSessionService.isCandleInClosedSession(targetInst.marketSchedule, c.time)
+            ).map((c) => ({
+              ...c,
+              time: (Math.floor(c.time / tfSec) * tfSec) as any,
+              high: Math.max(c.high, c.open, c.close),
+              low: Math.min(c.low, c.open, c.close),
+            }));
+            const sample = validDb.slice(-30).map((c) => c.close).sort((a, b) => a - b);
+            const median = sample[Math.floor(sample.length / 2)];
+            if (median > 0 && !(isGold && (median > 15000 || median < 500))) {
+              latestCandlesRef.current = validDb;
+              setRenderedCandles(validDb);
+              chartRef.current?.updateCandles(validDb);
+              seedEngines(validDb, symbol, timeframe, exchange);
+              hasRendered = true;
+            }
+          }
+        } catch (e) {
+          console.warn('[TradingTerminal] Local cache read error:', e);
+        }
+      }
+
       try {
-        // Step 3: Fetch latest 1000 candles asynchronously
-        const freshCandles = await adapter.fetchHistoricalCandles(symbol, timeframe, undefined, undefined, 1000);
+        // Step 3: Await latest authoritative candles from network
+        const freshCandles = await networkFetch;
         if (freshCandles && freshCandles.length > 0) {
           // Discard if symbol/exchange/timeframe changed while request was in-flight
           if (
