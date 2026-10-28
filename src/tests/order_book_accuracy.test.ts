@@ -245,5 +245,116 @@ describe('Order Book Accuracy & Mathematical Precision Suite', () => {
 
     expect(resyncTriggered).toBe(true);
   });
+
+  it('8. Immediate COB Sell Transition: prune resting bids, show selling orders, and notify immediately', () => {
+    // Setup initial book with bids up to 29680 and asks starting at 29681
+    orderBook.applyIncrementalUpdate({
+      firstUpdateId: 800,
+      lastUpdateId: 800,
+      timestamp: Date.now(),
+      bids: [
+        [29680.0, 50.0],
+        [29679.0, 40.0],
+        [29678.0, 30.0],
+      ],
+      asks: [
+        [29681.0, 60.0],
+        [29682.0, 70.0],
+      ],
+    });
+
+    let notifiedStats: any = null;
+    orderBook.subscribe((stats) => {
+      notifiedStats = stats;
+    });
+
+    // Market shifts to SELL: an aggressive sell order executes at 29680.0
+    orderBook.consumeLiquidity(29680.0, 15.0, 'sell');
+
+    // 1. Last trade tracking
+    expect(orderBook.getLastTradedPrice()).toBe(29680.0);
+    expect(orderBook.getLastTradedSide()).toBe('sell');
+
+    // 2. All resting bids at and above 29680 must be immediately eliminated
+    expect(orderBook.getBidQuantityAtPrice(29680.0)).toBe(0);
+    expect(orderBook.getBidQuantityAtPrice(29679.0)).toBe(40.0);
+
+    // 3. Selling order at 29680 must immediately be present on ask side
+    expect(orderBook.getAskQuantityAtPrice(29680.0)).toBeGreaterThan(0);
+
+    // 4. Best ask must now be 29680.0, best bid must be <= 29679.0
+    expect(orderBook.getBestAsk()).toBe(29680.0);
+    expect(orderBook.getBestBid()).toBe(29679.0);
+
+    // 5. Listener notified immediately
+    expect(notifiedStats).not.toBeNull();
+    expect(notifiedStats.bestAsk).toBe(29680.0);
+
+    // 6. COB ask cutoff calculation verifies 29680 is immediately classified as ASK (selling orders, red)
+    const rowStep = 1.0;
+    const currentMid = orderBook.getLastTradedPrice();
+    const lastSide = orderBook.getLastTradedSide();
+    const isSellHit = lastSide === 'sell';
+    const askCutoff = isSellHit 
+      ? (currentMid - rowStep * 0.499) 
+      : (lastSide === 'buy' ? (currentMid + rowStep * 0.499) : currentMid);
+
+    // Level at 29680.0 must be an ASK (red)
+    expect(29680.0 >= askCutoff).toBe(true);
+    // Level above 29680.0 must be an ASK (red)
+    expect(29681.0 >= askCutoff).toBe(true);
+    // Level below 29680.0 must be a BID (green)
+    expect(29679.0 >= askCutoff).toBe(false);
+  });
+
+  it('9. Immediate COB Buy Transition: prune resting asks, show buying orders, and notify immediately', () => {
+    orderBook.applyIncrementalUpdate({
+      firstUpdateId: 900,
+      lastUpdateId: 900,
+      timestamp: Date.now(),
+      bids: [
+        [29678.0, 30.0],
+      ],
+      asks: [
+        [29679.0, 40.0],
+        [29680.0, 50.0],
+        [29681.0, 60.0],
+      ],
+    });
+
+    // Market shifts to BUY: an aggressive buy order executes at 29680.0
+    orderBook.consumeLiquidity(29680.0, 20.0, 'buy');
+
+    expect(orderBook.getLastTradedPrice()).toBe(29680.0);
+    expect(orderBook.getLastTradedSide()).toBe('buy');
+
+    // All resting asks at and below 29680 must be eliminated
+    expect(orderBook.getAskQuantityAtPrice(29679.0)).toBe(0);
+    expect(orderBook.getAskQuantityAtPrice(29680.0)).toBe(0);
+    expect(orderBook.getAskQuantityAtPrice(29681.0)).toBe(60.0);
+
+    // Buying order at 29680 must be on the bid side
+    expect(orderBook.getBidQuantityAtPrice(29680.0)).toBeGreaterThan(0);
+
+    // Best bid must be 29680.0, best ask 29681.0
+    expect(orderBook.getBestBid()).toBe(29680.0);
+    expect(orderBook.getBestAsk()).toBe(29681.0);
+
+    // COB ask cutoff calculation verifies 29680 is immediately classified as BID (buying orders, green)
+    const rowStep = 1.0;
+    const currentMid = orderBook.getLastTradedPrice();
+    const lastSide = orderBook.getLastTradedSide();
+    const isSellHit = lastSide === 'sell';
+    const askCutoff = isSellHit 
+      ? (currentMid - rowStep * 0.499) 
+      : (lastSide === 'buy' ? (currentMid + rowStep * 0.499) : currentMid);
+
+    // Level at 29680.0 must be a BID (green)
+    expect(29680.0 >= askCutoff).toBe(false);
+    // Level below 29680.0 must be a BID (green)
+    expect(29679.0 >= askCutoff).toBe(false);
+    // Level above 29680.0 must be an ASK (red)
+    expect(29681.0 >= askCutoff).toBe(true);
+  });
 });
 

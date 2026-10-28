@@ -1208,8 +1208,14 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
           } catch (e) {
             console.warn('[JarvisChart] updateTickPrice newBar error:', e);
           }
+          if (orderBook) {
+            const side: 'buy' | 'sell' = isUp ? 'buy' : 'sell';
+            orderBook.setLastTradedPrice(price, side);
+            orderBook.consumeLiquidity(price, 1.0, side);
+          }
         } else {
           // Tick within active candle: High can only expand, Low can only decrease
+          const prevClose = cur.close > 0 ? cur.close : price;
           const barOpen = cur.open > 0 ? cur.open : price;
           const high = Math.max(cur.high, price, barOpen);
           const low = Math.min(cur.low, price, barOpen);
@@ -1232,8 +1238,13 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
               lastCandle.close = close;
             }
           }
-          const isUp = close >= barOpen;
+          const isUp = price > prevClose ? true : price < prevClose ? false : (close >= barOpen);
           syncPriceLineColor(isUp ? '#00e676' : '#ff2d55');
+          if (orderBook) {
+            const side: 'buy' | 'sell' = isUp ? 'buy' : 'sell';
+            orderBook.setLastTradedPrice(price, side);
+            orderBook.consumeLiquidity(price, 1.0, side);
+          }
           // Batch high-frequency DOM canvas redraws to requestAnimationFrame for 60fps/120fps smoothness
           pendingTickBarRef.current = updatedBar;
           if (tickRafRef.current === null) {

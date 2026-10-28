@@ -21,6 +21,34 @@ class TradingViewBridge {
     timestamp: 0,
   };
 
+  public nasCandles: any[] = [];
+  public nasLiveCandle: any = null;
+  private chartSessionId = '';
+  private quoteListeners = new Set<(quote: any) => void>();
+  private candleListeners = new Set<(event: any) => void>();
+
+  public onQuote(listener: (quote: any) => void): () => void {
+    this.quoteListeners.add(listener);
+    return () => this.quoteListeners.delete(listener);
+  }
+
+  public onCandle(listener: (event: any) => void): () => void {
+    this.candleListeners.add(listener);
+    return () => this.candleListeners.delete(listener);
+  }
+
+  private broadcastQuote(symbol: string, quote: any) {
+    for (const listener of this.quoteListeners) {
+      try { listener({ symbol, ...quote }); } catch {}
+    }
+  }
+
+  private broadcastCandle(symbol: string, candle: any) {
+    for (const listener of this.candleListeners) {
+      try { listener({ symbol, candle }); } catch {}
+    }
+  }
+
   public init() {
     this.connect();
     setInterval(() => {
@@ -53,6 +81,7 @@ class TradingViewBridge {
       });
 
       this.quoteSessionId = 'qs_' + Math.random().toString(36).substring(2, 10);
+      this.chartSessionId = 'cs_nas_' + Math.random().toString(36).substring(2, 10);
 
       this.ws.on('open', () => {
         this.isConnecting = false;
@@ -61,6 +90,11 @@ class TradingViewBridge {
           this.ws.send(this.prep({ m: 'quote_create_session', p: [this.quoteSessionId] }));
           this.ws.send(this.prep({ m: 'quote_set_fields', p: [this.quoteSessionId, 'lp', 'bid', 'ask', 'ch', 'volume'] }));
           this.ws.send(this.prep({ m: 'quote_add_symbols', p: [this.quoteSessionId, 'VANTAGE:XAUUSD', 'OANDA:XAUUSD', 'PEPPERSTONE:NAS100', 'VANTAGE:NAS100'] }));
+
+          // Maintain persistent real-time chart session for Nasdaq (PEPPERSTONE:NAS100)
+          this.ws.send(this.prep({ m: 'chart_create_session', p: [this.chartSessionId, ''] }));
+          this.ws.send(this.prep({ m: 'resolve_symbol', p: [this.chartSessionId, 'sds_nas_sym', '={\"symbol\":\"PEPPERSTONE:NAS100\",\"adjustment\":\"splits\"}'] }));
+          this.ws.send(this.prep({ m: 'create_series', p: [this.chartSessionId, 'sds_nas_series', 's1', 'sds_nas_sym', '1', 300] }));
         } catch {}
       });
 
@@ -86,6 +120,12 @@ class TradingViewBridge {
                     if (v?.ask && Number.isFinite(v.ask)) this.lastQuote.ask = v.ask;
                     if (this.lastQuote.price > 0) {
                       this.lastQuote.timestamp = Date.now();
+                      this.broadcastQuote('XAUUSD', {
+                        price: this.lastQuote.price,
+                        bid: this.lastQuote.bid,
+                        ask: this.lastQuote.ask,
+                        timestamp: this.lastQuote.timestamp,
+                      });
                     }
                   } else if (sym === 'PEPPERSTONE:NAS100' || (!this.lastNasQuote.price && sym === 'VANTAGE:NAS100')) {
                     if (v?.lp && Number.isFinite(v.lp)) this.lastNasQuote.price = v.lp;
@@ -96,7 +136,62 @@ class TradingViewBridge {
                     if (v?.ask && Number.isFinite(v.ask)) this.lastNasQuote.ask = v.ask;
                     if (this.lastNasQuote.price > 0) {
                       this.lastNasQuote.timestamp = Date.now();
+                      this.broadcastQuote('NAS100', {
+                        price: this.lastNasQuote.price,
+                        bid: this.lastNasQuote.bid,
+                        ask: this.lastNasQuote.ask,
+                        timestamp: this.lastNasQuote.timestamp,
+                      });
                     }
+                  }
+                } else if (msg.m === 'timescale_update') {
+                  const s = msg.p[1]?.sds_nas_series?.s;
+                  if (Array.isArray(s) && s.length > 0) {
+                    this.nasCandles = s.map((item: any) => [
+                      item.v[0] * 1000,
+                      item.v[1], // open
+                      item.v[2], // high
+                      item.v[3], // low
+                      item.v[4], // close
+                      item.v[5] || 10, // volume
+                    ]);
+                    const last = this.nasCandles[this.nasCandles.length - 1];
+                    if (last) {
+                      this.nasLiveCandle = {
+                        time: Math.floor(last[0] / 1000),
+                        open: last[1],
+                        high: last[2],
+                        low: last[3],
+                        close: last[4],
+                        volume: last[5],
+                      };
+                      this.broadcastCandle('NAS100', this.nasLiveCandle);
+                    }
+                  }
+                } else if (msg.m === 'du') {
+                  const s = msg.p[1]?.sds_nas_series?.s;
+                  if (Array.isArray(s) && s.length > 0) {
+                    const item = s[s.length - 1];
+                    const barTimeMs = item.v[0] * 1000;
+                    const candle = {
+                      time: Math.floor(barTimeMs / 1000),
+                      open: item.v[1],
+                      high: item.v[2],
+                      low: item.v[3],
+                      close: item.v[4],
+                      volume: item.v[5] || 10,
+                    };
+                    this.nasLiveCandle = candle;
+                    if (this.nasCandles.length > 0) {
+                      const lastBar = this.nasCandles[this.nasCandles.length - 1];
+                      if (lastBar[0] === barTimeMs) {
+                        this.nasCandles[this.nasCandles.length - 1] = [barTimeMs, candle.open, candle.high, candle.low, candle.close, candle.volume];
+                      } else if (lastBar[0] < barTimeMs) {
+                        this.nasCandles.push([barTimeMs, candle.open, candle.high, candle.low, candle.close, candle.volume]);
+                        if (this.nasCandles.length > 500) this.nasCandles.shift();
+                      }
+                    }
+                    this.broadcastCandle('NAS100', candle);
                   }
                 }
               } catch {}
@@ -120,6 +215,66 @@ class TradingViewBridge {
   }
 
   public async fetchHistoricalBars(timeframe: string, limit: number = 300, symbol: string = 'VANTAGE:XAUUSD'): Promise<any[] | null> {
+    // 1. Instant 0ms response from persistent Nasdaq memory cache
+    if (symbol.includes('NAS100')) {
+      if ((timeframe === '1m' || timeframe === '1') && this.nasCandles.length > 0) {
+        return limit > 0 ? this.nasCandles.slice(-limit) : this.nasCandles;
+      }
+
+      if (this.nasCandles.length > 0) {
+        const resMap: Record<string, number> = {
+          '3m': 180,
+          '5m': 300,
+          '15m': 900,
+          '30m': 1800,
+          '1h': 3600,
+          '2h': 7200,
+          '4h': 14400,
+          '1d': 86400,
+        };
+        const tfSec = resMap[timeframe];
+        if (tfSec) {
+          const groupMap = new Map<number, any>();
+          for (const k of this.nasCandles) {
+            const tSec = Math.floor(k[0] / 1000);
+            const barStart = Math.floor(tSec / tfSec) * tfSec;
+            const open = k[1];
+            const high = k[2];
+            const low = k[3];
+            const close = k[4];
+            const vol = k[5] || 0;
+            if (!groupMap.has(barStart)) {
+              groupMap.set(barStart, {
+                time: barStart * 1000,
+                open,
+                high,
+                low,
+                close,
+                volume: vol,
+              });
+            } else {
+              const cur = groupMap.get(barStart);
+              cur.high = Math.max(cur.high, high);
+              cur.low = Math.min(cur.low, low);
+              cur.close = close;
+              cur.volume += vol;
+            }
+          }
+          const resList = Array.from(groupMap.values()).sort((a, b) => a.time - b.time).map((c) => [
+            c.time,
+            c.open,
+            c.high,
+            c.low,
+            c.close,
+            c.volume,
+          ]);
+          if (resList.length > 0) {
+            return limit > 0 ? resList.slice(-limit) : resList;
+          }
+        }
+      }
+    }
+
     return new Promise((resolve) => {
       let resolved = false;
       const resMap: Record<string, string> = {
@@ -568,38 +723,12 @@ function redisFastCandleCachePlugin(): Plugin {
         }
       } catch {}
 
-      // Fallback for Nasdaq: Yahoo Finance ^NDX
-      try {
-        const yInterval = interval === '1d' ? '1d' : interval === '1h' ? '60m' : interval === '15m' ? '15m' : interval === '5m' ? '5m' : '1m';
-        const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/%5ENDX?interval=${yInterval}&range=2d`, {
-          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-          signal: AbortSignal.timeout(6000),
-        });
-        if (res.ok) {
-          const json: any = await res.json();
-          const result = json?.chart?.result?.[0];
-          const timestamps = result?.timestamp || [];
-          const quotes = result?.indicators?.quote?.[0];
-          if (quotes && timestamps.length > 0) {
-            const list: any[] = [];
-            for (let i = 0; i < timestamps.length; i++) {
-              const t = timestamps[i];
-              const o = quotes.open[i];
-              const h = quotes.high[i];
-              const l = quotes.low[i];
-              const c = quotes.close[i];
-              const v = quotes.volume?.[i] ?? 1000;
-              if (o === null || h === null || l === null || c === null) continue;
-              list.push([t * 1000, o, h, l, c, v]);
-            }
-            if (list.length > 0) {
-              const text = JSON.stringify(list);
-              memoryCache.set(key, { timestamp: Date.now(), data: text, isNativeSpot: true });
-              return text;
-            }
-          }
-        }
-      } catch {}
+      // Safeguard: Never fall back to Yahoo Finance ^NDX (which has a 70pt cash-index discrepancy).
+      // Return existing cached TradingView CFD candles if present.
+      const existing = memoryCache.get(key);
+      if (existing?.data) {
+        return existing.data;
+      }
     }
 
     // 4. Authoritative source for COMEX Gold Futures (GC) and Forex (EURUSD, GBPUSD): Yahoo Finance
@@ -765,24 +894,33 @@ function redisFastCandleCachePlugin(): Plugin {
       }
 
       try {
-        const res = await fetch('https://query1.finance.yahoo.com/v8/finance/chart/%5ENDX?interval=1m&range=1d', {
-          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-          signal: AbortSignal.timeout(4000),
+        const tvRes = await fetch('https://scanner.tradingview.com/cfd/scan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'User-Agent': 'Mozilla/5.0' },
+          body: JSON.stringify({
+            symbols: { tickers: ['PEPPERSTONE:NAS100', 'VANTAGE:NAS100'] },
+            columns: ['bid', 'ask', 'close'],
+          }),
+          signal: AbortSignal.timeout(2500),
         });
-        if (res.ok) {
-          const json: any = await res.json();
-          const meta = json?.chart?.result?.[0]?.meta;
-          if (meta && typeof meta.regularMarketPrice === 'number' && meta.regularMarketPrice > 0) {
-            const finalPrice = Math.round(meta.regularMarketPrice * 10) / 10;
-            const payload = JSON.stringify({
-              symbol: target.cleanSym,
-              price: finalPrice,
-              bid: finalPrice - 0.5,
-              ask: finalPrice + 0.5,
-              timestamp: Date.now(),
-            });
-            memoryCache.set(tickerKey, { timestamp: Date.now(), data: payload });
-            return;
+        if (tvRes.ok) {
+          const json: any = await tvRes.json();
+          for (const row of json?.data || []) {
+            const bid = parseFloat(row?.d?.[0]);
+            const ask = parseFloat(row?.d?.[1]);
+            const close = parseFloat(row?.d?.[2]);
+            const p = (Number.isFinite(bid) && Number.isFinite(ask) && bid > 1000) ? Math.round(((bid + ask) / 2) * 10) / 10 : (Number.isFinite(close) && close > 1000 ? Math.round(close * 10) / 10 : 0);
+            if (p > 1000) {
+              const payload = JSON.stringify({
+                symbol: target.cleanSym,
+                price: p,
+                bid: Number.isFinite(bid) ? bid : p - 0.5,
+                ask: Number.isFinite(ask) ? ask : p + 0.5,
+                timestamp: Date.now(),
+              });
+              memoryCache.set(tickerKey, { timestamp: Date.now(), data: payload });
+              return;
+            }
           }
         }
       } catch {}
@@ -860,6 +998,52 @@ function redisFastCandleCachePlugin(): Plugin {
         if (req.url?.startsWith('/api/health')) {
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify({ status: 'ok', mode: 'vite-dev-server' }));
+          return;
+        }
+
+        if (req.url?.startsWith('/api/stream/quotes')) {
+          res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache, no-transform',
+            'Connection': 'keep-alive',
+            'X-Accel-Buffering': 'no',
+          });
+          res.write('\n');
+
+          const url = new URL(req.url, 'http://localhost');
+          const rawSym = (url.searchParams.get('symbol') || 'NAS100').toUpperCase();
+          const isNas = rawSym.startsWith('NAS') || rawSym === 'NDX' || rawSym === 'US100' || rawSym === 'NASDAQ';
+
+          // Emit initial cached quote immediately for 0ms startup
+          if (isNas && tvBridge.lastNasQuote.price > 0) {
+            res.write(`data: ${JSON.stringify({ symbol: 'NAS100', price: tvBridge.lastNasQuote.price, bid: tvBridge.lastNasQuote.bid, ask: tvBridge.lastNasQuote.ask, timestamp: Date.now() })}\n\n`);
+          } else if (!isNas && tvBridge.lastQuote.price > 0) {
+            res.write(`data: ${JSON.stringify({ symbol: 'XAUUSD', price: tvBridge.lastQuote.price, bid: tvBridge.lastQuote.bid, ask: tvBridge.lastQuote.ask, timestamp: Date.now() })}\n\n`);
+          }
+
+          // Emit initial live candle if available
+          if (isNas && tvBridge.nasLiveCandle) {
+            res.write(`data: ${JSON.stringify({ symbol: 'NAS100', candle: tvBridge.nasLiveCandle, timestamp: Date.now() })}\n\n`);
+          }
+
+          const unsubscribeQuote = tvBridge.onQuote((q) => {
+            if (isNas && q.symbol === 'NAS100') {
+              try { res.write(`data: ${JSON.stringify(q)}\n\n`); } catch {}
+            } else if (!isNas && q.symbol === 'XAUUSD') {
+              try { res.write(`data: ${JSON.stringify(q)}\n\n`); } catch {}
+            }
+          });
+
+          const unsubscribeCandle = tvBridge.onCandle((c) => {
+            if (isNas && c.symbol === 'NAS100') {
+              try { res.write(`data: ${JSON.stringify({ symbol: 'NAS100', candle: c.candle, timestamp: Date.now() })}\n\n`); } catch {}
+            }
+          });
+
+          req.on('close', () => {
+            unsubscribeQuote();
+            unsubscribeCandle();
+          });
           return;
         }
 

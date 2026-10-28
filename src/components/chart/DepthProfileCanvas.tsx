@@ -105,21 +105,24 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
       ? chartCenterPrice
       : 0;
 
+    const lastHit = orderBook.getLastTradeHit();
+    const hitPrice = (lastHit && Number.isFinite(lastHit.price) && lastHit.price > 0 && Date.now() - lastHit.timestamp < 15000)
+      ? lastHit.price
+      : 0;
+    const lastTradedPrice = (orderBook as any).getLastTradedPrice ? (orderBook as any).getLastTradedPrice() : 0;
+    const livePrice = hitPrice || lastTradedPrice || candlePrice;
+
     const bestBid = stats.bestBid || orderBook.getBestBid();
     const bestAsk = stats.bestAsk || orderBook.getBestAsk();
 
-    // Authoritative Mid Price: robust fallback chain preventing hardcoded offset errors
+    // Authoritative reference market price (current execution level)
     let currentMid = 0;
-    if (bestBid > 0 && bestAsk > 0 && bestAsk >= bestBid) {
+    if (livePrice > 0) {
+      currentMid = livePrice;
+    } else if (bestBid > 0 && bestAsk > 0 && bestAsk >= bestBid) {
       currentMid = (bestBid + bestAsk) / 2;
     } else if (bestBid > 0 && bestAsk > 0) {
       currentMid = (bestBid + bestAsk) / 2;
-    } else if (bestBid > 0 && candlePrice > 0 && Math.abs(bestBid - candlePrice) / candlePrice < 0.05) {
-      currentMid = (bestBid + candlePrice) / 2;
-    } else if (bestAsk > 0 && candlePrice > 0 && Math.abs(bestAsk - candlePrice) / candlePrice < 0.05) {
-      currentMid = (bestAsk + candlePrice) / 2;
-    } else if (candlePrice > 0) {
-      currentMid = candlePrice;
     } else if (validCenterPrice > 0) {
       currentMid = validCenterPrice;
     } else if (stats.midPrice > 0) {
@@ -240,12 +243,15 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
     const kMin = Math.floor(pMin / rowStep);
     const kMax = Math.ceil(pMax / rowStep);
 
-    const effectiveBestAsk = bestAsk > 0 && Math.abs(bestAsk - currentMid) / currentMid < 0.05
-      ? bestAsk
-      : currentMid + rowStep * 0.5;
-    const effectiveBestBid = bestBid > 0 && Math.abs(bestBid - currentMid) / currentMid < 0.05
-      ? bestBid
-      : currentMid - rowStep * 0.5;
+    const lastSide = (orderBook as any).getLastTradedSide ? (orderBook as any).getLastTradedSide() : (lastHit?.side || null);
+    const isSellHit = lastSide === 'sell';
+
+    // Immediate dynamic boundary between Bids (Buy / Green) and Asks (Sell / Red):
+    // When selling pressure / sell trade hits, the traded price and above must immediately display Asks (Selling Orders, Red).
+    // When buying pressure / buy trade hits, the traded price and below display Bids (Buying Orders, Green).
+    const askCutoff = isSellHit 
+      ? (currentMid - rowStep * 0.499) 
+      : (lastSide === 'buy' ? (currentMid + rowStep * 0.499) : currentMid);
 
     for (let k = kMin; k <= kMax; k++) {
       const price = Math.round(k * rowStep * 100000) / 100000;
@@ -253,8 +259,7 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
       const directY = series.priceToCoordinate(price);
       const y = directY !== null && Number.isFinite(directY) ? directY : priceToY(price);
       if (y >= headerH - 10 && y <= height + 10) {
-        // Strict boundary: strictly above mid is ask (sell), strictly below mid is bid (buy)
-        const isAsk = price > currentMid || price >= effectiveBestAsk;
+        const isAsk = price >= askCutoff;
         rowMap.set(k, {
           price,
           y,
@@ -272,11 +277,7 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
       for (const a of bookRange.asks) {
         if (a.quantity <= 0) continue;
         const k = Math.round(a.price / rowStep);
-        let row = rowMap.get(k);
-        // Ensure authentic ask orders stay strictly on the ask side (above spread)
-        if (row && !row.isAsk) {
-          row = rowMap.get(k + 1);
-        }
+        const row = rowMap.get(k);
         if (row && row.isAsk) {
           row.levelQty += a.quantity;
         }
@@ -285,11 +286,7 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
       for (const b of bookRange.bids) {
         if (b.quantity <= 0) continue;
         const k = Math.round(b.price / rowStep);
-        let row = rowMap.get(k);
-        // Ensure authentic bid orders stay strictly on the bid side (below spread)
-        if (row && row.isAsk) {
-          row = rowMap.get(k - 1);
-        }
+        const row = rowMap.get(k);
         if (row && !row.isAsk) {
           row.levelQty += b.quantity;
         }
@@ -302,16 +299,9 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
       for (const lvl of resting) {
         if (lvl.price >= pMin && lvl.price <= pMax && lvl.qty > 0) {
           const k = Math.round(lvl.price / rowStep);
-          let row = rowMap.get(k);
-          if (row) {
-            if (lvl.isAsk && !row.isAsk) {
-              row = rowMap.get(k + 1);
-            } else if (!lvl.isAsk && row.isAsk) {
-              row = rowMap.get(k - 1);
-            }
-            if (row && row.isAsk === lvl.isAsk) {
-              row.levelQty = Math.max(row.levelQty, lvl.qty);
-            }
+          const row = rowMap.get(k);
+          if (row && row.isAsk === lvl.isAsk) {
+            row.levelQty = Math.max(row.levelQty, lvl.qty);
           }
         }
       }
@@ -404,7 +394,6 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
 
     // 7. Render Rows with Live Hit Flashes and Institutional Wall Highlighting
     const rowH = Math.max(12, Math.min(22, rowStep * pxPerDollar - 1));
-    const lastHit = orderBook.getLastTradeHit();
     const now = Date.now();
 
     for (const row of allRows) {
@@ -449,10 +438,13 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
         const levelBarW = Math.max(2, Math.min(maxLevelBarW, (row.levelQty / maxLevelQty) * maxLevelBarW));
         const barX = col1W - levelBarW - 2;
 
+        const askBarColor = settings.askColor || '#eb2d4b';
+        const bidBarColor = settings.bidColor || '#00d26a';
+
         ctx.save();
         ctx.fillStyle = row.isAsk
-          ? (isInstitutionalWall ? 'rgba(255, 45, 85, 0.95)' : 'rgba(235, 45, 75, 0.85)')   // Crimson Red for Asks
-          : (isInstitutionalWall ? 'rgba(0, 230, 118, 0.95)' : 'rgba(0, 210, 106, 0.85)'); // Vibrant Emerald Green for Bids
+          ? (isInstitutionalWall ? (settings.askColor || '#ff2d55') : askBarColor)
+          : (isInstitutionalWall ? (settings.bidColor || '#00e676') : bidBarColor);
         ctx.fillRect(barX, rowTop + 1, levelBarW, rowH - 2);
 
         // Level Bar Outline & Institutional Wall Marker
@@ -487,10 +479,11 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
         const cumBarW = Math.max(3, Math.min(maxCumBarW, (row.cumQty / maxCumQty) * maxCumBarW));
         const cumBarX = col1W + 1;
 
+        const askCumColor = settings.askColor || '#eb2d4b';
+        const bidCumColor = settings.bidColor || '#00d26a';
+
         ctx.save();
-        ctx.fillStyle = row.isAsk
-          ? 'rgba(235, 45, 75, 0.85)'   // Solid Red Fill for Cumulative Asks
-          : 'rgba(0, 210, 106, 0.85)'; // Solid Green Fill for Cumulative Bids
+        ctx.fillStyle = row.isAsk ? askCumColor : bidCumColor;
         ctx.fillRect(cumBarX, rowTop + 1, cumBarW, rowH - 2);
 
         // Cumulative Quantity Text (Right aligned in Column 2 - integer numbers / clean K/M)
@@ -549,8 +542,8 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
       const hasActiveHit = lastHit && (Date.now() - lastHit.timestamp < 700);
 
       if (isDirtyRef.current || hasActiveHit) {
-        // Cap rendering at 45ms (~22 FPS) to free up CPU budget for buttery-smooth 60-120 FPS chart drag/zoom
-        if (now - lastRenderTimeRef.current >= 45) {
+        // Render at ~40 FPS (24ms) for instant response to price changes with zero perceptible lag
+        if (now - lastRenderTimeRef.current >= 24) {
           lastRenderTimeRef.current = now;
           render();
           isDirtyRef.current = false;
@@ -568,13 +561,8 @@ const DepthProfileCanvasComponent: React.FC<DepthProfileCanvasProps> = ({
   }, [render, orderBook]);
 
   useEffect(() => {
-    let lastBookTime = 0;
     const unsub = orderBook.subscribe(() => {
-      const now = performance.now();
-      if (now - lastBookTime >= 80) {
-        lastBookTime = now;
-        isDirtyRef.current = true;
-      }
+      isDirtyRef.current = true;
     });
     return unsub;
   }, [orderBook]);

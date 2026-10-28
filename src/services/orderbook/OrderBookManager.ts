@@ -210,9 +210,30 @@ export class OrderBookManager {
   }
 
   private lastTradeHit: { price: number; quantity: number; side: 'buy' | 'sell'; timestamp: number } | null = null;
+  private lastTradedPrice: number = 0;
+  private lastTradedSide: 'buy' | 'sell' | null = null;
 
   getLastTradeHit(): { price: number; quantity: number; side: 'buy' | 'sell'; timestamp: number } | null {
     return this.lastTradeHit;
+  }
+
+  getLastTradedPrice(): number {
+    return this.lastTradedPrice || (this.lastTradeHit?.price || 0);
+  }
+
+  getLastTradedSide(): 'buy' | 'sell' | null {
+    return this.lastTradedSide || (this.lastTradeHit?.side || null);
+  }
+
+  setLastTradedPrice(price: number, side?: 'buy' | 'sell'): void {
+    if (price <= 0) return;
+    const resolvedSide = side || (this.lastTradedPrice > 0 && price !== this.lastTradedPrice
+      ? (price > this.lastTradedPrice ? 'buy' : 'sell')
+      : (this.lastTradedSide || null));
+    this.lastTradedPrice = price;
+    if (resolvedSide) this.lastTradedSide = resolvedSide;
+    this.statsDirty = true;
+    this.notifyListeners(true);
   }
 
   /**
@@ -297,38 +318,53 @@ export class OrderBookManager {
    */
   consumeLiquidity(price: number, quantity: number, side: 'buy' | 'sell' | 'unknown'): void {
     if (price <= 0 || quantity <= 0) return;
-    const tick = Math.round(price * this.precisionMultiplier);
-    const resolvedSide: 'buy' | 'sell' = side === 'unknown' 
-      ? (price >= (this.cachedBestAsk || price) ? 'buy' : 'sell') 
-      : side;
+    let resolvedSide: 'buy' | 'sell';
+    if (side === 'buy' || side === 'sell') {
+      resolvedSide = side;
+    } else if (this.lastTradedPrice > 0 && price !== this.lastTradedPrice) {
+      resolvedSide = price > this.lastTradedPrice ? 'buy' : 'sell';
+    } else if (this.cachedBestAsk > 0 && price >= this.cachedBestAsk) {
+      resolvedSide = 'buy';
+    } else if (this.cachedBestBid > 0 && price <= this.cachedBestBid) {
+      resolvedSide = 'sell';
+    } else {
+      resolvedSide = 'sell';
+    }
     this.lastTradeHit = { price, quantity, side: resolvedSide, timestamp: Date.now() };
+    this.lastTradedPrice = price;
+    this.lastTradedSide = resolvedSide;
+    const tick = Math.round(price * this.precisionMultiplier);
 
-    if (resolvedSide === 'buy') {
-      // Market buy hits resting limit asks
-      const cur = this.asks.get(tick);
-      if (cur !== undefined) {
-        const remaining = Math.max(0, cur - quantity);
-        if (remaining <= 0.001) {
-          this.asks.delete(tick);
-        } else {
-          this.asks.set(tick, remaining);
+    if (resolvedSide === 'sell') {
+      // Market sell: aggressive seller executes at `price`.
+      // Immediately clear all resting bids strictly at or above `price` so stale buy orders never linger above market!
+      for (const bTick of Array.from(this.bids.keys())) {
+        if (bTick >= tick) {
+          this.bids.delete(bTick);
         }
       }
+      // Guarantee the traded level and above are asks (selling orders)
+      const askTick = tick;
+      if (!this.asks.has(askTick)) {
+        this.asks.set(askTick, quantity || 1.0);
+      }
     } else {
-      // Market sell hits resting limit bids
-      const cur = this.bids.get(tick);
-      if (cur !== undefined) {
-        const remaining = Math.max(0, cur - quantity);
-        if (remaining <= 0.001) {
-          this.bids.delete(tick);
-        } else {
-          this.bids.set(tick, remaining);
+      // Market buy: aggressive buyer executes at `price`.
+      // Immediately clear all resting asks strictly at or below `price` so stale sell orders never linger below market!
+      for (const aTick of Array.from(this.asks.keys())) {
+        if (aTick <= tick) {
+          this.asks.delete(aTick);
         }
+      }
+      // Guarantee the traded level and below are bids (buying orders)
+      const bidTick = tick;
+      if (!this.bids.has(bidTick)) {
+        this.bids.set(bidTick, quantity || 1.0);
       }
     }
 
     this.updateBestBidAsk();
-    this.notifyListeners();
+    this.notifyListeners(true);
   }
 
   private applyUpdateDirect(update: DepthDeltaUpdate): void {
