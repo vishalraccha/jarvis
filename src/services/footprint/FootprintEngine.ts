@@ -33,6 +33,7 @@ export function getSymbolDefaultFootprintTick(symbol: string): number {
   if (sym.startsWith('SOL')) return 0.5;  // $0.5 tick bucket for SOL
   if (sym.startsWith('BNB')) return 1.0;  // $1 tick bucket for BNB
   if (sym.startsWith('XAU') || sym.startsWith('GOLD')) return 1.0; // $1 tick bucket for Gold
+  if (sym.startsWith('NAS') || sym === 'NDX' || sym === 'US100') return 2.0; // $2 tick bucket for Nasdaq 100
   return 1.0;
 }
 

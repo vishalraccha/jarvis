@@ -298,6 +298,7 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
     if (symbol === 'XAUUSD') return 'XAU/USD Spot Gold';
     if (symbol === 'XAUUSD_VANTAGE') return 'XAU/USD Vantage MT5';
     if (symbol === 'GC') return 'GC Gold';
+    if (symbol === 'NAS100' || symbol === 'NASDAQ' || symbol === 'NDX') return 'NAS100 Nasdaq';
     return symbol.replace('USDT', '/USDT');
   };
 
@@ -314,6 +315,9 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
       ex = 'mt5';
     } else if (selected === 'XAUUSD') {
       sym = 'XAUUSD';
+      ex = 'binance';
+    } else if (selected === 'NAS100' || selected === 'NASDAQ') {
+      sym = 'NAS100';
       ex = 'binance';
     }
 
@@ -496,6 +500,28 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
                   </div>
                 );
               })}
+
+              <div className="terminal-menu-divider" />
+              <div className="terminal-menu-header">📈 Equity Indices</div>
+
+              <div
+                className="terminal-menu-item"
+                style={{
+                  background: preferences.symbol === 'NAS100' ? 'rgba(56, 189, 248, 0.12)' : 'transparent',
+                  color: preferences.symbol === 'NAS100' ? '#38bdf8' : '#cbd5e1',
+                  padding: '6px 12px',
+                }}
+                onClick={() => handleSelectSymbol('NAS100', 'binance')}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ fontWeight: 700 }}>NAS100 • Nasdaq 100</span>
+                    <span style={{ fontSize: 9, padding: '0 4px', borderRadius: 3, background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8' }}>TV & MT5 Parity</span>
+                  </div>
+                  <span style={{ fontSize: 9.5, color: '#94a3b8' }}>Nasdaq 100 Index CFD • Real-Time TradingView Benchmark</span>
+                </div>
+                {preferences.symbol === 'NAS100' && <Check size={13} style={{ color: '#38bdf8' }} />}
+              </div>
             </div>
           )}
         </div>

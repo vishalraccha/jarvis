@@ -20,7 +20,8 @@
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
     "sql.js": "^1.15.1",
-    "tsx": "^4.23.15"
+    "tsx": "^4.23.15",
+    "ws": "^8.22.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
@@ -30,6 +31,7 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.7",
     "@types/sql.js": "^1.4.11",
+    "@types/ws": "^8.18.2",
     "@vitejs/plugin-react": "^6.1.1",
     "oxlint": "^1.81.0",
     "typescript": "~6.0.2",

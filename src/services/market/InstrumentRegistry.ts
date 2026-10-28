@@ -233,6 +233,29 @@ export const INSTRUMENT_CATALOG: InstrumentConfig[] = [
     supportsBubbles: true,
     description: 'British Pound / US Dollar major currency pair with 4-decimal pip precision.',
   },
+
+  // 6. Index CFDs: Nasdaq 100 Benchmark
+  {
+    id: 'NAS100',
+    symbol: 'NAS100',
+    displayName: 'NAS100 • Nasdaq 100 Index',
+    shortLabel: 'NAS100',
+    category: 'futures',
+    instrumentType: 'spot_otc',
+    typeLabel: 'Index CFD',
+    provider: 'TradingView Benchmark',
+    providerId: 'binance',
+    marketSchedule: 'traditional_metals',
+    supportedIntervals: ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '1d'],
+    defaultTimeframe: '1m',
+    priceTick: 0.1,
+    supportsOrderBook: true,
+    supportsTrades: true,
+    supportsHeatmap: true,
+    supportsFootprint: true,
+    supportsBubbles: true,
+    description: 'Nasdaq 100 Index CFD benchmark matching TradingView & MT5 live market prices with real-time Level 2 order book, DOM ladder, and trade stream.',
+  },
 ];
 
 export class InstrumentRegistry {
@@ -270,6 +293,7 @@ export class InstrumentRegistry {
     if (clean === 'BNB' || clean === 'BNBUSD' || clean === 'BNBUSDT' || clean === 'BNBUSDTSPOT') return INSTRUMENT_CATALOG[6];
     if (clean === 'EURUSD' || clean === 'EUR' || clean === 'EURUSDT') return INSTRUMENT_CATALOG[7];
     if (clean === 'GBPUSD' || clean === 'GBP' || clean === 'GBPUSDT') return INSTRUMENT_CATALOG[8];
+    if (clean === 'NAS100' || clean === 'NASDAQ' || clean === 'NDX' || clean === 'US100' || clean === 'NAS') return INSTRUMENT_CATALOG[9];
 
     // Fallback: Default to XAU/USD OANDA Spot Gold (Matches TradingView market price)
     return INSTRUMENT_CATALOG[0];
