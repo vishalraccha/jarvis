@@ -25,6 +25,7 @@ import {
   Check,
   GitCommit,
   Zap,
+  Target,
 } from 'lucide-react';
 import { CandleTimeframe, ConnectionState, ExchangeId, LatencyMetrics } from '../../types/market';
 import { TerminalPreferences } from '../../types/settings';
@@ -50,6 +51,7 @@ interface TopToolbarProps {
   onOpenVwapSettings?: () => void;
   onOpenDepthProfileSettings?: () => void;
   onOpenFootprintSettings?: () => void;
+  onOpenAbsorptionSettings?: () => void;
   onOpenDiagnostics: () => void;
   onOpenCacheModal: () => void;
   onLockTerminal?: () => void;
@@ -184,6 +186,7 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
   onOpenVwapSettings,
   onOpenDepthProfileSettings,
   onOpenFootprintSettings,
+  onOpenAbsorptionSettings,
   onOpenDiagnostics,
   onOpenCacheModal,
   onLockTerminal,
@@ -339,6 +342,7 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
     preferences.showFootprint,
     preferences.showBubbles,
     preferences.showVwap,
+    preferences.showAbsorption,
     preferences.showBestBidAskLines,
     preferences.showLiquidityShifts,
   ].filter(Boolean).length;
@@ -771,6 +775,30 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
                   const next = typeof targetVal === 'boolean' ? targetVal : !preferences.showCandles;
                   onUpdatePreferences({ showCandles: next });
                 }}
+              />
+
+              {/* 7. Order-Flow Absorption */}
+              <ToolItem
+                icon={<Target size={14} style={{ color: '#facc15' }} />}
+                title="Absorption (A / A+)"
+                subtitle={`Grade: ${preferences.absorption?.gradeFilter === 'a_plus_only' ? 'A+ Only' : 'A & A+'} • Zone Defense`}
+                active={preferences.showAbsorption}
+                onToggle={(targetVal) => {
+                  const next = typeof targetVal === 'boolean' ? targetVal : !preferences.showAbsorption;
+                  onUpdatePreferences({
+                    showAbsorption: next,
+                    absorption: { ...preferences.absorption, enabled: next },
+                  });
+                }}
+                onOpenSettings={
+                  onOpenAbsorptionSettings
+                    ? () => {
+                        setOpenMenu(null);
+                        onOpenAbsorptionSettings();
+                      }
+                    : undefined
+                }
+                settingsTitle="Absorption Settings (A & A+, Zone Defense, Multipliers)"
               />
 
               <div className="terminal-menu-divider" />

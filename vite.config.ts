@@ -371,7 +371,6 @@ class TradingViewBridge {
 }
 
 const tvBridge = new TradingViewBridge();
-tvBridge.init();
 
 /**
  * High-performance In-Memory Redis-Style Candle Cache Plugin for Vite
@@ -966,34 +965,37 @@ function redisFastCandleCachePlugin(): Plugin {
 
   const ALL_CANONICAL_SYMBOLS = ['BTC', 'ETH', 'SOL', 'BNB', 'XAUUSD', 'GC', 'EURUSD', 'GBPUSD', 'NAS100'];
 
-  // Gentle pre-warm on server start (both tickers & candles for instant 0.1ms load)
-  setTimeout(() => {
-    refreshGoldBasis().catch(() => {});
-    for (const s of ALL_CANONICAL_SYMBOLS) {
-      fetchAndCacheTicker(s).catch(() => {});
-      fetchAndCache(s, '1m', false).catch(() => {});
-      fetchAndCache(s, '5m', false).catch(() => {});
-    }
-  }, 100)?.unref();
-
-  // Background ticker & basis refresh every 8 seconds (eliminates rate limiting)
-  setInterval(() => {
-    refreshGoldBasis().catch(() => {});
-    for (const s of ALL_CANONICAL_SYMBOLS) {
-      fetchAndCacheTicker(s).catch(() => {});
-    }
-  }, 8000)?.unref();
-
-  // Background candle refresh every 10 seconds for real-time gold & crypto synchronization
-  setInterval(() => {
-    for (const s of ALL_CANONICAL_SYMBOLS) {
-      fetchAndCache(s, '1m', false).catch(() => {});
-    }
-  }, 10000)?.unref();
-
   return {
     name: 'redis-fast-candle-cache',
     configureServer(server) {
+      // Connect live TradingView bridge for dev proxying
+      tvBridge.init();
+
+      // Gentle pre-warm on dev server start
+      setTimeout(() => {
+        refreshGoldBasis().catch(() => {});
+        for (const s of ALL_CANONICAL_SYMBOLS) {
+          fetchAndCacheTicker(s).catch(() => {});
+          fetchAndCache(s, '1m', false).catch(() => {});
+          fetchAndCache(s, '5m', false).catch(() => {});
+        }
+      }, 100)?.unref();
+
+      // Background ticker & basis refresh every 8 seconds
+      setInterval(() => {
+        refreshGoldBasis().catch(() => {});
+        for (const s of ALL_CANONICAL_SYMBOLS) {
+          fetchAndCacheTicker(s).catch(() => {});
+        }
+      }, 8000)?.unref();
+
+      // Background candle refresh every 10 seconds
+      setInterval(() => {
+        for (const s of ALL_CANONICAL_SYMBOLS) {
+          fetchAndCache(s, '1m', false).catch(() => {});
+        }
+      }, 10000)?.unref();
+
       server.middlewares.use(async (req, res, next) => {
         if (req.url?.startsWith('/api/health')) {
           res.setHeader('Content-Type', 'application/json');
@@ -1252,8 +1254,8 @@ function redisFastCandleCachePlugin(): Plugin {
 }
 
 // https://vite.dev/config/
-export default defineConfig({
-  plugins: [react(), redisFastCandleCachePlugin()],
+export default defineConfig(({ command }) => ({
+  plugins: [react(), ...(command === 'serve' ? [redisFastCandleCachePlugin()] : [])],
   server: {
     proxy: {
       '/api/yahoo': {
@@ -1298,4 +1300,4 @@ export default defineConfig({
       },
     },
   },
-})
+}))

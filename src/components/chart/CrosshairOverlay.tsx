@@ -6,12 +6,15 @@
 import React from 'react';
 import { LiquidityZone, TradeBubble } from '../../types/heatmap';
 import { FootprintDebugInfo } from '../../types/footprint';
+import { AbsorptionEvent } from '../../types/absorption';
+import { AbsorptionTooltip } from './AbsorptionTooltip';
 import { formatNotional, formatPrice, formatQuantity, formatTimePrecise } from '../../utils/formatters';
 
 interface CrosshairOverlayProps {
   hoveredBubble: TradeBubble | null;
   hoveredZone?: LiquidityZone | null;
   hoveredFootprintDebug?: FootprintDebugInfo | null;
+  hoveredAbsorption?: AbsorptionEvent | null;
   cursorX: number;
   cursorY: number;
   symbol?: string;
@@ -21,10 +24,21 @@ export const CrosshairOverlay: React.FC<CrosshairOverlayProps> = ({
   hoveredBubble,
   hoveredZone,
   hoveredFootprintDebug,
+  hoveredAbsorption,
   cursorX,
   cursorY,
   symbol = 'XAUUSD',
 }) => {
+  if (hoveredAbsorption) {
+    return (
+      <AbsorptionTooltip
+        event={hoveredAbsorption}
+        cursorX={cursorX}
+        cursorY={cursorY}
+      />
+    );
+  }
+
   if (!hoveredBubble && !hoveredZone && !hoveredFootprintDebug) return null;
 
   const symUpper = symbol.toUpperCase();

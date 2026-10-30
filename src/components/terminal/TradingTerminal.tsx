@@ -11,8 +11,11 @@ import { BubbleSettingsModal } from '../settings/BubbleSettingsModal';
 import { DepthProfileSettingsModal } from '../settings/DepthProfileSettingsModal';
 import { FootprintSettingsModal } from '../settings/FootprintSettingsModal';
 import { VwapSettingsModal } from '../settings/VwapSettingsModal';
+import { AbsorptionSettingsModal } from '../settings/AbsorptionSettingsModal';
 import { OrderBookDiagnosticsModal } from '../diagnostics/OrderBookDiagnosticsModal';
 import { CacheSettingsModal } from '../settings/CacheSettingsModal';
+import { AbsorptionEngine } from '../../services/absorption/AbsorptionEngine';
+import { DEFAULT_ABSORPTION_SETTINGS } from '../../types/absorption';
 
 import { BinanceAdapter } from '../../services/exchange/BinanceAdapter';
 import { ComexAdapter } from '../../services/exchange/ComexAdapter';
@@ -75,6 +78,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
   const [isDepthProfileSettingsOpen, setIsDepthProfileSettingsOpen] = useState(false);
   const [isFootprintSettingsOpen, setIsFootprintSettingsOpen] = useState(false);
   const [isVwapSettingsOpen, setIsVwapSettingsOpen] = useState(false);
+  const [isAbsorptionSettingsOpen, setIsAbsorptionSettingsOpen] = useState(false);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
   const [isCacheModalOpen, setIsCacheModalOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -105,6 +109,9 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
       getSymbolDefaultFootprintTick(DEFAULT_TERMINAL_PREFERENCES.symbol)
     )
   );
+  const absorptionEngineRef = useRef<AbsorptionEngine>(
+    new AbsorptionEngine(DEFAULT_ABSORPTION_SETTINGS)
+  );
   const chartRef = useRef<JarvisChartHandles | null>(null);
 
   const prevSliceRef = useRef<HeatmapTimeSlice | null>(null);
@@ -120,12 +127,19 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
   // 1. Load preferences from IndexedDB on startup
   useEffect(() => {
     footprintEngineRef.current.setOrderBook(orderBookRef.current);
+    absorptionEngineRef.current.setOrderBook(orderBookRef.current);
+    absorptionEngineRef.current.setHeatmapEngine(heatmapEngineRef.current);
+    absorptionEngineRef.current.setContext(preferences.symbol);
+
     indexedDBCache.loadPreferences().then((stored) => {
       if (stored) {
         const isFpMode = stored.chartMode === 'footprint' || (stored.showFootprint && !stored.showHeatmap);
         const bubblesActive = stored.showBubbles !== undefined
           ? stored.showBubbles
           : (stored.bubbles?.enabled ?? true);
+        const absorptionActive = stored.showAbsorption !== undefined
+          ? stored.showAbsorption
+          : (stored.absorption?.enabled ?? true);
         const inst = stored.symbol ? InstrumentRegistry.getInstrument(stored.symbol, stored.exchange) : null;
         const safeSymbol = inst ? inst.symbol : DEFAULT_TERMINAL_PREFERENCES.symbol;
         const safeExchange = inst ? inst.providerId : DEFAULT_TERMINAL_PREFERENCES.exchange;
@@ -136,6 +150,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
           symbol: safeSymbol,
           exchange: safeExchange,
           showBubbles: bubblesActive,
+          showAbsorption: absorptionActive,
           showHeatmap: isFpMode ? false : (stored.showHeatmap ?? true),
           showDepthProfile: isFpMode ? false : (stored.showDepthProfile ?? true),
           showFootprint: isFpMode ? true : (stored.showFootprint ?? false),
@@ -162,6 +177,11 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
             ...stored.bubbles,
             enabled: bubblesActive,
           },
+          absorption: {
+            ...DEFAULT_ABSORPTION_SETTINGS,
+            ...stored.absorption,
+            enabled: absorptionActive,
+          },
           footprint: {
             ...DEFAULT_FOOTPRINT_SETTINGS,
             ...stored.footprint,
@@ -171,6 +191,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         };
         setPreferences(activeDefaults);
         bubbleManagerRef.current.updateSettings(activeDefaults.bubbles);
+        absorptionEngineRef.current.updateSettings(activeDefaults.absorption);
         footprintEngineRef.current.updateSettings(activeDefaults.footprint);
         colorMapEngine.rebuildLut(
           activeDefaults.heatmap.colorScale,
@@ -218,6 +239,14 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         next.showVwap = patch.vwap.enabled;
       }
 
+      // Keep showAbsorption and absorption.enabled in sync
+      if (patch.showAbsorption !== undefined) {
+        next.absorption = { ...next.absorption, enabled: patch.showAbsorption };
+      }
+      if (patch.absorption?.enabled !== undefined) {
+        next.showAbsorption = patch.absorption.enabled;
+      }
+
       indexedDBCache.savePreferences(next);
       if (patch.symbol) {
         try {
@@ -232,6 +261,9 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
       }
       if (patch.footprint || patch.showFootprint !== undefined) {
         footprintEngineRef.current.updateSettings(next.footprint);
+      }
+      if (patch.absorption || patch.showAbsorption !== undefined) {
+        absorptionEngineRef.current.updateSettings(next.absorption);
       }
       return next;
     });
@@ -267,6 +299,14 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
       heatmapEngineRef.current.seedHistoricalCandlesLiquidity(candles, symbol, exchange);
     } else {
       heatmapEngineRef.current.clear();
+    }
+
+    absorptionEngineRef.current.setContext(symbol, instrument.priceTick);
+    if (typeof absorptionEngineRef.current.setTimeframe === 'function') {
+      absorptionEngineRef.current.setTimeframe(timeframe);
+    }
+    if (typeof absorptionEngineRef.current.seedFromCandles === 'function') {
+      absorptionEngineRef.current.seedFromCandles(candles);
     }
   }, []);
 
@@ -565,12 +605,16 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
       footprintEngineRef.current.clear();
       footprintEngineRef.current.setSymbol(symbol, exchange, defaultTick);
       footprintEngineRef.current.setOrderBook(orderBookRef.current);
+      absorptionEngineRef.current.clear();
+      absorptionEngineRef.current.setContext(symbol);
       prevSliceRef.current = null;
     }
 
     bubbles.setTimeframe(preferences.timeframe);
     footprintEngineRef.current.setTimeframe(preferences.timeframe);
-    footprintEngineRef.current.updateSettings(preferences.footprint);
+    if (typeof absorptionEngineRef.current.setTimeframe === 'function') {
+      absorptionEngineRef.current.setTimeframe(preferences.timeframe);
+    }
 
     const instrument = InstrumentRegistry.getInstrument(symbol, exchange);
 
@@ -637,6 +681,9 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         if (prefs.showHeatmap) heatmap.recordTrade(trade);
         if (prefs.showFootprint || prefs.chartMode === 'footprint') {
           footprintEngineRef.current.addTrade(trade);
+        }
+        if (prefs.showAbsorption) {
+          absorptionEngineRef.current.recordTrade(trade);
         }
 
         // Keep latestCandlesRef synchronized on every tick
@@ -892,6 +939,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
   const handleOpenVwapSettings = useCallback(() => setIsVwapSettingsOpen(true), []);
   const handleOpenDepthProfileSettings = useCallback(() => setIsDepthProfileSettingsOpen(true), []);
   const handleOpenFootprintSettings = useCallback(() => setIsFootprintSettingsOpen(true), []);
+  const handleOpenAbsorptionSettings = useCallback(() => setIsAbsorptionSettingsOpen(true), []);
   const handleOpenDiagnostics = useCallback(() => setIsDiagnosticsOpen(true), []);
   const handleOpenCacheModal = useCallback(() => setIsCacheModalOpen(true), []);
 
@@ -927,6 +975,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         onOpenVwapSettings={handleOpenVwapSettings}
         onOpenDepthProfileSettings={handleOpenDepthProfileSettings}
         onOpenFootprintSettings={handleOpenFootprintSettings}
+        onOpenAbsorptionSettings={handleOpenAbsorptionSettings}
         onOpenDiagnostics={handleOpenDiagnostics}
         onOpenCacheModal={handleOpenCacheModal}
         onLockTerminal={onLockTerminal}
@@ -944,6 +993,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
           shiftDetector={shiftDetectorRef.current}
           colorMapEngine={colorMapEngine}
           footprintEngine={footprintEngineRef.current}
+          absorptionEngine={absorptionEngineRef.current}
           onUpdatePreferences={handleUpdatePreferences}
           connectionState={connectionState}
           onLoadMoreHistory={handleLoadMoreHistory}
@@ -964,6 +1014,15 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         onClose={() => setIsBubbleSettingsOpen(false)}
         settings={preferences.bubbles}
         onChange={(updated) => handleUpdatePreferences({ bubbles: updated })}
+      />
+
+      <AbsorptionSettingsModal
+        isOpen={isAbsorptionSettingsOpen}
+        onClose={() => setIsAbsorptionSettingsOpen(false)}
+        settings={preferences.absorption}
+        onChange={(updated) => handleUpdatePreferences({ absorption: updated })}
+        onReset={() => handleUpdatePreferences({ absorption: DEFAULT_ABSORPTION_SETTINGS })}
+        absorptionEngine={absorptionEngineRef.current}
       />
 
       <VwapSettingsModal

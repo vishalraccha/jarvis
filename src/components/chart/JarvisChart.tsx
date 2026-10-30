@@ -33,6 +33,9 @@ import { TradeBubbleManager } from '../../services/bubbles/TradeBubbleManager';
 import { LiquidityShiftDetector } from '../../services/heatmap/LiquidityShiftDetector';
 import { ColorMapEngine } from '../../services/heatmap/ColorMap';
 import { FootprintEngine } from '../../services/footprint/FootprintEngine';
+import { AbsorptionEngine } from '../../services/absorption/AbsorptionEngine';
+import { AbsorptionOverlay } from './AbsorptionOverlay';
+import { AbsorptionEvent } from '../../types/absorption';
 import { Candle } from '../../types/market';
 import { TerminalPreferences } from '../../types/settings';
 import { LiquidityZone, TradeBubble } from '../../types/heatmap';
@@ -72,6 +75,7 @@ interface JarvisChartProps {
   shiftDetector: LiquidityShiftDetector;
   colorMapEngine: ColorMapEngine;
   footprintEngine: FootprintEngine;
+  absorptionEngine?: AbsorptionEngine;
   onUpdatePreferences?: (patch: Partial<TerminalPreferences>) => void;
   connectionState?: string;
   lastQuoteTime?: number;
@@ -89,6 +93,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
       shiftDetector,
       colorMapEngine,
       footprintEngine,
+      absorptionEngine,
       onUpdatePreferences,
       connectionState,
       lastQuoteTime,
@@ -128,6 +133,18 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
       x: 0,
       y: 0,
     });
+    const [hoveredAbsorption, setHoveredAbsorption] = useState<{
+      event: AbsorptionEvent | null;
+      x: number;
+      y: number;
+    }>({
+      event: null,
+      x: 0,
+      y: 0,
+    });
+    const visibleAbsorptionCoordsRef = useRef<
+      Array<{ event: AbsorptionEvent; cx: number; cy: number; radius: number }>
+    >([]);
 
     const currentCandleRef = useRef<CandlestickData | null>(null);
     const prevSymbolRef = useRef<string>(preferences.symbol);
@@ -1291,6 +1308,10 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
       visibleBubblesCoordsRef.current = coords;
     }, []);
 
+    const handleUpdateAbsorptionCoords = useCallback((coords: Array<{ event: AbsorptionEvent; cx: number; cy: number; radius: number }>) => {
+      visibleAbsorptionCoordsRef.current = coords;
+    }, []);
+
     const handleUpdateFootprintSettings = useCallback((updated: Partial<import('../../types/footprint').FootprintSettings>) => {
       if (onUpdatePreferences) {
         onUpdatePreferences({
@@ -1307,6 +1328,19 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
       const rect = containerRef.current.getBoundingClientRect();
       const mouseX = coords.clientX - rect.left;
       const mouseY = coords.clientY - rect.top;
+
+      // Absorption bubble hit-test
+      if (absorptionEngine && preferences.showAbsorption) {
+        const absHit = absorptionEngine.hitTest(mouseX, mouseY, visibleAbsorptionCoordsRef.current);
+        if (absHit) {
+          setHoveredAbsorption({ event: absHit, x: coords.clientX, y: coords.clientY });
+          handleHoverBubble(null, 0, 0);
+          handleHoverZone(null, 0, 0);
+          handleHoverFootprintDebug(null, 0, 0);
+          return;
+        }
+      }
+      setHoveredAbsorption((prev) => (prev.event ? { event: null, x: 0, y: 0 } : prev));
 
       const hit = bubbleManager.hitTest(mouseX, mouseY, visibleBubblesCoordsRef.current);
       if (hit) {
@@ -1510,6 +1544,19 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
           />
         )}
 
+        {/* Layer 3.5: Order-Flow Absorption Bubbles (Yellow A & A+, zIndex: 7) */}
+        {chart && series && dimensions.width > 0 && preferences.showAbsorption && absorptionEngine && (
+          <AbsorptionOverlay
+            chart={chart}
+            series={series}
+            absorptionEngine={absorptionEngine}
+            settings={preferences.absorption}
+            width={dimensions.width}
+            height={dimensions.height}
+            onUpdateCoords={handleUpdateAbsorptionCoords}
+          />
+        )}
+
         {/* Layer 3: Solid Blue Side Volume Profile at Price on LEFT (zIndex: 8, Image 2) */}
         {chart && series && dimensions.width > 0 && isFootprintActive && preferences.footprint.showSideProfile && (
           <SideVolumeProfileCanvas
@@ -1560,20 +1607,25 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
           hoveredCandle={hoveredCandle}
         />
 
-        {/* Trade Bubble, Liquidity Zone & Footprint Debug Precision Tooltip */}
+        {/* Trade Bubble, Liquidity Zone, Footprint Debug & Absorption Precision Tooltip */}
         <CrosshairOverlay
           hoveredBubble={hoveredBubble.bubble}
           hoveredZone={hoveredZone.zone}
           hoveredFootprintDebug={hoveredFootprintDebug.debug}
+          hoveredAbsorption={hoveredAbsorption.event}
           cursorX={
-            hoveredBubble.bubble
+            hoveredAbsorption.event
+              ? hoveredAbsorption.x
+              : hoveredBubble.bubble
               ? hoveredBubble.x
               : hoveredZone.zone
               ? hoveredZone.x
               : hoveredFootprintDebug.x
           }
           cursorY={
-            hoveredBubble.bubble
+            hoveredAbsorption.event
+              ? hoveredAbsorption.y
+              : hoveredBubble.bubble
               ? hoveredBubble.y
               : hoveredZone.zone
               ? hoveredZone.y

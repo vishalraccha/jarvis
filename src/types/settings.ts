@@ -6,6 +6,9 @@
 import { CandleTimeframe, ExchangeId } from './market';
 import { BubbleSettings, DepthProfileSettings, HeatmapSettings } from './heatmap';
 import { ChartMode, FootprintSettings } from './footprint';
+import { AbsorptionSettings, DEFAULT_ABSORPTION_SETTINGS } from './absorption';
+export { DEFAULT_ABSORPTION_SETTINGS };
+export type { AbsorptionSettings };
 
 export interface VwapSettings {
   enabled: boolean;
@@ -51,12 +54,14 @@ export interface TerminalPreferences {
   showCurrentPriceLine: boolean;
   showLiquidityShifts: boolean;
   showVwap: boolean;
+  showAbsorption: boolean;
   autoScrollToLatest: boolean;
   heatmap: HeatmapSettings;
   bubbles: BubbleSettings;
   depthProfile: DepthProfileSettings;
   footprint: FootprintSettings;
   vwap: VwapSettings;
+  absorption: AbsorptionSettings;
 }
 
 export const DEFAULT_HEATMAP_SETTINGS: HeatmapSettings = {
@@ -169,10 +174,12 @@ export const DEFAULT_TERMINAL_PREFERENCES: TerminalPreferences = {
   showCurrentPriceLine: true,
   showLiquidityShifts: false,
   showVwap: true, // VWAP active by default
+  showAbsorption: true, // Absorption order-flow tool active by default
   autoScrollToLatest: true,
   heatmap: DEFAULT_HEATMAP_SETTINGS,
   bubbles: DEFAULT_BUBBLE_SETTINGS,
   depthProfile: DEFAULT_DEPTH_PROFILE_SETTINGS,
   footprint: DEFAULT_FOOTPRINT_SETTINGS,
   vwap: DEFAULT_VWAP_SETTINGS,
+  absorption: DEFAULT_ABSORPTION_SETTINGS,
 };
