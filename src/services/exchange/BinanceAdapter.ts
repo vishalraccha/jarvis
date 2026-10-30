@@ -1359,27 +1359,25 @@ export class BinanceAdapter implements IExchangeAdapter {
     const isFut = this.isFutures(sym);
 
     // 1. Authoritative fast path: /api/candles endpoint (pre-aligned to MT5 & TradingView)
-    if (!startTime && !endTime) {
-      try {
-        const cacheRes = await fetch(
-          `/api/candles?symbol=${encodeURIComponent(this.requestedSymbol || sym)}&timeframe=${encodeURIComponent(interval)}&limit=${Math.min(limit, 1000)}`,
-          { signal: AbortSignal.timeout(3500) }
-        );
-        if (cacheRes.ok) {
-          const list: any[] = await cacheRes.json();
-          if (Array.isArray(list) && list.length > 0) {
-            return list.map((item) => ({
-              time: Number(item.time || Math.floor(Number(item[0]) / 1000)),
-              open: parseFloat(item.open ?? item[1]),
-              high: parseFloat(item.high ?? item[2]),
-              low: parseFloat(item.low ?? item[3]),
-              close: parseFloat(item.close ?? item[4]),
-              volume: parseFloat(item.volume ?? item[5] ?? 0),
-            }));
-          }
+    try {
+      let candleUrl = `/api/candles?symbol=${encodeURIComponent(this.requestedSymbol || sym)}&timeframe=${encodeURIComponent(interval)}&limit=${Math.min(limit, 1000)}`;
+      if (startTime && Number.isFinite(startTime) && startTime > 0) candleUrl += `&startTime=${startTime}`;
+      if (endTime && Number.isFinite(endTime) && endTime > 0) candleUrl += `&endTime=${endTime}`;
+      const cacheRes = await fetch(candleUrl, { signal: AbortSignal.timeout(3500) });
+      if (cacheRes.ok) {
+        const list: any[] = await cacheRes.json();
+        if (Array.isArray(list) && list.length > 0) {
+          return list.map((item) => ({
+            time: Number(item.time || Math.floor(Number(item[0]) / 1000)),
+            open: parseFloat(item.open ?? item[1]),
+            high: parseFloat(item.high ?? item[2]),
+            low: parseFloat(item.low ?? item[3]),
+            close: parseFloat(item.close ?? item[4]),
+            volume: parseFloat(item.volume ?? item[5] ?? 0),
+          }));
         }
-      } catch {}
-    }
+      }
+    } catch {}
 
     // 2. Direct browser fallback: Coinbase USD Spot (CORS enabled for all origins, authentic MT5 USD spot)
     const baseCrypto = (this.requestedSymbol || sym).toUpperCase().replace(/[-_/]/g, '').replace(/USDT$/, '').replace(/USD$/, '');
@@ -1471,6 +1469,55 @@ export class BinanceAdapter implements IExchangeAdapter {
           }
         }
       } catch {}
+    }
+
+    // 5. Direct browser fallback: Nasdaq 100 Index CFD (Yahoo ^NDX / NQ=F)
+    if (this.isNasdaq(this.requestedSymbol || sym)) {
+      try {
+        const yInterval = interval === '1d' ? '1d' : interval === '1h' ? '60m' : interval === '15m' ? '15m' : interval === '5m' ? '5m' : '1m';
+        const yRange = interval === '1d' ? '1y' : (interval === '1h' || interval === '2h' || interval === '4h') ? '3mo' : (interval === '15m' || interval === '30m' || interval === '5m') ? '1mo' : '7d';
+        let yUrl = `https://query1.finance.yahoo.com/v8/finance/chart/%5ENDX?interval=${yInterval}`;
+        if (endTime && Number.isFinite(endTime) && endTime > 0) {
+          const p2 = Math.floor(endTime);
+          const tfSec = interval === '1d' ? 86400 : interval === '1h' ? 3600 : interval === '15m' ? 900 : interval === '5m' ? 300 : 60;
+          const p1 = Math.max(0, p2 - tfSec * Math.min(limit * 2, 2000));
+          yUrl += `&period1=${p1}&period2=${p2}`;
+        } else {
+          yUrl += `&range=${yRange}`;
+        }
+        const yRes = await fetch(yUrl, {
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+          signal: AbortSignal.timeout(4500),
+        });
+        if (yRes.ok) {
+          const json: any = await yRes.json();
+          const result = json?.chart?.result?.[0];
+          const timestamps = result?.timestamp || [];
+          const quotes = result?.indicators?.quote?.[0];
+          if (quotes && timestamps.length > 0) {
+            const candles: Candle[] = [];
+            for (let i = 0; i < timestamps.length; i++) {
+              const t = timestamps[i];
+              const o = quotes.open[i];
+              const h = quotes.high[i];
+              const l = quotes.low[i];
+              const c = quotes.close[i];
+              const v = quotes.volume?.[i] || 250;
+              if (o === null || h === null || l === null || c === null || !Number.isFinite(c) || c <= 0) continue;
+              candles.push({
+                time: t,
+                open: Math.round(o * 10) / 10,
+                high: Math.round(h * 10) / 10,
+                low: Math.round(l * 10) / 10,
+                close: Math.round(c * 10) / 10,
+                volume: v,
+              });
+            }
+            if (candles.length > 0) return candles.slice(-limit);
+          }
+        }
+      } catch {}
+      return [];
     }
 
     try {

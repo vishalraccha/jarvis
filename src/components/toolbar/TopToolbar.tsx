@@ -26,10 +26,13 @@ import {
   GitCommit,
   Zap,
   Target,
+  TrendingUp,
+  TrendingDown,
 } from 'lucide-react';
 import { CandleTimeframe, ConnectionState, ExchangeId, LatencyMetrics } from '../../types/market';
 import { TerminalPreferences } from '../../types/settings';
 import { ChartMode } from '../../types/footprint';
+import { PositionType } from '../../types/position';
 import { ColorMapEngine } from '../../services/heatmap/ColorMap';
 import { InstrumentRegistry } from '../../services/market/InstrumentRegistry';
 import { MarketSessionService } from '../../services/market/MarketSessionService';
@@ -55,6 +58,11 @@ interface TopToolbarProps {
   onOpenDiagnostics: () => void;
   onOpenCacheModal: () => void;
   onLockTerminal?: () => void;
+  onOpenAIConfig?: () => void;
+  onToggleAITerminal?: () => void;
+  isAITerminalOpen?: boolean;
+  activeDrawingTool?: PositionType | null;
+  onSelectDrawingTool?: (tool: PositionType | null) => void;
 }
 
 const SUPPORTED_TIMEFRAMES: CandleTimeframe[] = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '1d'];
@@ -190,6 +198,11 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
   onOpenDiagnostics,
   onOpenCacheModal,
   onLockTerminal,
+  onOpenAIConfig,
+  onToggleAITerminal,
+  isAITerminalOpen = true,
+  activeDrawingTool,
+  onSelectDrawingTool,
 }) => {
   const [openMenu, setOpenMenu] = useState<MenuType | null>(null);
   const toolbarRef = useRef<HTMLElement | null>(null);
@@ -372,8 +385,22 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
       {/* 1. MARKET GROUP: Logo, Exchange, Symbol, Timeframe            */}
       {/* ============================================================ */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
-        {/* Terminal Logo */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginRight: 2 }}>
+        {/* Terminal Logo with AI Configuration Modal Trigger */}
+        <div
+          onClick={onOpenAIConfig}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 5,
+            marginRight: 4,
+            cursor: 'pointer',
+            padding: '2px 4px',
+            borderRadius: 4,
+            transition: 'background 0.15s ease',
+          }}
+          className="toolbar-logo-btn"
+          title="JARVIS AI Intelligence Engine — Click to configure OpenAI, Gemini & Grok"
+        >
           <div
             style={{
               width: 20,
@@ -394,6 +421,20 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
           </div>
           <span className="terminal-brand-text" style={{ fontWeight: 800, fontSize: 12.5, letterSpacing: '0.08em', color: '#f8fafc' }}>
             J.A.R.V.I.S
+          </span>
+          <span
+            style={{
+              fontSize: 8.5,
+              fontWeight: 800,
+              padding: '1px 4px',
+              borderRadius: 3,
+              background: 'rgba(0, 242, 254, 0.12)',
+              border: '1px solid rgba(0, 242, 254, 0.3)',
+              color: '#00f2fe',
+              letterSpacing: '0.05em',
+            }}
+          >
+            AI
           </span>
         </div>
 
@@ -942,6 +983,53 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
               </div>
             </div>
           )}
+        </div>
+
+        {/* TradingView-Style Long & Short Position Icon-Only Quick Tools */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 3, marginLeft: 2 }}>
+          <button
+            className={`tool-btn ${activeDrawingTool === 'LONG' ? 'active' : ''}`}
+            onClick={() => onSelectDrawingTool?.(activeDrawingTool === 'LONG' ? null : 'LONG')}
+            style={{
+              width: 26,
+              height: 26,
+              padding: 0,
+              borderRadius: 4,
+              background: activeDrawingTool === 'LONG' ? 'rgba(8, 153, 129, 0.32)' : 'rgba(255, 255, 255, 0.04)',
+              border: `1px solid ${activeDrawingTool === 'LONG' ? '#089981' : 'rgba(255, 255, 255, 0.1)'}`,
+              color: activeDrawingTool === 'LONG' ? '#089981' : '#94a3b8',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              boxShadow: activeDrawingTool === 'LONG' ? '0 0 8px rgba(8, 153, 129, 0.5)' : 'none',
+            }}
+            title="Long Position Tool - Click chart to place"
+          >
+            <TrendingUp size={13} color={activeDrawingTool === 'LONG' ? '#089981' : '#10b981'} />
+          </button>
+
+          <button
+            className={`tool-btn ${activeDrawingTool === 'SHORT' ? 'active' : ''}`}
+            onClick={() => onSelectDrawingTool?.(activeDrawingTool === 'SHORT' ? null : 'SHORT')}
+            style={{
+              width: 26,
+              height: 26,
+              padding: 0,
+              borderRadius: 4,
+              background: activeDrawingTool === 'SHORT' ? 'rgba(242, 54, 69, 0.32)' : 'rgba(255, 255, 255, 0.04)',
+              border: `1px solid ${activeDrawingTool === 'SHORT' ? '#f23645' : 'rgba(255, 255, 255, 0.1)'}`,
+              color: activeDrawingTool === 'SHORT' ? '#f23645' : '#94a3b8',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              boxShadow: activeDrawingTool === 'SHORT' ? '0 0 8px rgba(242, 54, 69, 0.5)' : 'none',
+            }}
+            title="Short Position Tool - Click chart to place"
+          >
+            <TrendingDown size={13} color={activeDrawingTool === 'SHORT' ? '#f23645' : '#ef4444'} />
+          </button>
         </div>
       </div>
 

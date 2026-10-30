@@ -8,6 +8,7 @@ import { HeatmapTimeSlice } from '../../types/heatmap';
 import { Candle, CandleTimeframe } from '../../types/market';
 import { TerminalPreferences } from '../../types/settings';
 import { TIMEFRAME_SECONDS } from '../../utils/candleUtils';
+import { FEATURES } from '../../config/features';
 
 interface StoredHeatmapRecord {
   id: string; // `${symbol}_${timestamp}`
@@ -302,18 +303,25 @@ export class IndexedDBCache {
 
     if (cleanCandles.length === 0) return;
 
-    // Immediately update Tier 1 In-Memory RAM Cache (0ms)
-    this.memoryCache.set(key, cleanCandles);
+    // Immediately update Tier 1 In-Memory RAM Cache (bounded to 300 to protect browser memory)
+    const boundedClean = cleanCandles.slice(-300);
+    this.memoryCache.set(key, boundedClean);
 
-    // Save synchronous snapshot to localStorage (latest 350 candles for ultra-fast startup)
+    // Save lightweight synchronous snapshot to localStorage (latest 100 candles only)
     try {
       if (typeof window !== 'undefined' && window.localStorage) {
-        const snap = cleanCandles.slice(-350);
+        const snap = boundedClean.slice(-100);
         window.localStorage.setItem(`jarvis_kline_snap_${key}`, JSON.stringify(snap));
       }
     } catch {}
 
-    // Asynchronously persist to Tier 2 IndexedDB
+    // When backend storage is active, 1-month durable history is managed by SQLite on the server
+    // Do NOT write thousands of candles into browser IndexedDB to prevent memory leaks and tab crashes
+    if (FEATURES.useBackendStorage) {
+      return;
+    }
+
+    // Asynchronously persist to Tier 2 IndexedDB (only when backend is offline)
     if (!this.db) await this.init();
     if (!this.db) return;
 

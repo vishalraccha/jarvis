@@ -40,6 +40,8 @@ import { Candle } from '../../types/market';
 import { TerminalPreferences } from '../../types/settings';
 import { LiquidityZone, TradeBubble } from '../../types/heatmap';
 import { FootprintDebugInfo } from '../../types/footprint';
+import { PositionDrawingOverlay } from './PositionDrawingOverlay';
+import { PositionType } from '../../types/position';
 
 export interface JarvisChartHandles {
   zoomIn: () => void;
@@ -80,6 +82,8 @@ interface JarvisChartProps {
   connectionState?: string;
   lastQuoteTime?: number;
   onLoadMoreHistory?: () => void;
+  activeDrawingTool?: PositionType | null;
+  onClearDrawingTool?: () => void;
 }
 
 const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
@@ -98,6 +102,8 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
       connectionState,
       lastQuoteTime,
       onLoadMoreHistory,
+      activeDrawingTool,
+      onClearDrawingTool,
     },
     ref
   ) => {
@@ -377,15 +383,18 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         }
       });
 
-      // Infinite reverse scroll listener: when user scrolls near the earliest bar
+      // Infinite reverse scroll & range tracker: keeps track of user zoom & scroll offset
       let lastRequestedTime = 0;
       const handleLogicalRangeChange = (range: { from: number; to: number } | null) => {
-        if (!range || !onLoadMoreHistoryRef.current) return;
+        if (!range) return;
+        userLogicalRangeRef.current = range;
+        if (!onLoadMoreHistoryRef.current) return;
         if (range.from < 15 && Date.now() - lastRequestedTime > 1200) {
           lastRequestedTime = Date.now();
           onLoadMoreHistoryRef.current();
         }
       };
+      tvChart.timeScale().subscribeVisibleLogicalRangeChange(handleLogicalRangeChange);
       // Crosshair move listener to inspect candle day, time, and OHLC with silky smooth 120 FPS performance
       const handleCrosshairMove = (param: any) => {
         // 1. Move TradingView-style (+) plus marker button smoothly along right price scale edge
@@ -454,6 +463,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
     const isFootprintActive = preferences.showFootprint && preferences.footprint?.enabled !== false;
 
     const hasInitializedViewRef = useRef<boolean>(false);
+    const userLogicalRangeRef = useRef<{ from: number; to: number } | null>(null);
     const lastSymbolTimeframeRef = useRef<string>(`${preferences.symbol}_${preferences.timeframe}`);
 
     useEffect(() => {
@@ -461,6 +471,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
       if (lastSymbolTimeframeRef.current !== key) {
         lastSymbolTimeframeRef.current = key;
         hasInitializedViewRef.current = false;
+        userLogicalRangeRef.current = null;
         allCandlesRef.current = [];
         currentCandleRef.current = null;
         if (series) {
@@ -476,25 +487,24 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
       }
     }, [preferences.symbol, preferences.timeframe, series]);
 
-    // Dynamic bar spacing & right margin: 72px for Footprint bid x ask stack, 12px for standard candlesticks
+    // Dynamic bar spacing & right margin: 72px for Footprint bid x ask stack, 18px for standard candlesticks
     const prevFootprintActiveRef = useRef<boolean>(isFootprintActive);
     useEffect(() => {
       if (!chart) return;
-      const targetSpacing = isFootprintActive ? 72 : 12;
+      const targetSpacing = isFootprintActive ? 72 : 18;
       const isCob = preferences.showDepthProfile && preferences.depthProfile?.enabled !== false;
       const baseCobW = preferences.depthProfile?.widthPx || 220;
       const cobW = isCob ? (dimensions.width > 0 && dimensions.width < 600 ? Math.min(baseCobW, 140) : baseCobW) : 0;
       const rightOffset = isCob ? Math.ceil(cobW / targetSpacing) + 2 : (isFootprintActive ? 3 : 6);
-      chart.timeScale().applyOptions({
-        barSpacing: targetSpacing,
-        minBarSpacing: 0.5,
-        rightOffset,
-      });
 
-      // When switching between Footprint and standard candles, adjust visible logical range
-      // so standard candles are framed comfortably (~75 bars) and never look distant or stretched
+      // Only re-apply barSpacing & reset framing when footprint mode actually toggles
       if (prevFootprintActiveRef.current !== isFootprintActive) {
         prevFootprintActiveRef.current = isFootprintActive;
+        chart.timeScale().applyOptions({
+          barSpacing: targetSpacing,
+          minBarSpacing: 0.5,
+          rightOffset,
+        });
         const totalBars = allCandlesRef.current.length;
         if (totalBars > 0) {
           if (isFootprintActive) {
@@ -509,10 +519,14 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
             });
           }
         }
-      } else if (preferences.autoScrollToLatest) {
-        chart.timeScale().scrollToRealTime();
+      } else {
+        // Mode unchanged: preserve user's zoom (barSpacing) and only adjust layout offset
+        chart.timeScale().applyOptions({
+          rightOffset,
+          minBarSpacing: 0.5,
+        });
       }
-    }, [chart, isFootprintActive, preferences.showDepthProfile, preferences.depthProfile?.widthPx, preferences.depthProfile?.enabled, preferences.autoScrollToLatest]);
+    }, [chart, isFootprintActive, preferences.showDepthProfile, preferences.depthProfile?.widthPx, preferences.depthProfile?.enabled]);
 
     const lastPriceLineColorRef = useRef<string>('#00e676');
     const tickRafRef = useRef<number | null>(null);
@@ -749,12 +763,24 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
           }
         }
 
+        const previousBarsCount = allCandlesRef.current.length;
+        if (activeChart) {
+          try {
+            const currentRange = activeChart.timeScale().getVisibleLogicalRange();
+            if (currentRange) {
+              userLogicalRangeRef.current = currentRange;
+            }
+          } catch {}
+        }
+
         allCandlesRef.current = dedupedCandles;
         pendingCandlesRef.current = dedupedCandles;
 
         try {
           activeSeries.setData(tvData);
-          activeSeries.priceScale().applyOptions({ autoScale: true });
+          if (!hasInitializedViewRef.current) {
+            activeSeries.priceScale().applyOptions({ autoScale: true });
+          }
         } catch (err) {
           console.warn('[JarvisChart] setData error, recovering:', err);
         }
@@ -779,13 +805,12 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
             const targetSpacing = isFp ? 72 : 18;
             const rightOffset = isCob ? Math.ceil(cobW / targetSpacing) + 2 : (isFp ? 3 : 6);
 
-            activeChart.timeScale().applyOptions({
-              rightOffset,
-              barSpacing: targetSpacing,
-              minBarSpacing: 2.5,
-            });
-
             if (!hasInitializedViewRef.current) {
+              activeChart.timeScale().applyOptions({
+                rightOffset,
+                barSpacing: targetSpacing,
+                minBarSpacing: 2.5,
+              });
               const visibleCount = isFp ? 16 : 75;
               activeChart.timeScale().setVisibleLogicalRange({
                 from: Math.max(0, tvData.length - visibleCount),
@@ -794,6 +819,28 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
               hasInitializedViewRef.current = true;
               if (preferences.autoScrollToLatest) {
                 activeChart.timeScale().scrollToRealTime();
+              }
+            } else {
+              // Crucial: Only update layout options (rightOffset), NEVER overwrite barSpacing!
+              // Overwriting barSpacing destroys the user's manual zoom level on tab switch or screen change.
+              activeChart.timeScale().applyOptions({ rightOffset });
+
+              // Preserve user's zoom & scroll position
+              const prevRange = userLogicalRangeRef.current;
+              if (prevRange) {
+                const wasAtLiveEdge = prevRange.to >= (previousBarsCount - 2);
+                if (wasAtLiveEdge && preferences.autoScrollToLatest) {
+                  const deltaBars = Math.max(0, tvData.length - previousBarsCount);
+                  if (deltaBars > 0) {
+                    activeChart.timeScale().setVisibleLogicalRange({
+                      from: prevRange.from + deltaBars,
+                      to: prevRange.to + deltaBars,
+                    });
+                  }
+                } else {
+                  // User is analyzing a past setup/position: keep their exact view pinned
+                  activeChart.timeScale().setVisibleLogicalRange(prevRange);
+                }
               }
             }
           }
@@ -858,6 +905,8 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         const activeChart = chartRef.current || chart;
         const activeSeries = seriesRef.current || series;
         if (!activeChart) return;
+        userLogicalRangeRef.current = null;
+        hasInitializedViewRef.current = false;
         if (activeSeries) {
           activeSeries.priceScale().applyOptions({ autoScale: true });
         }
@@ -881,6 +930,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         currentCandleRef.current = null;
         lastAppliedCandlesKeyRef.current = '';
         hasInitializedViewRef.current = false;
+        userLogicalRangeRef.current = null;
         const activeSeries = seriesRef.current || series;
         if (activeSeries) {
           try {
@@ -1553,6 +1603,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
             settings={preferences.absorption}
             width={dimensions.width}
             height={dimensions.height}
+            timeframe={preferences.timeframe}
             onUpdateCoords={handleUpdateAbsorptionCoords}
           />
         )}
@@ -1567,6 +1618,20 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
             width={dimensions.width}
             height={dimensions.height}
             side="left"
+          />
+        )}
+
+        {/* Layer 3.8: Interactive Long & Short Position Tool Overlay (TradingView Style, zIndex: 11) */}
+        {chart && series && dimensions.width > 0 && (
+          <PositionDrawingOverlay
+            chart={chart}
+            series={series}
+            symbol={preferences.symbol}
+            width={dimensions.width}
+            height={dimensions.height}
+            timeframe={preferences.timeframe}
+            activeDrawingTool={activeDrawingTool || null}
+            onClearDrawingTool={onClearDrawingTool || (() => {})}
           />
         )}
 

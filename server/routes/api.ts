@@ -7,8 +7,16 @@ import { Router, Request, Response } from 'express';
 import { marketSyncService } from '../services/marketSyncService.js';
 import { hotCache } from '../cache/redisClient.js';
 import { sqliteStore } from '../db/sqliteStore.js';
+import { aiRouter } from './ai.js';
+import { positionsRouter } from './positions.js';
 
 export const apiRouter = Router();
+
+// Mount Multi-AI Subsystem Endpoints
+apiRouter.use('/ai', aiRouter);
+
+// Mount Chart Positions Persistent Storage Endpoints
+apiRouter.use('/chart/positions', positionsRouter);
 
 /**
  * Primary Historical Candles Range Query Endpoint

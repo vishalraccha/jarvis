@@ -116,6 +116,7 @@ export class MarketSyncService {
     if (s === 'GBPUSD' || s === 'GBP' || s === 'GBPUSDT') return 'GBPUSD=X';
     if (s === 'GC' || s === 'CME' || s === 'COMEX') return 'GC=F';
     if (s.startsWith('XAU') || s.startsWith('GOLD') || s === 'VANTAGE' || s === 'OANDA') return 'GC=F';
+    if (s === 'NAS100' || s === 'NASDAQ' || s === 'NDX' || s === 'US100' || s === 'NAS') return '^NDX';
     return `${s}-USD`;
   }
 
@@ -129,7 +130,7 @@ export class MarketSyncService {
     // Initial pre-warm after 500ms
     setTimeout(async () => {
       try {
-        const prewarmSymbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'GC', 'XAUUSDT'];
+        const prewarmSymbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT', 'GC', 'XAUUSDT', 'NAS100'];
         const intervals = ['1m', '5m', '15m', '1h', '1d'];
         for (const sym of prewarmSymbols) {
           for (const tf of intervals) {
@@ -150,6 +151,7 @@ export class MarketSyncService {
           this.fetchAndStoreUpstream('ETHUSDT', '1m', 10),
           this.fetchAndStoreUpstream('SOLUSDT', '1m', 10),
           this.fetchAndStoreUpstream('XAUUSDT', '1m', 10),
+          this.fetchAndStoreUpstream('NAS100', '1m', 10),
         ]);
       } catch {}
     }, 30000);
@@ -214,17 +216,41 @@ export class MarketSyncService {
     const sym = symbol.toUpperCase().replace(/[-_/]/g, '');
     const tf = timeframe.toLowerCase();
 
-    // 1. Forex and COMEX Gold Futures
-    if (sym === 'GC' || sym.startsWith('COMEX') || sym === 'CME' || sym === 'EURUSD' || sym === 'GBPUSD') {
-      const isComex = sym === 'GC' || sym.startsWith('COMEX') || sym === 'CME';
-      const yahooSym = isComex ? 'GC=F' : `${sym}=X`;
+    // 1. Forex, COMEX Gold Futures, and Equity Indices (Nasdaq 100 / NAS100)
+    const isNasdaq = sym === 'NAS100' || sym === 'NASDAQ' || sym === 'NDX' || sym === 'US100' || sym === 'NAS';
+    const isComex = sym === 'GC' || sym.startsWith('COMEX') || sym === 'CME';
+    const isForex = sym === 'EURUSD' || sym === 'GBPUSD';
+
+    if (isNasdaq || isComex || isForex) {
+      const yahooSym = isNasdaq ? '^NDX' : (isComex ? 'GC=F' : `${sym}=X`);
       const yInterval = tf === '1d' ? '1d' : tf === '1h' ? '60m' : tf === '15m' ? '15m' : tf === '5m' ? '5m' : '1m';
+      const yRange = tf === '1d' ? '1y' : (tf === '1h' || tf === '2h' || tf === '4h') ? '3mo' : (tf === '15m' || tf === '30m' || tf === '5m') ? '1mo' : '7d';
+
+      let yUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSym)}?interval=${yInterval}`;
+      if (endTime && Number.isFinite(endTime) && endTime > 0) {
+        const p2 = Math.floor(endTime);
+        const tfSec = tf === '1d' ? 86400 : tf === '1h' ? 3600 : tf === '15m' ? 900 : tf === '5m' ? 300 : 60;
+        const p1 = Math.max(0, p2 - tfSec * Math.min(limit * 2, 3000));
+        yUrl += `&period1=${p1}&period2=${p2}`;
+      } else {
+        yUrl += `&range=${yRange}`;
+      }
 
       try {
-        const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${yahooSym}?interval=${yInterval}&range=2d`, {
+        let res = await fetch(yUrl, {
           headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
-          signal: AbortSignal.timeout(4000),
+          signal: AbortSignal.timeout(5000),
         });
+
+        // Fallback to NQ=F (CME Globex Futures) for Nasdaq if ^NDX returns empty
+        if (!res.ok && isNasdaq) {
+          const fallbackUrl = `https://query1.finance.yahoo.com/v8/finance/chart/NQ=F?interval=${yInterval}&range=${yRange}`;
+          res = await fetch(fallbackUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+            signal: AbortSignal.timeout(4500),
+          });
+        }
+
         if (res.ok) {
           const json: any = await res.json();
           const result = json?.chart?.result?.[0];
@@ -238,9 +264,16 @@ export class MarketSyncService {
               const h = quotes.high[i];
               const l = quotes.low[i];
               const c = quotes.close[i];
-              const v = quotes.volume?.[i] ?? (isComex ? 100 : 1000);
-              if (o === null || h === null || l === null || c === null) continue;
-              candles.push({ time: t, open: o, high: h, low: l, close: c, volume: v });
+              const v = quotes.volume?.[i] ?? (isComex ? 100 : isNasdaq ? 250 : 1000);
+              if (o === null || h === null || l === null || c === null || !Number.isFinite(c) || c <= 0) continue;
+              candles.push({
+                time: t,
+                open: isNasdaq ? Math.round(o * 10) / 10 : o,
+                high: isNasdaq ? Math.round(h * 10) / 10 : h,
+                low: isNasdaq ? Math.round(l * 10) / 10 : l,
+                close: isNasdaq ? Math.round(c * 10) / 10 : c,
+                volume: v,
+              });
             }
             if (candles.length > 0) {
               sqliteStore.insertCandles(sym, tf, candles);
@@ -442,11 +475,12 @@ export class MarketSyncService {
       } catch {}
     }
 
-    // 1. Gold & Forex: Yahoo Finance
-    if (sym === 'GC' || sym.startsWith('COMEX') || sym === 'CME' || sym === 'EURUSD' || sym === 'GBPUSD') {
+    // 1. Gold, Forex, and Equity Indices (Nasdaq 100): Yahoo Finance
+    const isNasdaq = sym === 'NAS100' || sym === 'NASDAQ' || sym === 'NDX' || sym === 'US100' || sym === 'NAS';
+    if (sym === 'GC' || sym.startsWith('COMEX') || sym === 'CME' || sym === 'EURUSD' || sym === 'GBPUSD' || isNasdaq) {
       try {
         const yahooSym = this.getYahooSymbol(sym);
-        const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${yahooSym}?interval=1m&range=1d`, {
+        const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(yahooSym)}?interval=1m&range=1d`, {
           headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
           signal: AbortSignal.timeout(2500),
         });
@@ -454,7 +488,7 @@ export class MarketSyncService {
           const json: any = await res.json();
           const meta = json?.chart?.result?.[0]?.meta;
           if (meta && typeof meta.regularMarketPrice === 'number' && meta.regularMarketPrice > 0) {
-            const mult = sym.includes('EUR') || sym.includes('GBP') ? 10000 : (sym === 'GC' ? 10 : 100);
+            const mult = isNasdaq ? 10 : (sym.includes('EUR') || sym.includes('GBP') ? 10000 : (sym === 'GC' ? 10 : 100));
             const finalPrice = Math.round(meta.regularMarketPrice * mult) / mult;
             const result = { symbol: sym, price: finalPrice, timestamp: Date.now() };
             await hotCache.set(key, JSON.stringify(result), 2);

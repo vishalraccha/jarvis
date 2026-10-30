@@ -334,6 +334,31 @@ export class AbsorptionEngine {
     return 5.0;
   }
 
+  private getMinRestingWallQuantity(): number {
+    const sym = this.symbol.toUpperCase();
+    if (sym.includes('BTC')) return 15.0;
+    if (sym.includes('ETH')) return 50.0;
+    if (sym.includes('SOL')) return 200.0;
+    if (sym.includes('XAU') || sym === 'GC') return 12.0;
+    if (sym.includes('NAS')) return 25.0;
+    return 10.0;
+  }
+
+  private getTimeframeSeconds(): number {
+    const map: Record<string, number> = {
+      '1m': 60,
+      '3m': 180,
+      '5m': 300,
+      '15m': 900,
+      '30m': 1800,
+      '1h': 3600,
+      '2h': 7200,
+      '4h': 14400,
+      '1d': 86400,
+    };
+    return map[this.timeframe] || 60;
+  }
+
   /**
    * Find nearby meaningful liquidity zones
    */
@@ -345,14 +370,17 @@ export class AbsorptionEngine {
     const maxDiff = toleranceTicks * this.tickSize;
 
     const candidates: ZoneCandidate[] = [];
+    const minWallQty = this.getMinRestingWallQuantity();
 
     // 1. Order Book Resting Liquidity Wall
     if (this.orderBook) {
       const range = this.orderBook.getLevelsInRange(price - maxDiff * 2, price + maxDiff * 2);
+      const significantThreshold = Math.max(minWallQty, (range.maxQty || 0) * 0.55);
+
       if (type === 'buy_absorption') {
         // Look for resting bid wall defending price
         for (const b of range.bids) {
-          if (Math.abs(b.price - price) <= maxDiff && b.quantity > 0) {
+          if (Math.abs(b.price - price) <= maxDiff && b.quantity >= significantThreshold) {
             candidates.push({
               type: 'resting_wall',
               price: b.price,
@@ -364,7 +392,7 @@ export class AbsorptionEngine {
       } else {
         // Look for resting ask wall defending price
         for (const a of range.asks) {
-          if (Math.abs(a.price - price) <= maxDiff && a.quantity > 0) {
+          if (Math.abs(a.price - price) <= maxDiff && a.quantity >= significantThreshold) {
             candidates.push({
               type: 'resting_wall',
               price: a.price,
@@ -576,21 +604,31 @@ export class AbsorptionEngine {
 
     // 9. Assign A or A+ Grade
     // A+ represents exceptional absorption at confirmed major liquidity walls
+    const minWallQty = this.getMinRestingWallQuantity();
     const isAPlus =
       totalScore >= 80 &&
       volumeMultiplier >= 1.8 &&
       displacementTicks <= 1.5 &&
-      (zone.type === 'resting_wall' || zone.type === 'heatmap_band' || replenishmentObserved || zone.type === 'session_high_low' || zone.type === 'session_high' || zone.type === 'session_low');
+      (replenishmentObserved ||
+        zone.type === 'session_high_low' ||
+        zone.type === 'session_high' ||
+        zone.type === 'session_low' ||
+        (zone.type === 'heatmap_band' && zone.strength >= 20) ||
+        (zone.type === 'resting_wall' && zone.strength >= minWallQty * 2));
 
     const grade: AbsorptionGrade = isAPlus ? 'A+' : 'A';
 
     // 10. Deduplication & Event Merging
-    // Check if an existing event exists near this price and within last 4 seconds
+    const tfSec = this.getTimeframeSeconds();
+    const startSec = Math.floor(cluster.startTime / 1000);
+    const alignedCandleSec = Math.floor(startSec / tfSec) * tfSec;
+
+    // Check if an existing event exists near this price within last 6 seconds or same candle
     const existing = this.events.find(
       (e) =>
         e.type === absorptionType &&
         Math.abs(e.price - cluster.price) <= this.tickSize * (this.settings.maxClusterSpreadTicks || 2) &&
-        Math.abs(now - e.timestamp) <= 4500
+        (Math.abs(now - e.timestamp) <= 6000 || e.candleTime === alignedCandleSec)
     );
 
     if (existing) {
@@ -601,6 +639,7 @@ export class AbsorptionEngine {
       existing.tradeCount = Math.max(existing.tradeCount, cluster.tradeCount);
       existing.holdDurationMs = Math.max(existing.holdDurationMs, now - existing.timestamp);
       existing.score = Math.max(existing.score, totalScore);
+      existing.timestamp = now;
       if (grade === 'A+' && existing.grade !== 'A+') {
         existing.grade = 'A+';
       }
@@ -612,12 +651,12 @@ export class AbsorptionEngine {
       return existing;
     }
 
-    // Create new authoritative Absorption Event
+    // Create new authoritative Absorption Event strictly aligned to the candle start time
     const eventId = `abs_${this.symbol}_${now}_${Math.round(cluster.price * 100)}`;
     const newEvent: AbsorptionEvent = {
       id: eventId,
       timestamp: cluster.startTime,
-      candleTime: Math.floor(cluster.startTime / 1000),
+      candleTime: alignedCandleSec,
       price: Math.round(cluster.price * 100000) / 100000,
       priceCluster: {
         min: cluster.minPrice,
@@ -798,7 +837,8 @@ export class AbsorptionEngine {
       const lowerWick = Math.min(c.open, c.close) - c.low;
       const upperWickRatio = upperWick / candleRange;
       const lowerWickRatio = lowerWick / candleRange;
-      const barTimeMs = c.time * 1000;
+      const candleSec = c.time > 1e11 ? Math.floor(c.time / 1000) : c.time;
+      const barTimeMs = candleSec * 1000;
 
       // ==========================================
       // CHECK SELL-SIDE ABSORPTION (Defending Resistance)
@@ -863,19 +903,19 @@ export class AbsorptionEngine {
 
           const totalScore = Math.min(100, Math.round(volScore + resistScore + zoneScore));
 
-          // A+ requires high conviction: score >= 78, vol >= 1.75x, wick >= 35%, and major zone
+          // A+ requires high conviction: score >= 78, vol >= 2.0x, wick >= 40%, and major structural zone
           const isAPlus =
             totalScore >= 78 &&
-            volMultiplier >= 1.75 &&
-            upperWickRatio >= 0.35 &&
-            (zoneType === 'session_high' || zoneType === 'poc' || zoneType === 'heatmap_band' || zoneType === 'resting_wall');
+            volMultiplier >= 2.0 &&
+            upperWickRatio >= 0.40 &&
+            (zoneType === 'session_high' || zoneType === 'poc' || zoneType === 'heatmap_band');
 
           const grade: AbsorptionGrade = isAPlus ? 'A+' : 'A';
 
           detected.push({
-            id: `abs_hist_sell_${c.time}`,
+            id: `abs_hist_sell_${candleSec}`,
             timestamp: barTimeMs,
-            candleTime: c.time,
+            candleTime: candleSec,
             price: Math.round(c.high * 100000) / 100000,
             priceCluster: { min: Math.max(c.open, c.close), max: c.high },
             type: 'sell_absorption',
@@ -965,19 +1005,19 @@ export class AbsorptionEngine {
 
           const totalScore = Math.min(100, Math.round(volScore + resistScore + zoneScore));
 
-          // A+ requires high conviction: score >= 78, vol >= 1.75x, wick >= 35%, and major zone
+          // A+ requires high conviction: score >= 78, vol >= 2.0x, wick >= 40%, and major structural zone
           const isAPlus =
             totalScore >= 78 &&
-            volMultiplier >= 1.75 &&
-            lowerWickRatio >= 0.35 &&
-            (zoneType === 'session_low' || zoneType === 'poc' || zoneType === 'heatmap_band' || zoneType === 'resting_wall');
+            volMultiplier >= 2.0 &&
+            lowerWickRatio >= 0.40 &&
+            (zoneType === 'session_low' || zoneType === 'poc' || zoneType === 'heatmap_band');
 
           const grade: AbsorptionGrade = isAPlus ? 'A+' : 'A';
 
           detected.push({
-            id: `abs_hist_buy_${c.time}`,
+            id: `abs_hist_buy_${candleSec}`,
             timestamp: barTimeMs,
-            candleTime: c.time,
+            candleTime: candleSec,
             price: Math.round(c.low * 100000) / 100000,
             priceCluster: { min: c.low, max: Math.min(c.open, c.close) },
             type: 'buy_absorption',

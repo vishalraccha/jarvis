@@ -16,6 +16,9 @@ import { OrderBookDiagnosticsModal } from '../diagnostics/OrderBookDiagnosticsMo
 import { CacheSettingsModal } from '../settings/CacheSettingsModal';
 import { AbsorptionEngine } from '../../services/absorption/AbsorptionEngine';
 import { DEFAULT_ABSORPTION_SETTINGS } from '../../types/absorption';
+import { JarvisAITerminal } from '../ai/JarvisAITerminal';
+import { AIConfigModal } from '../ai/AIConfigModal';
+import { aiToolRegistry } from '../../services/ai/AIToolRegistry';
 
 import { BinanceAdapter } from '../../services/exchange/BinanceAdapter';
 import { ComexAdapter } from '../../services/exchange/ComexAdapter';
@@ -45,6 +48,7 @@ import {
 } from '../../types/settings';
 import { ConnectionState, LatencyMetrics } from '../../types/market';
 import { HeatmapTimeSlice } from '../../types/heatmap';
+import { PositionType } from '../../types/position';
 
 export interface TradingTerminalProps {
   onLockTerminal?: () => void;
@@ -82,6 +86,9 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
   const [isCacheModalOpen, setIsCacheModalOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isAIConfigOpen, setIsAIConfigOpen] = useState(false);
+  const [isAITerminalExpanded, setIsAITerminalExpanded] = useState(true);
+  const [activeDrawingTool, setActiveDrawingTool] = useState<PositionType | null>(null);
 
   // Engine references
   const binanceAdapterRef = useRef<BinanceAdapter>(new BinanceAdapter());
@@ -130,6 +137,13 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
     absorptionEngineRef.current.setOrderBook(orderBookRef.current);
     absorptionEngineRef.current.setHeatmapEngine(heatmapEngineRef.current);
     absorptionEngineRef.current.setContext(preferences.symbol);
+    aiToolRegistry.setContext({
+      orderBook: orderBookRef.current,
+      footprintEngine: footprintEngineRef.current,
+      absorptionEngine: absorptionEngineRef.current,
+      heatmapEngine: heatmapEngineRef.current,
+      bubbleManager: bubbleManagerRef.current,
+    });
 
     indexedDBCache.loadPreferences().then((stored) => {
       if (stored) {
@@ -868,10 +882,16 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
       }
     }, 2500);
 
-    // Re-sync candles immediately when tab comes back into focus
+    // Re-sync candles only if tab was in background for an extended duration (> 45s)
+    let lastHiddenTimestamp = 0;
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible') {
-        loadCandles(preferencesRef.current.symbol, preferencesRef.current.timeframe, preferencesRef.current.exchange);
+      if (document.visibilityState === 'hidden') {
+        lastHiddenTimestamp = Date.now();
+      } else if (document.visibilityState === 'visible') {
+        const elapsedSinceHidden = lastHiddenTimestamp > 0 ? Date.now() - lastHiddenTimestamp : 0;
+        if (elapsedSinceHidden > 45000) {
+          loadCandles(preferencesRef.current.symbol, preferencesRef.current.timeframe, preferencesRef.current.exchange);
+        }
       }
     };
     document.addEventListener('visibilitychange', handleVisibilityChange);
@@ -979,26 +999,44 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         onOpenDiagnostics={handleOpenDiagnostics}
         onOpenCacheModal={handleOpenCacheModal}
         onLockTerminal={onLockTerminal}
+        onOpenAIConfig={() => setIsAIConfigOpen(true)}
+        onToggleAITerminal={() => setIsAITerminalExpanded((prev) => !prev)}
+        isAITerminalOpen={isAITerminalExpanded}
+        activeDrawingTool={activeDrawingTool}
+        onSelectDrawingTool={(tool) => setActiveDrawingTool((prev) => (prev === tool ? null : tool))}
       />
 
-      {/* Main Terminal Chart Body */}
-      <main style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-        <JarvisChart
-          ref={chartRef}
+      {/* Main Terminal Viewport: Left AI Panel + Right Chart Area */}
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'row', position: 'relative', overflow: 'hidden' }}>
+        <JarvisAITerminal
+          symbol={preferences.symbol}
+          timeframe={preferences.timeframe}
           candles={renderedCandles}
-          preferences={preferences}
-          orderBook={orderBookRef.current}
-          heatmapEngine={heatmapEngineRef.current}
-          bubbleManager={bubbleManagerRef.current}
-          shiftDetector={shiftDetectorRef.current}
-          colorMapEngine={colorMapEngine}
-          footprintEngine={footprintEngineRef.current}
-          absorptionEngine={absorptionEngineRef.current}
-          onUpdatePreferences={handleUpdatePreferences}
-          connectionState={connectionState}
-          onLoadMoreHistory={handleLoadMoreHistory}
+          isExpanded={isAITerminalExpanded}
+          onToggleExpand={() => setIsAITerminalExpanded((prev) => !prev)}
+          onOpenConfig={() => setIsAIConfigOpen(true)}
         />
-      </main>
+
+        <main style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+          <JarvisChart
+            ref={chartRef}
+            candles={renderedCandles}
+            preferences={preferences}
+            orderBook={orderBookRef.current}
+            heatmapEngine={heatmapEngineRef.current}
+            bubbleManager={bubbleManagerRef.current}
+            shiftDetector={shiftDetectorRef.current}
+            colorMapEngine={colorMapEngine}
+            footprintEngine={footprintEngineRef.current}
+            absorptionEngine={absorptionEngineRef.current}
+            onUpdatePreferences={handleUpdatePreferences}
+            connectionState={connectionState}
+            onLoadMoreHistory={handleLoadMoreHistory}
+            activeDrawingTool={activeDrawingTool}
+            onClearDrawingTool={() => setActiveDrawingTool(null)}
+          />
+        </main>
+      </div>
 
       {/* Modals */}
       <HeatmapSettingsModal
@@ -1064,6 +1102,12 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         isOpen={isCacheModalOpen}
         onClose={() => setIsCacheModalOpen(false)}
         onReloadHistory={() => loadCandles(preferences.symbol, preferences.timeframe)}
+      />
+
+      {/* JARVIS Multi-AI Engine Configuration Modal (Phase 1) */}
+      <AIConfigModal
+        isOpen={isAIConfigOpen}
+        onClose={() => setIsAIConfigOpen(false)}
       />
     </div>
   );

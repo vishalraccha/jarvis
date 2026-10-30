@@ -16,10 +16,23 @@ interface AbsorptionOverlayProps {
   settings: AbsorptionSettings;
   width: number;
   height: number;
+  timeframe?: string;
   onUpdateCoords?: (
     coords: Array<{ event: AbsorptionEvent; cx: number; cy: number; radius: number }>
   ) => void;
 }
+
+const TIMEFRAME_SECS: Record<string, number> = {
+  '1m': 60,
+  '3m': 180,
+  '5m': 300,
+  '15m': 900,
+  '30m': 1800,
+  '1h': 3600,
+  '2h': 7200,
+  '4h': 14400,
+  '1d': 86400,
+};
 
 export const AbsorptionOverlay: React.FC<AbsorptionOverlayProps> = ({
   chart,
@@ -28,12 +41,12 @@ export const AbsorptionOverlay: React.FC<AbsorptionOverlayProps> = ({
   settings,
   width,
   height,
+  timeframe = '1m',
   onUpdateCoords,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animFrameRef = useRef<number | null>(null);
   const isDirtyRef = useRef<boolean>(true);
-  const lastRenderTimeRef = useRef<number>(0);
   const visibleCoordsRef = useRef<
     Array<{ event: AbsorptionEvent; cx: number; cy: number; radius: number }>
   >([]);
@@ -83,13 +96,6 @@ export const AbsorptionOverlay: React.FC<AbsorptionOverlayProps> = ({
       tToSec = now + 300;
     }
 
-    const timeDiff = tToSec - tFromSec;
-    const timeToX = (tSec: number): number => {
-      const coord = timeScale.timeToCoordinate(tSec as any);
-      if (coord !== null && Number.isFinite(coord)) return coord;
-      return ((tSec - tFromSec) / timeDiff) * width;
-    };
-
     const priceToY = (p: number): number => {
       const coord = series.priceToCoordinate(p);
       if (coord !== null && Number.isFinite(coord)) return coord;
@@ -125,15 +131,25 @@ export const AbsorptionOverlay: React.FC<AbsorptionOverlayProps> = ({
     const logRange = logMax - logMin || 1;
 
     const coordsList: Array<{ event: AbsorptionEvent; cx: number; cy: number; radius: number }> = [];
+    const tfSec = TIMEFRAME_SECS[timeframe] || 60;
 
-    // Calculate coordinates and radii
+    // Calculate coordinates and radii - strictly pinned on the candle where absorption happened
     for (const ev of visibleEvents) {
-      const candleSec = ev.candleTime || Math.floor(ev.timestamp / 1000);
-      const cx = timeToX(candleSec);
+      const rawSec = ev.candleTime || Math.floor(ev.timestamp / 1000);
+      const candleSec = Math.floor(rawSec / tfSec) * tfSec;
+
+      // Coordinate from Lightweight Charts timeScale for the candle
+      const coordX = timeScale.timeToCoordinate(candleSec as any);
+      if (coordX === null || !Number.isFinite(coordX)) {
+        // NEVER project bubbles into empty right whitespace or off-candle!
+        continue;
+      }
+
+      const cx = coordX;
       const cy = priceToY(ev.price);
 
-      // Skip off-screen events
-      if (cx < -50 || cx > width + 50 || cy < -50 || cy > height + 50) continue;
+      // Skip invalid or off-screen events
+      if (cy === -9999 || cx < -50 || cx > width + 50 || cy < -50 || cy > height + 50) continue;
 
       // Logarithmic volume scaling (grade and volume size are independent)
       const evLog = Math.log(Math.max(minVol, ev.totalAbsorbedVolume));
@@ -214,17 +230,15 @@ export const AbsorptionOverlay: React.FC<AbsorptionOverlayProps> = ({
     if (onUpdateCoords) {
       onUpdateCoords(coordsList);
     }
-  }, [chart, series, absorptionEngine, settings, width, height, onUpdateCoords]);
+  }, [chart, series, absorptionEngine, settings, width, height, timeframe, onUpdateCoords]);
 
-  // RequestAnimationFrame animation render loop
+  // Smooth RequestAnimationFrame animation render loop
   useEffect(() => {
     let active = true;
 
     const loop = () => {
       if (!active) return;
-      const now = performance.now();
-      if (isDirtyRef.current && now - lastRenderTimeRef.current >= 30) {
-        lastRenderTimeRef.current = now;
+      if (isDirtyRef.current) {
         render();
         isDirtyRef.current = false;
       }
@@ -247,11 +261,12 @@ export const AbsorptionOverlay: React.FC<AbsorptionOverlayProps> = ({
     return unsub;
   }, [absorptionEngine]);
 
-  // Listen to chart view changes
+  // Listen to chart view changes (smooth sync on scroll/zoom/pan)
   useEffect(() => {
     if (!chart) return;
     const handleRange = () => {
       isDirtyRef.current = true;
+      render();
     };
     chart.timeScale().subscribeVisibleTimeRangeChange(handleRange);
     chart.timeScale().subscribeVisibleLogicalRangeChange(handleRange);
@@ -259,7 +274,7 @@ export const AbsorptionOverlay: React.FC<AbsorptionOverlayProps> = ({
       chart.timeScale().unsubscribeVisibleTimeRangeChange(handleRange);
       chart.timeScale().unsubscribeVisibleLogicalRangeChange(handleRange);
     };
-  }, [chart]);
+  }, [chart, render]);
 
   useEffect(() => {
     isDirtyRef.current = true;

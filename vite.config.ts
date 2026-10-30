@@ -1,6 +1,9 @@
 import react from '@vitejs/plugin-react'
 import { defineConfig, type Plugin } from 'vite'
 import WebSocket from 'ws'
+import { aiKeyManager, type AIProviderId } from './server/services/ai/AIKeyManager.js'
+import { externalResearchService } from './server/services/ai/ExternalResearchService.js'
+import { positionStorageService } from './server/services/positions/PositionStorageService.js'
 
 class TradingViewBridge {
   private ws: any = null;
@@ -215,13 +218,13 @@ class TradingViewBridge {
   }
 
   public async fetchHistoricalBars(timeframe: string, limit: number = 300, symbol: string = 'VANTAGE:XAUUSD'): Promise<any[] | null> {
-    // 1. Instant 0ms response from persistent Nasdaq memory cache
+    // 1. Instant 0ms response from persistent Nasdaq memory cache (only if populated with authentic historical depth >= 50)
     if (symbol.includes('NAS100')) {
-      if ((timeframe === '1m' || timeframe === '1') && this.nasCandles.length > 0) {
+      if ((timeframe === '1m' || timeframe === '1') && this.nasCandles.length >= 50) {
         return limit > 0 ? this.nasCandles.slice(-limit) : this.nasCandles;
       }
 
-      if (this.nasCandles.length > 0) {
+      if (this.nasCandles.length >= 50) {
         const resMap: Record<string, number> = {
           '3m': 180,
           '5m': 300,
@@ -722,8 +725,51 @@ function redisFastCandleCachePlugin(): Plugin {
         }
       } catch {}
 
-      // Safeguard: Never fall back to Yahoo Finance ^NDX (which has a 70pt cash-index discrepancy).
-      // Return existing cached TradingView CFD candles if present.
+      // Fallback: Authoritative Yahoo Finance ^NDX / NQ=F (provides full 1-month historical depth & 2500+ bars)
+      try {
+        const yInterval = interval === '1d' ? '1d' : interval === '1h' ? '60m' : interval === '15m' ? '15m' : interval === '5m' ? '5m' : '1m';
+        const yRange = interval === '1d' ? '1y' : (interval === '1h' || interval === '2h' || interval === '4h') ? '3mo' : (interval === '15m' || interval === '30m' || interval === '5m') ? '1mo' : '7d';
+        let res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/%5ENDX?interval=${yInterval}&range=${yRange}`, {
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+          signal: AbortSignal.timeout(6000),
+        });
+        if (!res.ok) {
+          res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/NQ=F?interval=${yInterval}&range=${yRange}`, {
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+            signal: AbortSignal.timeout(5000),
+          });
+        }
+        if (res.ok) {
+          const json: any = await res.json();
+          const result = json?.chart?.result?.[0];
+          const timestamps = result?.timestamp || [];
+          const quotes = result?.indicators?.quote?.[0];
+          if (quotes && timestamps.length > 0) {
+            const list: any[] = [];
+            for (let i = 0; i < timestamps.length; i++) {
+              const t = timestamps[i];
+              const o = quotes.open[i];
+              const h = quotes.high[i];
+              const l = quotes.low[i];
+              const c = quotes.close[i];
+              const v = quotes.volume?.[i] || 250;
+              if (o === null || h === null || l === null || c === null || !Number.isFinite(c) || c <= 0) continue;
+              list.push([t * 1000, String(o), String(h), String(l), String(c), String(v)]);
+            }
+            if (list.length > 0) {
+              const text = JSON.stringify(list);
+              memoryCache.set(key, { timestamp: Date.now(), data: text, isNativeSpot: true });
+              if (interval === '1m' || interval === '1') {
+                tvBridge.nasCandles = list;
+              }
+              return text;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('[ViteBridge] Yahoo Nasdaq fallback failed:', err);
+      }
+
       const existing = memoryCache.get(key);
       if (existing?.data) {
         return existing.data;
@@ -734,7 +780,8 @@ function redisFastCandleCachePlugin(): Plugin {
     if (isComex || isFx) {
       try {
         const yInterval = interval === '1d' ? '1d' : interval === '1h' ? '60m' : interval === '15m' ? '15m' : interval === '5m' ? '5m' : '1m';
-        const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${yahooSym}?interval=${yInterval}&range=2d`, {
+        const yRange = interval === '1d' ? '1y' : (interval === '1h' || interval === '2h' || interval === '4h') ? '3mo' : (interval === '15m' || interval === '30m' || interval === '5m') ? '1mo' : '7d';
+        const res = await fetch(`https://query1.finance.yahoo.com/v8/finance/chart/${yahooSym}?interval=${yInterval}&range=${yRange}`, {
           headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' },
           signal: AbortSignal.timeout(8000),
         });
@@ -996,7 +1043,149 @@ function redisFastCandleCachePlugin(): Plugin {
         }
       }, 10000)?.unref();
 
+      const parseJsonBody = (req: any): Promise<any> => {
+        return new Promise((resolve) => {
+          if (req.body && typeof req.body === 'object') {
+            resolve(req.body);
+            return;
+          }
+          if (req.readableEnded) {
+            resolve({});
+            return;
+          }
+          let body = '';
+          const timer = setTimeout(() => resolve({}), 3000);
+          req.on('data', (chunk: any) => { body += chunk; });
+          req.on('end', () => {
+            clearTimeout(timer);
+            try { resolve(JSON.parse(body || '{}')); } catch { resolve({}); }
+          });
+          req.on('error', () => {
+            clearTimeout(timer);
+            resolve({});
+          });
+          req.resume?.();
+        });
+      };
+
       server.middlewares.use(async (req, res, next) => {
+        // JARVIS Chart Positions Persistent Storage Endpoints
+        if (req.url?.startsWith('/api/chart/positions')) {
+          res.setHeader('Content-Type', 'application/json');
+          const parsedUrl = new URL(req.url, 'http://localhost');
+          const symbol = parsedUrl.searchParams.get('symbol') || undefined;
+
+          if (req.method === 'GET') {
+            const positions = positionStorageService.getPositions(symbol);
+            res.end(JSON.stringify({ status: 'ok', positions }));
+            return;
+          }
+
+          if (req.method === 'POST') {
+            const body = await parseJsonBody(req);
+            const { position, positions: posList, symbol: postSym } = body;
+            if (Array.isArray(posList) && postSym) {
+              const saved = positionStorageService.savePositions(postSym, posList);
+              res.end(JSON.stringify({ status: 'ok', positions: saved }));
+              return;
+            }
+            if (position && position.id && position.symbol) {
+              const saved = positionStorageService.addOrUpdatePosition(position);
+              res.end(JSON.stringify({ status: 'ok', position: saved }));
+              return;
+            }
+            res.statusCode = 400;
+            res.end(JSON.stringify({ error: 'Missing position payload' }));
+            return;
+          }
+
+          if (req.method === 'DELETE') {
+            const id = parsedUrl.pathname.split('/').pop() || parsedUrl.searchParams.get('id');
+            if (id && id !== 'positions') {
+              const deleted = positionStorageService.deletePosition(id);
+              res.end(JSON.stringify({ status: 'ok', deleted }));
+              return;
+            }
+            res.statusCode = 400;
+            res.end(JSON.stringify({ error: 'Missing id to delete' }));
+            return;
+          }
+        }
+
+        // JARVIS AI Subsystem Endpoints
+        if (req.url?.startsWith('/api/ai/status')) {
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({
+            status: 'ok',
+            providers: aiKeyManager.getAllStatuses(),
+            timestamp: Date.now(),
+          }));
+          return;
+        }
+
+        if (req.url?.startsWith('/api/ai/key') && req.method === 'POST') {
+          const body = await parseJsonBody(req);
+          const { provider, key, model } = body;
+          if (!provider || !['openai', 'gemini', 'grok'].includes(provider)) {
+            res.statusCode = 400;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ error: 'Invalid provider' }));
+            return;
+          }
+          aiKeyManager.setKey(provider as AIProviderId, key || '', model);
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ success: true, provider, status: aiKeyManager.getStatus(provider as AIProviderId) }));
+          return;
+        }
+
+        if (req.url?.startsWith('/api/ai/key/') && req.method === 'DELETE') {
+          const provider = req.url.split('/').pop()?.split('?')[0] as AIProviderId;
+          if (provider && ['openai', 'gemini', 'grok'].includes(provider)) {
+            aiKeyManager.removeKey(provider);
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ success: true, provider, status: aiKeyManager.getStatus(provider) }));
+            return;
+          }
+        }
+
+        if (req.url?.startsWith('/api/ai/test') && req.method === 'POST') {
+          const body = await parseJsonBody(req);
+          const { provider, model } = body;
+          const result = await aiKeyManager.testProvider(provider as AIProviderId, model);
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(result));
+          return;
+        }
+
+        if (req.url?.startsWith('/api/ai/chat') && req.method === 'POST') {
+          const body = await parseJsonBody(req);
+          const { provider, model, messages, temperature } = body;
+          try {
+            const result = await aiKeyManager.executeChat(
+              provider as AIProviderId,
+              model || (provider === 'gemini' ? 'gemini-3.8-flash' : provider === 'openai' ? 'gpt-4o-mini' : 'grok-2-mini'),
+              messages || [],
+              typeof temperature === 'number' ? temperature : 0.2
+            );
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ success: true, ...result, timestamp: Date.now() }));
+          } catch (err: any) {
+            res.statusCode = 500;
+            res.setHeader('Content-Type', 'application/json');
+            res.end(JSON.stringify({ success: false, error: err.message || 'AI execution failed' }));
+          }
+          return;
+        }
+
+        if (req.url?.startsWith('/api/ai/news')) {
+          const url = new URL(req.url, 'http://localhost');
+          const symbol = url.searchParams.get('symbol') || 'XAUUSD';
+          const news = await externalResearchService.getMacroIntelligence(symbol);
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({ status: 'ok', news, timestamp: Date.now() }));
+          return;
+        }
+
         if (req.url?.startsWith('/api/health')) {
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify({ status: 'ok', mode: 'vite-dev-server' }));
