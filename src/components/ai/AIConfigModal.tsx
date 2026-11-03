@@ -130,8 +130,7 @@ export const AIConfigModal: React.FC<AIConfigModalProps> = ({ isOpen, initialPro
 
   const handleRemoveKey = async (provider: AIProvider) => {
     try {
-      await fetch(`/api/ai/key/${provider}`, { method: 'DELETE' });
-      await aiOrchestrator.refreshProviderStatuses();
+      await aiOrchestrator.removeKey(provider);
       setConfigs({ ...aiOrchestrator.getProviderConfigs() });
       setTestResults((prev) => ({
         ...prev,

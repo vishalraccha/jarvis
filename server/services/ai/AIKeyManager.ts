@@ -610,11 +610,15 @@ class AIKeyManager {
 
       if (provider === 'gemini') {
         const candidateModels = Array.from(new Set([
-          (!model || model.includes('2.5')) ? 'gemini-3.5-flash' : model,
+          model,
+          'gemini-2.5-flash',
+          'gemini-2.0-flash',
+          'gemini-1.5-flash',
+          'gemini-flash-latest',
           'gemini-3.5-flash',
           'gemini-3.8-flash',
           'gemini-3.1-flash-lite',
-        ]));
+        ].filter(Boolean)));
 
         let lastErrMsg = '';
         let lastLatency = 0;
@@ -812,11 +816,15 @@ class AIKeyManager {
 
     if (provider === 'gemini') {
       const candidateModels = Array.from(new Set([
-        (!model || model.includes('2.5')) ? 'gemini-3.5-flash' : model,
+        model,
+        'gemini-2.5-flash',
+        'gemini-2.0-flash',
+        'gemini-1.5-flash',
+        'gemini-flash-latest',
         'gemini-3.5-flash',
         'gemini-3.8-flash',
         'gemini-3.1-flash-lite',
-      ]));
+      ].filter(Boolean)));
 
       // Separate system messages for Gemini
       const systemMsg = messages.find((m) => m.role === 'system')?.content;

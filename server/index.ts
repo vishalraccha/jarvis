@@ -21,6 +21,11 @@ app.use(express.json({ limit: '2mb' }));
 // Mount API endpoints
 app.use('/api', apiRouter);
 
+// Fallback JSON 404 for unmatched /api requests
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: 'API route not found', path: req.path });
+});
+
 // Serve static frontend assets if dist directory exists (Render production mode)
 const distPath = path.join(process.cwd(), 'dist');
 if (fs.existsSync(distPath)) {

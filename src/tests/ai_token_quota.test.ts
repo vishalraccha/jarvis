@@ -4,8 +4,9 @@
  * quota adjustments, counter resets, and quota exhaustion safeguards.
  */
 
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, afterAll, vi } from 'vitest';
 import { aiKeyManager } from '../../server/services/ai/AIKeyManager';
+import { AIOrchestrator } from '../services/ai/AIOrchestrator';
 
 describe('JARVIS AI Token Quota & Tracking Engine', () => {
   it('initializes default token quotas for all providers', () => {
@@ -80,6 +81,34 @@ describe('JARVIS AI Token Quota & Tracking Engine', () => {
     const groqTier = aiKeyManager.setAccountTier('grok', 'groq_free');
     expect(groqTier.totalTokens).toBe(100000);
     expect(groqTier.rateLimitType).toBe('tpd');
+  });
+
+  it('handles Render Static Site empty 200 response when saving key without throwing JSON error', async () => {
+    const origFetch = global.fetch;
+    // Mock fetch returning empty body (Render Static Site behavior)
+    global.fetch = vi.fn().mockResolvedValue(new Response('', { status: 200, headers: { 'content-length': '0' } }));
+
+    const orchestrator = new AIOrchestrator();
+    const res = await orchestrator.saveKey('gemini', 'AIzaSyMockTestKey123456');
+
+    expect(res.success).toBe(true);
+    expect(orchestrator.getProviderConfigs().gemini.hasKey).toBe(true);
+    expect(orchestrator.getProviderConfigs().gemini.status).toBe('connected');
+
+    global.fetch = origFetch;
+  });
+
+  it('clears key from vault when removeKey is called', async () => {
+    const origFetch = global.fetch;
+    global.fetch = vi.fn().mockResolvedValue(new Response('', { status: 200 }));
+
+    const orchestrator = new AIOrchestrator();
+    await orchestrator.removeKey('gemini');
+
+    expect(orchestrator.getProviderConfigs().gemini.hasKey).toBe(false);
+    expect(orchestrator.getProviderConfigs().gemini.status).toBe('disconnected');
+
+    global.fetch = origFetch;
   });
 
   afterAll(() => {
