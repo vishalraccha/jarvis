@@ -3,6 +3,7 @@ import { BlackScholes } from '../services/gex/BlackScholes';
 import { GexEngine } from '../services/gex/GexEngine';
 import { OptionsDataProvider } from '../services/gex/OptionsDataProvider';
 import { OptionChainSnapshot, DEFAULT_GEX_SETTINGS } from '../types/gex';
+import { OrderBookManager } from '../services/orderbook/OrderBookManager';
 
 describe('BlackScholes Options Greeks Engine', () => {
   it('computes identical gamma for call and put at the same strike and parameters', () => {
@@ -307,5 +308,209 @@ describe('Instrument to Options-Underlying Mapping & Basis Disclaimers', () => {
   it('marks unsupported or unmapped instruments as having no valid options market', () => {
     const dogeMapping = OptionsDataProvider.getOptionsMapping('UNKNOWN_PAIR');
     expect(dogeMapping.hasOptionsMarket).toBe(false);
+  });
+});
+
+describe('Order Book GEX Engine — Cross-Exchange Verification Suite', () => {
+  it('correctly calculates GEX from OrderBookManager for Binance BTCUSDT', () => {
+    const ob = new OrderBookManager(1.0);
+    // Populate realistic order book around 90,000 spot
+    ob.applyIncrementalUpdate({
+      firstUpdateId: 1,
+      lastUpdateId: 1,
+      timestamp: Date.now(),
+      bids: [
+        [89900, 5.0],
+        [89800, 10.0],
+        [89500, 25.0], // Major bid support
+        [89000, 50.0], // Put Wall candidate
+      ],
+      asks: [
+        [90100, 4.0],
+        [90200, 8.0],
+        [90500, 30.0], // Major ask resistance
+        [91000, 60.0], // Call Wall candidate
+      ],
+    });
+
+    const metrics = GexEngine.computeGexFromOrderBook(
+      ob,
+      'BTCUSDT',
+      90000,
+      DEFAULT_GEX_SETTINGS,
+      'binance'
+    );
+
+    expect(metrics).toBeDefined();
+    expect(metrics.spotPrice).toBe(90000);
+    expect(metrics.strikes.length).toBeGreaterThan(0);
+    expect(metrics.callGex).toBeGreaterThan(0);
+    expect(metrics.putGex).toBeLessThan(0);
+    expect(metrics.callWall.strike).toBeGreaterThanOrEqual(90000);
+    expect(metrics.putWall.strike).toBeLessThanOrEqual(90000);
+    expect(metrics.gammaFlip).toBeDefined();
+    expect(metrics.provider).toContain('BINANCE');
+  });
+
+  it('correctly calculates GEX for COMEX Gold Futures (GC) with 100x multiplier', () => {
+    const ob = new OrderBookManager(0.1);
+    ob.applyIncrementalUpdate({
+      firstUpdateId: 1,
+      lastUpdateId: 1,
+      timestamp: Date.now(),
+      bids: [
+        [2745, 50],
+        [2740, 120],
+        [2735, 200], // Put Wall candidate
+        [2730, 80],
+      ],
+      asks: [
+        [2755, 40],
+        [2760, 150],
+        [2765, 250], // Call Wall candidate
+        [2770, 90],
+      ],
+    });
+
+    const metrics = GexEngine.computeGexFromOrderBook(
+      ob,
+      'GC',
+      2750,
+      DEFAULT_GEX_SETTINGS,
+      'comex'
+    );
+
+    expect(metrics).toBeDefined();
+    expect(metrics.strikes.length).toBeGreaterThan(0);
+    expect(metrics.callWall.strike).toBeGreaterThanOrEqual(2750);
+    expect(metrics.putWall.strike).toBeLessThanOrEqual(2750);
+    expect(metrics.provider).toContain('COMEX');
+  });
+
+  it('correctly calculates GEX for MT5 Vantage Gold (XAUUSD_VANTAGE)', () => {
+    const ob = new OrderBookManager(0.01);
+    ob.applyIncrementalUpdate({
+      firstUpdateId: 1,
+      lastUpdateId: 1,
+      timestamp: Date.now(),
+      bids: [
+        [2748.5, 30],
+        [2745.0, 90],
+        [2740.0, 150],
+      ],
+      asks: [
+        [2751.5, 25],
+        [2755.0, 85],
+        [2760.0, 160],
+      ],
+    });
+
+    const metrics = GexEngine.computeGexFromOrderBook(
+      ob,
+      'XAUUSD_VANTAGE',
+      2750,
+      DEFAULT_GEX_SETTINGS,
+      'mt5'
+    );
+
+    expect(metrics).toBeDefined();
+    expect(metrics.strikes.length).toBeGreaterThan(0);
+    expect(metrics.callGex).toBeGreaterThan(0);
+    expect(metrics.putGex).toBeLessThan(0);
+    expect(metrics.provider).toContain('MT5');
+  });
+
+  it('correctly calculates GEX for Bybit Crypto (SOLUSDT & ETHUSDT)', () => {
+    const ob = new OrderBookManager(0.01);
+    ob.applyIncrementalUpdate({
+      firstUpdateId: 1,
+      lastUpdateId: 1,
+      timestamp: Date.now(),
+      bids: [
+        [178, 500],
+        [175, 1200],
+        [170, 3000],
+      ],
+      asks: [
+        [182, 450],
+        [185, 1100],
+        [190, 3200],
+      ],
+    });
+
+    const metrics = GexEngine.computeGexFromOrderBook(
+      ob,
+      'SOLUSDT',
+      180,
+      DEFAULT_GEX_SETTINGS,
+      'bybit'
+    );
+
+    expect(metrics).toBeDefined();
+    expect(metrics.strikes.length).toBeGreaterThan(0);
+    expect(metrics.provider).toContain('BYBIT');
+    expect(metrics.callWall.strike).toBeGreaterThanOrEqual(180);
+    expect(metrics.putWall.strike).toBeLessThanOrEqual(180);
+  });
+
+  it('correctly calculates GEX for GoldPriceDev XAUUSD', () => {
+    const ob = new OrderBookManager(0.01);
+    ob.applyIncrementalUpdate({
+      firstUpdateId: 1,
+      lastUpdateId: 1,
+      timestamp: Date.now(),
+      bids: [
+        [2747, 40],
+        [2742, 100],
+      ],
+      asks: [
+        [2753, 35],
+        [2758, 95],
+      ],
+    });
+
+    const metrics = GexEngine.computeGexFromOrderBook(
+      ob,
+      'XAUUSD',
+      2750,
+      DEFAULT_GEX_SETTINGS,
+      'goldprice_dev'
+    );
+
+    expect(metrics).toBeDefined();
+    expect(metrics.strikes.length).toBeGreaterThan(0);
+    expect(metrics.provider).toContain('GOLDPRICE_DEV');
+  });
+
+  it('creates non-empty, fully valid OptionChainSnapshot from OrderBookManager', () => {
+    const ob = new OrderBookManager(0.01);
+    ob.applyIncrementalUpdate({
+      firstUpdateId: 1,
+      lastUpdateId: 1,
+      timestamp: Date.now(),
+      bids: [[2740, 100]],
+      asks: [[2760, 100]],
+    });
+
+    const snapshot = OptionsDataProvider.createOptionChainFromOrderBook(
+      ob,
+      'XAUUSD',
+      2750,
+      'binance'
+    );
+
+    expect(snapshot).toBeDefined();
+    expect(snapshot.spotPrice).toBe(2750);
+    expect(snapshot.contracts.length).toBeGreaterThan(0);
+
+    const callContract = snapshot.contracts.find((c) => c.type === 'call');
+    expect(callContract).toBeDefined();
+    expect(callContract?.gamma).toBeGreaterThan(0);
+    expect(callContract?.openInterest).toBeGreaterThan(0);
+
+    const putContract = snapshot.contracts.find((c) => c.type === 'put');
+    expect(putContract).toBeDefined();
+    expect(putContract?.gamma).toBeGreaterThan(0);
+    expect(putContract?.openInterest).toBeGreaterThan(0);
   });
 });

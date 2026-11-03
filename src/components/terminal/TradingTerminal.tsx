@@ -84,7 +84,12 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isAIConfigOpen, setIsAIConfigOpen] = useState(false);
   const [selectedAIConfigProvider, setSelectedAIConfigProvider] = useState<AIProvider | undefined>(undefined);
-  const [isAITerminalExpanded, setIsAITerminalExpanded] = useState(true);
+  const [isAITerminalExpanded, setIsAITerminalExpanded] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return window.innerWidth >= 1024;
+    }
+    return true;
+  });
   const [activeDrawingTool, setActiveDrawingTool] = useState<PositionType | null>(null);
 
   // GEX States
@@ -1068,21 +1073,42 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
     setSelectedAIConfigProvider(initialProvider);
     setIsAIConfigOpen(true);
   }, []);
+  const handleSelectDrawingTool = useCallback((tool: PositionType | null) => {
+    setActiveDrawingTool((prev) => (prev === tool ? null : tool));
+  }, []);
+  const handleClearDrawingTool = useCallback(() => {
+    setActiveDrawingTool(null);
+  }, []);
 
-  // GEX Options Chain Data Fetching
+  // GEX Options Chain & Order Book Calculation Engine
   const fetchOptionsData = useCallback(async (symbol: string) => {
     setIsGexLoading(true);
     try {
-      const chain = await OptionsDataProvider.fetchOptionChain(symbol);
+      const ob = orderBookRef.current;
+      const ex = preferencesRef.current.exchange;
+      const lastBar = latestCandlesRef.current[latestCandlesRef.current.length - 1];
+      const spot = ob.getLastTradedPrice() || ob.getStats().midPrice || ob.getBestBid() || (lastBar?.close || 0);
+
+      const metrics = GexEngine.computeGexFromOrderBook(
+        ob,
+        symbol,
+        spot,
+        preferences.gex,
+        ex,
+        latestCandlesRef.current
+      );
+      setGexMetrics(metrics);
+
+      const chain = OptionsDataProvider.createOptionChainFromOrderBook(
+        ob,
+        symbol,
+        spot,
+        ex,
+        latestCandlesRef.current
+      );
       setOptionChain(chain);
-      if (chain) {
-        const metrics = GexEngine.computeGexMetrics(chain, preferences.gex);
-        setGexMetrics(metrics);
-      } else {
-        setGexMetrics(null);
-      }
     } catch (err) {
-      console.error('[TradingTerminal] Failed to fetch GEX chain:', err);
+      console.error('[TradingTerminal] Failed to calculate GEX metrics:', err);
       setOptionChain(null);
       setGexMetrics(null);
     } finally {
@@ -1090,18 +1116,53 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
     }
   }, [preferences.gex]);
 
-  // Load option chain on symbol switch
+  // Load option chain on symbol or exchange switch
   useEffect(() => {
     fetchOptionsData(preferences.symbol);
-  }, [preferences.symbol, fetchOptionsData]);
+  }, [preferences.symbol, preferences.exchange, fetchOptionsData]);
 
-  // Re-calculate GEX metrics when settings or chain changes
+  // Real-Time GEX recalculation as Order Book depth updates
   useEffect(() => {
-    if (optionChain) {
-      const metrics = GexEngine.computeGexMetrics(optionChain, preferences.gex);
+    let lastCalcTime = 0;
+    const unsub = orderBook.subscribe(() => {
+      if (document.visibilityState === 'hidden') return;
+
+      const now = Date.now();
+      const prefs = preferencesRef.current;
+      const isGexActive = prefs.showGex || prefs.showGexProfile || isGexTerminalOpen;
+      const minInterval = isGexActive ? 400 : 2500;
+
+      // Adaptive throttle: 400ms when GEX is actively inspected/visualized, 2500ms when idle
+      if (now - lastCalcTime < minInterval) return;
+      lastCalcTime = now;
+
+      const sym = prefs.symbol;
+      const ex = prefs.exchange;
+      const gexSettings = prefs.gex;
+      const lastBar = latestCandlesRef.current[latestCandlesRef.current.length - 1];
+      const spot = orderBook.getLastTradedPrice() || orderBook.getStats().midPrice || orderBook.getBestBid() || (lastBar?.close || 0);
+
+      const metrics = GexEngine.computeGexFromOrderBook(
+        orderBook,
+        sym,
+        spot,
+        gexSettings,
+        ex,
+        latestCandlesRef.current
+      );
       setGexMetrics(metrics);
-    }
-  }, [optionChain, preferences.gex]);
+
+      const chain = OptionsDataProvider.createOptionChainFromOrderBook(
+        orderBook,
+        sym,
+        spot,
+        ex,
+        latestCandlesRef.current
+      );
+      setOptionChain(chain);
+    });
+    return unsub;
+  }, [orderBook, isGexTerminalOpen]);
 
   return (
     <div
@@ -1141,11 +1202,11 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         onOpenGexTerminal={handleOpenGexTerminal}
         gexMetrics={gexMetrics}
         onLockTerminal={onLockTerminal}
-        onOpenAIConfig={() => setIsAIConfigOpen(true)}
-        onToggleAITerminal={() => setIsAITerminalExpanded((prev) => !prev)}
+        onOpenAIConfig={handleOpenAIConfig}
+        onToggleAITerminal={handleToggleAITerminal}
         isAITerminalOpen={isAITerminalExpanded}
         activeDrawingTool={activeDrawingTool}
-        onSelectDrawingTool={(tool) => setActiveDrawingTool((prev) => (prev === tool ? null : tool))}
+        onSelectDrawingTool={handleSelectDrawingTool}
       />
 
       {/* Main Terminal Viewport: Left AI Panel + Right Chart Area */}
@@ -1175,7 +1236,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
             connectionState={connectionState}
             onLoadMoreHistory={handleLoadMoreHistory}
             activeDrawingTool={activeDrawingTool}
-            onClearDrawingTool={() => setActiveDrawingTool(null)}
+            onClearDrawingTool={handleClearDrawingTool}
             gexMetrics={gexMetrics}
             onOpenGexSettings={handleOpenGexTerminal}
           />
@@ -1262,6 +1323,8 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
       <GexTerminalModal
         isOpen={isGexTerminalOpen}
         onClose={() => setIsGexTerminalOpen(false)}
+        symbol={preferences.symbol}
+        currentSpotPrice={orderBook.getLastTradedPrice() || orderBook.getStats().midPrice || (latestCandlesRef.current[latestCandlesRef.current.length - 1]?.close || 0)}
         metrics={gexMetrics}
         settings={preferences.gex}
         onUpdateSettings={(patch) =>
@@ -1269,6 +1332,8 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         }
         onRefresh={() => fetchOptionsData(preferences.symbol)}
         isLoading={isGexLoading}
+        orderBook={orderBook}
+        exchange={preferences.exchange}
       />
     </div>
   );

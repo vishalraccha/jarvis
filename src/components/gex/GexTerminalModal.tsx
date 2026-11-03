@@ -32,6 +32,7 @@ import {
 } from '../../types/gex';
 import { GexEngine } from '../../services/gex/GexEngine';
 import { OptionsDataProvider } from '../../services/gex/OptionsDataProvider';
+import { OrderBookManager } from '../../services/orderbook/OrderBookManager';
 import { GexSummaryCard } from './GexSummaryCard';
 import { GexStrikeHistogram } from './GexStrikeHistogram';
 import { GexHeatmapMatrix } from './GexHeatmapMatrix';
@@ -49,6 +50,8 @@ interface GexTerminalModalProps {
   metrics?: GexMetrics | null;
   onRefresh?: () => void;
   isLoading?: boolean;
+  orderBook?: OrderBookManager;
+  exchange?: string;
 }
 
 type TabType = 'overview' | 'heatmap' | 'expirations' | 'scenarios' | 'models' | 'settings';
@@ -63,6 +66,8 @@ export const GexTerminalModal: React.FC<GexTerminalModalProps> = ({
   metrics: externalMetrics,
   onRefresh: externalRefresh,
   isLoading: externalLoading,
+  orderBook,
+  exchange = 'binance',
 }) => {
   const [activeTab, setActiveTab] = useState<TabType>('overview');
   const [snapshot, setSnapshot] = useState<OptionChainSnapshot | null>(null);
@@ -77,7 +82,7 @@ export const GexTerminalModal: React.FC<GexTerminalModalProps> = ({
   const loadOptionsData = useCallback(async () => {
     setInternalLoading(true);
     try {
-      const snap = await OptionsDataProvider.fetchOptionChain(symbol, currentSpotPrice);
+      const snap = await OptionsDataProvider.fetchOptionChain(symbol, currentSpotPrice, orderBook, exchange);
       setSnapshot(snap);
       const res = engine.calculate(snap, settings);
       setInternalMetrics(res);
@@ -86,7 +91,7 @@ export const GexTerminalModal: React.FC<GexTerminalModalProps> = ({
     } finally {
       setInternalLoading(false);
     }
-  }, [symbol, currentSpotPrice, settings, engine]);
+  }, [symbol, currentSpotPrice, orderBook, exchange, settings, engine]);
 
   useEffect(() => {
     if (isOpen && externalMetrics === undefined) {

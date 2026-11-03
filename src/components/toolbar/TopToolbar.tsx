@@ -31,6 +31,8 @@ import {
   Bot,
   Cpu,
   BarChart2,
+  Clock,
+  MoreHorizontal,
 } from 'lucide-react';
 import { CandleTimeframe, ConnectionState, ExchangeId, LatencyMetrics } from '../../types/market';
 import { TerminalPreferences } from '../../types/settings';
@@ -182,7 +184,7 @@ const ToolItem: React.FC<ToolItemProps> = ({
   </div>
 );
 
-type MenuType = 'exchange' | 'symbol' | 'timeframe' | 'tools' | 'view';
+type MenuType = 'exchange' | 'symbol' | 'timeframe' | 'tools' | 'view' | 'more';
 
 const TopToolbarComponent: React.FC<TopToolbarProps> = ({
   preferences,
@@ -214,6 +216,18 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
 }) => {
   const [openMenu, setOpenMenu] = useState<MenuType | null>(null);
   const toolbarRef = useRef<HTMLElement | null>(null);
+
+  const [isMobileScreen, setIsMobileScreen] = useState<boolean>(
+    () => typeof window !== 'undefined' && window.innerWidth < 768
+  );
+
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobileScreen(window.innerWidth < 768);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
   // Close open dropdowns on click outside
   useEffect(() => {
@@ -643,39 +657,95 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
           )}
         </div>
 
-        {/* Timeframe Selector Pills (Desktop) */}
-        <div className="timeframe-pills" style={{ background: 'rgba(255, 255, 255, 0.03)', borderRadius: 4, padding: 1.5, gap: 1 }}>
-          {SUPPORTED_TIMEFRAMES.map((tf) => {
-            const isSupported = currentInst.supportedIntervals.includes(tf);
-            return (
-              <button
-                key={tf}
-                disabled={!isSupported}
-                style={{
-                  height: 22,
-                  padding: '0 5px',
-                  fontSize: 10.5,
-                  fontWeight: preferences.timeframe === tf ? 700 : 500,
-                  border: 'none',
-                  background: preferences.timeframe === tf ? 'rgba(0, 180, 216, 0.22)' : 'transparent',
-                  color: preferences.timeframe === tf ? '#38bdf8' : isSupported ? '#788497' : '#334155',
-                  borderRadius: 3,
-                  cursor: isSupported ? 'pointer' : 'not-allowed',
-                  opacity: isSupported ? 1 : 0.35,
-                  transition: 'all 0.12s ease',
-                }}
-                onClick={() => isSupported && onUpdatePreferences({ timeframe: tf })}
-                title={
-                  !isSupported
-                    ? `${currentInst.provider} supports ${currentInst.supportedIntervals.join(', ')}`
-                    : `Switch timeframe to ${tf}`
-                }
-              >
-                {tf}
-              </button>
-            );
-          })}
-        </div>
+        {/* Timeframe Selector (Responsive Dropdown on Mobile <768px, Pills on Desktop) */}
+        {isMobileScreen ? (
+          <div style={{ position: 'relative' }}>
+            <button
+              className={`terminal-dropdown-btn ${openMenu === 'timeframe' ? 'open' : ''}`}
+              onClick={() => toggleMenu('timeframe')}
+              title="Select Candle Timeframe"
+              style={{
+                height: 26,
+                padding: '0 7px',
+                fontSize: 11,
+                gap: 4,
+                background: 'rgba(0, 180, 216, 0.1)',
+                border: '1px solid rgba(0, 180, 216, 0.35)',
+                color: '#38bdf8',
+              }}
+            >
+              <Clock size={11} />
+              <span style={{ fontWeight: 700 }}>{preferences.timeframe}</span>
+              <ChevronDown size={10} style={{ opacity: 0.7 }} />
+            </button>
+
+            {openMenu === 'timeframe' && (
+              <div className="terminal-dropdown-menu" style={{ width: 140, left: 0 }}>
+                <div className="terminal-menu-header">Candle Timeframe</div>
+                {SUPPORTED_TIMEFRAMES.map((tf) => {
+                  const isSupported = currentInst.supportedIntervals.includes(tf);
+                  const isSel = preferences.timeframe === tf;
+                  return (
+                    <div
+                      key={tf}
+                      className="terminal-menu-item"
+                      style={{
+                        padding: '6px 12px',
+                        fontWeight: isSel ? 700 : 500,
+                        color: isSel ? '#38bdf8' : isSupported ? '#cbd5e1' : '#475569',
+                        background: isSel ? 'rgba(0, 180, 216, 0.15)' : 'transparent',
+                        cursor: isSupported ? 'pointer' : 'not-allowed',
+                        opacity: isSupported ? 1 : 0.4,
+                      }}
+                      onClick={() => {
+                        if (isSupported) {
+                          onUpdatePreferences({ timeframe: tf });
+                          setOpenMenu(null);
+                        }
+                      }}
+                    >
+                      <span>{tf}</span>
+                      {isSel && <Check size={12} style={{ color: '#38bdf8' }} />}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="timeframe-pills" style={{ background: 'rgba(255, 255, 255, 0.03)', borderRadius: 4, padding: 1.5, gap: 1 }}>
+            {SUPPORTED_TIMEFRAMES.map((tf) => {
+              const isSupported = currentInst.supportedIntervals.includes(tf);
+              return (
+                <button
+                  key={tf}
+                  disabled={!isSupported}
+                  style={{
+                    height: 22,
+                    padding: '0 5px',
+                    fontSize: 10.5,
+                    fontWeight: preferences.timeframe === tf ? 700 : 500,
+                    border: 'none',
+                    background: preferences.timeframe === tf ? 'rgba(0, 180, 216, 0.22)' : 'transparent',
+                    color: preferences.timeframe === tf ? '#38bdf8' : isSupported ? '#788497' : '#334155',
+                    borderRadius: 3,
+                    cursor: isSupported ? 'pointer' : 'not-allowed',
+                    opacity: isSupported ? 1 : 0.35,
+                    transition: 'all 0.12s ease',
+                  }}
+                  onClick={() => isSupported && onUpdatePreferences({ timeframe: tf })}
+                  title={
+                    !isSupported
+                      ? `${currentInst.provider} supports ${currentInst.supportedIntervals.join(', ')}`
+                      : `Switch timeframe to ${tf}`
+                  }
+                >
+                  {tf}
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Subtle Vertical Divider */}
@@ -968,165 +1038,318 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
         </div>
 
 
-        {/* --- VIEW & LAYOUT DROPDOWN --- */}
-        <div style={{ position: 'relative' }}>
-          <button
-            className={`terminal-dropdown-btn ${openMenu === 'view' ? 'open' : ''}`}
-            onClick={() => toggleMenu('view')}
-            title="View & Layout Controls"
-            style={{ height: 26, padding: '0 7px', fontSize: 11 }}
-          >
-            <Settings size={12} />
-            <span>View</span>
-            <ChevronDown size={9} style={{ opacity: 0.6 }} />
-          </button>
+        {/* On Mobile (<768px), collapse View, Long/Short drawing tools, Diagnostics & Storage into a single "More" dropdown */}
+        {isMobileScreen ? (
+          <div style={{ position: 'relative' }}>
+            <button
+              className={`terminal-dropdown-btn ${openMenu === 'more' ? 'open' : ''} ${activeDrawingTool ? 'active' : ''}`}
+              onClick={() => toggleMenu('more')}
+              title="More Actions & View Controls"
+              style={{ height: 26, padding: '0 7px', fontSize: 11, gap: 3 }}
+            >
+              <MoreHorizontal size={14} />
+            </button>
 
-          {openMenu === 'view' && (
-            <div className="terminal-dropdown-menu" style={{ width: 220 }}>
-              <div className="terminal-menu-header">Chart Display Mode</div>
-              <div style={{ padding: '4px 10px 6px 10px' }}>
-                <select
-                  value={preferences.chartMode || 'candles'}
-                  onChange={(e) => {
-                    const mode = e.target.value as ChartMode;
-                    if (mode === 'candles') {
-                      onUpdatePreferences({ chartMode: mode, showCandles: true, showHeatmap: false, showFootprint: false });
-                    } else if (mode === 'heatmap') {
-                      onUpdatePreferences({ chartMode: mode, showCandles: true, showHeatmap: true, showFootprint: false });
-                    } else if (mode === 'footprint') {
-                      onUpdatePreferences({ chartMode: mode, showCandles: true, showHeatmap: false, showFootprint: true, footprint: { ...preferences.footprint, enabled: true } });
-                    } else if (mode === 'heatmap_footprint') {
-                      onUpdatePreferences({ chartMode: mode, showCandles: true, showHeatmap: true, showFootprint: true, footprint: { ...preferences.footprint, enabled: true } });
-                    }
-                  }}
+            {openMenu === 'more' && (
+              <div className="terminal-dropdown-menu" style={{ width: 230, right: 0, left: 'auto' }}>
+                <div className="terminal-menu-header">Trading Tools</div>
+                <div
+                  className="terminal-menu-item"
                   style={{
-                    width: '100%',
-                    background: '#141a27',
-                    border: '1px solid rgba(0, 180, 216, 0.35)',
-                    borderRadius: 4,
-                    color: '#38bdf8',
-                    fontSize: 11,
-                    fontWeight: 700,
-                    padding: '3px 6px',
-                    outline: 'none',
-                    cursor: 'pointer',
+                    background: activeDrawingTool === 'LONG' ? 'rgba(8, 153, 129, 0.18)' : 'transparent',
+                    color: activeDrawingTool === 'LONG' ? '#10b981' : '#cbd5e1',
+                  }}
+                  onClick={() => {
+                    onSelectDrawingTool?.(activeDrawingTool === 'LONG' ? null : 'LONG');
+                    setOpenMenu(null);
                   }}
                 >
-                  <option value="candles">Standard Candles</option>
-                  <option value="heatmap">Heatmap</option>
-                  <option value="footprint">Footprint</option>
-                  <option value="heatmap_footprint">Heatmap + Footprint</option>
-                </select>
-              </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                    <TrendingUp size={13} color="#10b981" />
+                    <span>Long Position Tool</span>
+                  </div>
+                  {activeDrawingTool === 'LONG' && <Check size={13} style={{ color: '#10b981' }} />}
+                </div>
 
-              <div className="terminal-menu-divider" />
-              <div className="terminal-menu-header">Navigation & Zoom</div>
-              <div
-                className="terminal-menu-item"
-                onClick={() => {
-                  onUpdatePreferences({ autoScrollToLatest: !preferences.autoScrollToLatest });
-                  onJumpToLatest();
-                }}
-              >
-                <span>Auto-Follow Price</span>
-                <Switch
-                  checked={preferences.autoScrollToLatest}
-                  onChange={(c) => {
-                    onUpdatePreferences({ autoScrollToLatest: c });
-                    if (c) onJumpToLatest();
+                <div
+                  className="terminal-menu-item"
+                  style={{
+                    background: activeDrawingTool === 'SHORT' ? 'rgba(242, 54, 69, 0.18)' : 'transparent',
+                    color: activeDrawingTool === 'SHORT' ? '#f87171' : '#cbd5e1',
                   }}
-                />
-              </div>
+                  onClick={() => {
+                    onSelectDrawingTool?.(activeDrawingTool === 'SHORT' ? null : 'SHORT');
+                    setOpenMenu(null);
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+                    <TrendingDown size={13} color="#f87171" />
+                    <span>Short Position Tool</span>
+                  </div>
+                  {activeDrawingTool === 'SHORT' && <Check size={13} style={{ color: '#f87171' }} />}
+                </div>
 
-              <div className="terminal-menu-item action-btn" onClick={onZoomIn}>
-                <span>Zoom In</span>
-                <ZoomIn size={12} />
-              </div>
-              <div className="terminal-menu-item action-btn" onClick={onZoomOut}>
-                <span>Zoom Out</span>
-                <ZoomOut size={12} />
-              </div>
-              <div className="terminal-menu-item action-btn" onClick={onResetView}>
-                <span>Reset View</span>
-                <RotateCcw size={12} />
-              </div>
-              <div className="terminal-menu-item action-btn" onClick={onToggleFullscreen}>
-                <span>{isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}</span>
-                {isFullscreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
-              </div>
+                <div className="terminal-menu-divider" />
+                <div className="terminal-menu-header">Chart Display Mode</div>
+                <div style={{ padding: '4px 10px 6px 10px' }}>
+                  <select
+                    value={preferences.chartMode || 'candles'}
+                    onChange={(e) => {
+                      const mode = e.target.value as ChartMode;
+                      if (mode === 'candles') {
+                        onUpdatePreferences({ chartMode: mode, showCandles: true, showHeatmap: false, showFootprint: false });
+                      } else if (mode === 'heatmap') {
+                        onUpdatePreferences({ chartMode: mode, showCandles: true, showHeatmap: true, showFootprint: false });
+                      } else if (mode === 'footprint') {
+                        onUpdatePreferences({ chartMode: mode, showCandles: true, showHeatmap: false, showFootprint: true, footprint: { ...preferences.footprint, enabled: true } });
+                      } else if (mode === 'heatmap_footprint') {
+                        onUpdatePreferences({ chartMode: mode, showCandles: true, showHeatmap: true, showFootprint: true, footprint: { ...preferences.footprint, enabled: true } });
+                      }
+                      setOpenMenu(null);
+                    }}
+                    style={{
+                      width: '100%',
+                      background: '#141a27',
+                      border: '1px solid rgba(0, 180, 216, 0.35)',
+                      borderRadius: 4,
+                      color: '#38bdf8',
+                      fontSize: 11,
+                      fontWeight: 700,
+                      padding: '4px 6px',
+                      outline: 'none',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <option value="candles">Standard Candles</option>
+                    <option value="heatmap">Heatmap</option>
+                    <option value="footprint">Footprint</option>
+                    <option value="heatmap_footprint">Heatmap + Footprint</option>
+                  </select>
+                </div>
 
-              <div className="terminal-menu-divider" />
-              <div className="terminal-menu-header">Diagnostics & Storage</div>
-              <div
-                className="terminal-menu-item action-btn"
-                onClick={() => {
-                  setOpenMenu(null);
-                  onOpenDiagnostics();
-                }}
-              >
-                <span>L2 Diagnostics</span>
-                <Activity size={12} />
+                <div className="terminal-menu-divider" />
+                <div className="terminal-menu-header">Navigation & Zoom</div>
+                <div
+                  className="terminal-menu-item"
+                  onClick={() => {
+                    onUpdatePreferences({ autoScrollToLatest: !preferences.autoScrollToLatest });
+                    onJumpToLatest();
+                  }}
+                >
+                  <span>Auto-Follow Price</span>
+                  <Switch
+                    checked={preferences.autoScrollToLatest}
+                    onChange={(c) => {
+                      onUpdatePreferences({ autoScrollToLatest: c });
+                      if (c) onJumpToLatest();
+                    }}
+                  />
+                </div>
+                <div className="terminal-menu-item action-btn" onClick={() => { onZoomIn(); setOpenMenu(null); }}>
+                  <span>Zoom In</span>
+                  <ZoomIn size={12} />
+                </div>
+                <div className="terminal-menu-item action-btn" onClick={() => { onZoomOut(); setOpenMenu(null); }}>
+                  <span>Zoom Out</span>
+                  <ZoomOut size={12} />
+                </div>
+                <div className="terminal-menu-item action-btn" onClick={() => { onResetView(); setOpenMenu(null); }}>
+                  <span>Reset View</span>
+                  <RotateCcw size={12} />
+                </div>
+                <div className="terminal-menu-item action-btn" onClick={() => { onToggleFullscreen(); setOpenMenu(null); }}>
+                  <span>{isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}</span>
+                  {isFullscreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+                </div>
+
+                <div className="terminal-menu-divider" />
+                <div className="terminal-menu-header">Diagnostics & Storage</div>
+                <div
+                  className="terminal-menu-item action-btn"
+                  onClick={() => {
+                    setOpenMenu(null);
+                    onOpenDiagnostics();
+                  }}
+                >
+                  <span>L2 Diagnostics</span>
+                  <Activity size={12} />
+                </div>
+                <div
+                  className="terminal-menu-item action-btn"
+                  onClick={() => {
+                    setOpenMenu(null);
+                    onOpenCacheModal();
+                  }}
+                >
+                  <span>Cache & Storage</span>
+                  <Database size={12} />
+                </div>
               </div>
-              <div
-                className="terminal-menu-item action-btn"
-                onClick={() => {
-                  setOpenMenu(null);
-                  onOpenCacheModal();
-                }}
+            )}
+          </div>
+        ) : (
+          <>
+            {/* --- VIEW & LAYOUT DROPDOWN (DESKTOP) --- */}
+            <div style={{ position: 'relative' }}>
+              <button
+                className={`terminal-dropdown-btn ${openMenu === 'view' ? 'open' : ''}`}
+                onClick={() => toggleMenu('view')}
+                title="View & Layout Controls"
+                style={{ height: 26, padding: '0 7px', fontSize: 11 }}
               >
-                <span>Cache & Storage</span>
-                <Database size={12} />
-              </div>
+                <Settings size={12} />
+                <span>View</span>
+                <ChevronDown size={9} style={{ opacity: 0.6 }} />
+              </button>
+
+              {openMenu === 'view' && (
+                <div className="terminal-dropdown-menu" style={{ width: 220 }}>
+                  <div className="terminal-menu-header">Chart Display Mode</div>
+                  <div style={{ padding: '4px 10px 6px 10px' }}>
+                    <select
+                      value={preferences.chartMode || 'candles'}
+                      onChange={(e) => {
+                        const mode = e.target.value as ChartMode;
+                        if (mode === 'candles') {
+                          onUpdatePreferences({ chartMode: mode, showCandles: true, showHeatmap: false, showFootprint: false });
+                        } else if (mode === 'heatmap') {
+                          onUpdatePreferences({ chartMode: mode, showCandles: true, showHeatmap: true, showFootprint: false });
+                        } else if (mode === 'footprint') {
+                          onUpdatePreferences({ chartMode: mode, showCandles: true, showHeatmap: false, showFootprint: true, footprint: { ...preferences.footprint, enabled: true } });
+                        } else if (mode === 'heatmap_footprint') {
+                          onUpdatePreferences({ chartMode: mode, showCandles: true, showHeatmap: true, showFootprint: true, footprint: { ...preferences.footprint, enabled: true } });
+                        }
+                      }}
+                      style={{
+                        width: '100%',
+                        background: '#141a27',
+                        border: '1px solid rgba(0, 180, 216, 0.35)',
+                        borderRadius: 4,
+                        color: '#38bdf8',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        padding: '3px 6px',
+                        outline: 'none',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <option value="candles">Standard Candles</option>
+                      <option value="heatmap">Heatmap</option>
+                      <option value="footprint">Footprint</option>
+                      <option value="heatmap_footprint">Heatmap + Footprint</option>
+                    </select>
+                  </div>
+
+                  <div className="terminal-menu-divider" />
+                  <div className="terminal-menu-header">Navigation & Zoom</div>
+                  <div
+                    className="terminal-menu-item"
+                    onClick={() => {
+                      onUpdatePreferences({ autoScrollToLatest: !preferences.autoScrollToLatest });
+                      onJumpToLatest();
+                    }}
+                  >
+                    <span>Auto-Follow Price</span>
+                    <Switch
+                      checked={preferences.autoScrollToLatest}
+                      onChange={(c) => {
+                        onUpdatePreferences({ autoScrollToLatest: c });
+                        if (c) onJumpToLatest();
+                      }}
+                    />
+                  </div>
+
+                  <div className="terminal-menu-item action-btn" onClick={onZoomIn}>
+                    <span>Zoom In</span>
+                    <ZoomIn size={12} />
+                  </div>
+                  <div className="terminal-menu-item action-btn" onClick={onZoomOut}>
+                    <span>Zoom Out</span>
+                    <ZoomOut size={12} />
+                  </div>
+                  <div className="terminal-menu-item action-btn" onClick={onResetView}>
+                    <span>Reset View</span>
+                    <RotateCcw size={12} />
+                  </div>
+                  <div className="terminal-menu-item action-btn" onClick={onToggleFullscreen}>
+                    <span>{isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}</span>
+                    {isFullscreen ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+                  </div>
+
+                  <div className="terminal-menu-divider" />
+                  <div className="terminal-menu-header">Diagnostics & Storage</div>
+                  <div
+                    className="terminal-menu-item action-btn"
+                    onClick={() => {
+                      setOpenMenu(null);
+                      onOpenDiagnostics();
+                    }}
+                  >
+                    <span>L2 Diagnostics</span>
+                    <Activity size={12} />
+                  </div>
+                  <div
+                    className="terminal-menu-item action-btn"
+                    onClick={() => {
+                      setOpenMenu(null);
+                      onOpenCacheModal();
+                    }}
+                  >
+                    <span>Cache & Storage</span>
+                    <Database size={12} />
+                  </div>
+                </div>
+              )}
             </div>
-          )}
-        </div>
 
-        {/* TradingView-Style Long & Short Position Icon-Only Quick Tools */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 3, marginLeft: 2 }}>
-          <button
-            className={`tool-btn ${activeDrawingTool === 'LONG' ? 'active' : ''}`}
-            onClick={() => onSelectDrawingTool?.(activeDrawingTool === 'LONG' ? null : 'LONG')}
-            style={{
-              width: 26,
-              height: 26,
-              padding: 0,
-              borderRadius: 4,
-              background: activeDrawingTool === 'LONG' ? 'rgba(8, 153, 129, 0.32)' : 'rgba(255, 255, 255, 0.04)',
-              border: `1px solid ${activeDrawingTool === 'LONG' ? '#089981' : 'rgba(255, 255, 255, 0.1)'}`,
-              color: activeDrawingTool === 'LONG' ? '#089981' : '#94a3b8',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              boxShadow: activeDrawingTool === 'LONG' ? '0 0 8px rgba(8, 153, 129, 0.5)' : 'none',
-            }}
-            title="Long Position Tool - Click chart to place"
-          >
-            <TrendingUp size={13} color={activeDrawingTool === 'LONG' ? '#089981' : '#10b981'} />
-          </button>
+            {/* TradingView-Style Long & Short Position Icon-Only Quick Tools */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 3, marginLeft: 2 }}>
+              <button
+                className={`tool-btn ${activeDrawingTool === 'LONG' ? 'active' : ''}`}
+                onClick={() => onSelectDrawingTool?.(activeDrawingTool === 'LONG' ? null : 'LONG')}
+                style={{
+                  width: 26,
+                  height: 26,
+                  padding: 0,
+                  borderRadius: 4,
+                  background: activeDrawingTool === 'LONG' ? 'rgba(8, 153, 129, 0.32)' : 'rgba(255, 255, 255, 0.04)',
+                  border: `1px solid ${activeDrawingTool === 'LONG' ? '#089981' : 'rgba(255, 255, 255, 0.1)'}`,
+                  color: activeDrawingTool === 'LONG' ? '#089981' : '#94a3b8',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  boxShadow: activeDrawingTool === 'LONG' ? '0 0 8px rgba(8, 153, 129, 0.5)' : 'none',
+                }}
+                title="Long Position Tool - Click chart to place"
+              >
+                <TrendingUp size={13} color={activeDrawingTool === 'LONG' ? '#089981' : '#10b981'} />
+              </button>
 
-          <button
-            className={`tool-btn ${activeDrawingTool === 'SHORT' ? 'active' : ''}`}
-            onClick={() => onSelectDrawingTool?.(activeDrawingTool === 'SHORT' ? null : 'SHORT')}
-            style={{
-              width: 26,
-              height: 26,
-              padding: 0,
-              borderRadius: 4,
-              background: activeDrawingTool === 'SHORT' ? 'rgba(242, 54, 69, 0.32)' : 'rgba(255, 255, 255, 0.04)',
-              border: `1px solid ${activeDrawingTool === 'SHORT' ? '#f23645' : 'rgba(255, 255, 255, 0.1)'}`,
-              color: activeDrawingTool === 'SHORT' ? '#f23645' : '#94a3b8',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              cursor: 'pointer',
-              boxShadow: activeDrawingTool === 'SHORT' ? '0 0 8px rgba(242, 54, 69, 0.5)' : 'none',
-            }}
-            title="Short Position Tool - Click chart to place"
-          >
-            <TrendingDown size={13} color={activeDrawingTool === 'SHORT' ? '#f23645' : '#ef4444'} />
-          </button>
-        </div>
+              <button
+                className={`tool-btn ${activeDrawingTool === 'SHORT' ? 'active' : ''}`}
+                onClick={() => onSelectDrawingTool?.(activeDrawingTool === 'SHORT' ? null : 'SHORT')}
+                style={{
+                  width: 26,
+                  height: 26,
+                  padding: 0,
+                  borderRadius: 4,
+                  background: activeDrawingTool === 'SHORT' ? 'rgba(242, 54, 69, 0.32)' : 'rgba(255, 255, 255, 0.04)',
+                  border: `1px solid ${activeDrawingTool === 'SHORT' ? '#f23645' : 'rgba(255, 255, 255, 0.1)'}`,
+                  color: activeDrawingTool === 'SHORT' ? '#f23645' : '#94a3b8',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  boxShadow: activeDrawingTool === 'SHORT' ? '0 0 8px rgba(242, 54, 69, 0.5)' : 'none',
+                }}
+                title="Short Position Tool - Click chart to place"
+              >
+                <TrendingDown size={13} color={activeDrawingTool === 'SHORT' ? '#f23645' : '#ef4444'} />
+              </button>
+            </div>
+          </>
+        )}
       </div>
 
       {/* ============================================================ */}

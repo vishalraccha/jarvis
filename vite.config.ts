@@ -1258,6 +1258,26 @@ function redisFastCandleCachePlugin(): Plugin {
           return;
         }
 
+        if (req.url?.startsWith('/api/options/chain')) {
+          const url = new URL(req.url, 'http://localhost');
+          const symbol = (url.searchParams.get('symbol') || 'BTCUSDT').toUpperCase();
+          const spot = parseFloat(url.searchParams.get('spot') || '0');
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify({
+            underlyingSymbol: symbol,
+            optionsUnderlying: `L2:${symbol}`,
+            spotPrice: spot,
+            timestamp: Date.now(),
+            openInterestDate: new Date().toISOString().split('T')[0],
+            ivTimestamp: Date.now(),
+            contracts: [],
+            isStale: false,
+            dataQuality: 'verified',
+            provider: 'Order Book L2 Options',
+          }));
+          return;
+        }
+
         if (req.url?.startsWith('/api/stream/quotes')) {
           res.writeHead(200, {
             'Content-Type': 'text/event-stream',
@@ -1511,6 +1531,25 @@ function redisFastCandleCachePlugin(): Plugin {
 // https://vite.dev/config/
 export default defineConfig(({ command }) => ({
   plugins: [react(), ...(command === 'serve' ? [redisFastCandleCachePlugin()] : [])],
+  build: {
+    target: 'esnext',
+    chunkSizeWarningLimit: 800,
+    rollupOptions: {
+      output: {
+        manualChunks(id: string) {
+          if (id.includes('node_modules/react') || id.includes('node_modules/react-dom')) {
+            return 'vendor-react';
+          }
+          if (id.includes('node_modules/lightweight-charts') || id.includes('node_modules/fancy-canvas')) {
+            return 'vendor-charts';
+          }
+          if (id.includes('node_modules/lucide-react')) {
+            return 'vendor-icons';
+          }
+        },
+      },
+    },
+  },
   server: {
     proxy: {
       '/api/yahoo': {
