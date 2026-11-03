@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: jarvis-terminal
+    runtime: node
+    plan: free
+    region: oregon
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 10000
+      # Optional: set REDIS_URL if using Upstash / Render Redis.
+      # If omitted or offline, JARVIS seamlessly falls back to embedded zero-allocation LRU cache ($0/mo cost).
+      - key: REDIS_URL
+        sync: false

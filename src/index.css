@@ -1,0 +1,616 @@
+/* JARVIS HEATMAP TERMINAL - CORE STYLES */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+:root {
+  --bg-primary: #0a0d14;
+  --bg-secondary: #10141f;
+  --bg-tertiary: #181d2c;
+  --bg-card: rgba(18, 23, 36, 0.85);
+  
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-highlight: rgba(0, 180, 216, 0.3);
+  
+  --text-primary: #f1f5f9;
+  --text-secondary: #94a3b8;
+  --text-muted: #64748b;
+  
+  --color-cyan: #00b4d8;
+  --color-blue: #0077b6;
+  --color-yellow: #ffe600;
+  --color-orange: #ff6b00;
+  --color-red: #ff2d55;
+  --color-green: #00e676;
+  
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: #080b11;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e2536;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2d374d;
+}
+
+/* Tooltip styles */
+.jarvis-tooltip {
+  position: absolute;
+  z-index: 1000;
+  pointer-events: none;
+  background: rgba(10, 14, 22, 0.96);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(0, 180, 216, 0.35);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.75);
+  transition: opacity 0.1s ease;
+}
+
+/* Modal Backdrop */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 7, 12, 0.82);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+.modal-content {
+  background: #0f141f;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.85);
+  width: 90%;
+  max-width: 580px;
+  max-height: 85vh;
+  overflow-y: auto;
+  color: var(--text-primary);
+}
+
+/* Professional Top Toolbar Design System */
+.terminal-dropdown-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 9px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 4px;
+  color: #94a3b8;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  white-space: nowrap;
+}
+
+.terminal-dropdown-btn:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: #f1f5f9;
+}
+
+.terminal-dropdown-btn.active {
+  background: rgba(0, 180, 216, 0.14);
+  border-color: rgba(0, 180, 216, 0.45);
+  color: #38bdf8;
+}
+
+.terminal-dropdown-btn.open {
+  background: rgba(0, 180, 216, 0.2);
+  border-color: #00b4d8;
+  color: #ffffff;
+  box-shadow: 0 0 10px rgba(0, 180, 216, 0.25);
+}
+
+/* Dropdown Menu Container */
+.terminal-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  background: #0d121c;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.95), 0 0 1px rgba(255, 255, 255, 0.3);
+  padding: 6px 0;
+  z-index: 100000;
+  min-width: 220px;
+  max-height: calc(100vh - 60px);
+  overflow-y: auto;
+  animation: terminalFadeIn 0.14s ease-out;
+  backdrop-filter: blur(20px);
+}
+
+@keyframes terminalFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.terminal-menu-header {
+  font-size: 9.5px;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 6px 12px 3px 12px;
+}
+
+.terminal-menu-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.06);
+  margin: 5px 0;
+}
+
+.terminal-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 12px;
+  font-size: 11.5px;
+  color: #cbd5e1;
+  cursor: pointer;
+  transition: background 0.1s ease;
+  user-select: none;
+}
+
+.terminal-menu-item:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: #ffffff;
+}
+
+.terminal-menu-item.action-btn {
+  color: #38bdf8;
+  font-weight: 600;
+}
+
+.terminal-menu-item.action-btn:hover {
+  background: rgba(0, 180, 216, 0.12);
+}
+
+/* Sleek Toggle Switch */
+.terminal-switch {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 28px;
+  height: 16px;
+  flex-shrink: 0;
+  border-radius: 16px;
+  background-color: #242c3d;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  cursor: pointer;
+  padding: 0;
+  margin: 0;
+  outline: none;
+  transition: background-color 0.18s cubic-bezier(0.4, 0, 0.2, 1), border-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+.terminal-switch:hover {
+  border-color: rgba(0, 180, 216, 0.4);
+}
+
+.terminal-switch.checked {
+  background-color: #0284c7;
+  border-color: #38bdf8;
+  box-shadow: 0 0 8px rgba(0, 180, 216, 0.35);
+}
+
+.terminal-switch-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  height: 10px;
+  width: 10px;
+  border-radius: 50%;
+  background-color: #94a3b8;
+  transition: transform 0.18s cubic-bezier(0.4, 0, 0.2, 1), background-color 0.18s ease;
+  pointer-events: none;
+}
+
+.terminal-switch.checked .terminal-switch-knob {
+  transform: translateX(12px);
+  background-color: #ffffff;
+  box-shadow: 0 0 4px rgba(255, 255, 255, 0.8);
+}
+
+/* Legacy input compatibility */
+.terminal-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.terminal-switch-slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background-color: #242c3d;
+  transition: 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.terminal-switch-slider:before {
+  position: absolute;
+  content: "";
+  height: 10px;
+  width: 10px;
+  left: 2px;
+  bottom: 2px;
+  background-color: #94a3b8;
+  transition: 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 50%;
+}
+
+.terminal-switch input:checked + .terminal-switch-slider {
+  background-color: #0284c7;
+  border-color: #38bdf8;
+}
+
+.terminal-switch input:checked + .terminal-switch-slider:before {
+  transform: translateX(12px);
+  background-color: #ffffff;
+}
+
+/* Compact Buttons */
+.tool-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.tool-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+
+.tool-btn.active {
+  background: rgba(0, 180, 216, 0.15);
+  border-color: rgba(0, 180, 216, 0.45);
+  color: #38bdf8;
+  font-weight: 600;
+}
+
+.tool-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Top Toolbar Responsive Layout Protection */
+.terminal-top-toolbar {
+  overflow: visible !important;
+  position: relative !important;
+  z-index: 99999 !important;
+}
+
+.toolbar-tools-group {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.toolbar-tools-group::-webkit-scrollbar {
+  display: none;
+}
+
+.toolbar-status-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.timeframe-pills {
+  display: flex;
+}
+
+/* ========================================================================== */
+/* RESPONSIVE DESIGN SYSTEM — 7 CORE VIEWPORT BREAKPOINTS                     */
+/* Small Mobile: 320–375px | Standard Mobile: 376–430px | Large Mobile: 431–767px */
+/* Tablet: 768–1023px | Small Desktop: 1024–1279px | Standard: 1280–1599px    */
+/* Large Desktop: 1600px+                                                     */
+/* ========================================================================== */
+
+/* 1. Large Desktop (1600px+) */
+@media (min-width: 1600px) {
+  .terminal-top-toolbar {
+    height: 44px !important;
+    padding: 0 14px !important;
+  }
+  .terminal-brand-text {
+    font-size: 13.5px !important;
+  }
+}
+
+/* 2. Standard Desktop (1280px – 1599px) */
+@media (min-width: 1280px) and (max-width: 1599px) {
+  .terminal-top-toolbar {
+    height: 42px !important;
+    padding: 0 10px !important;
+  }
+}
+
+/* 3. Small Desktop (1024px – 1279px) */
+@media (min-width: 1024px) and (max-width: 1279px) {
+  .terminal-top-toolbar {
+    height: 40px !important;
+    padding: 0 8px !important;
+  }
+  .toolbar-symbol-btn {
+    max-width: 125px !important;
+  }
+  .timeframe-pills button {
+    padding: 0 4px !important;
+    font-size: 10px !important;
+  }
+}
+
+/* 4. Tablet (768px – 1023px) */
+@media (min-width: 768px) and (max-width: 1023px) {
+  .terminal-brand-text {
+    font-size: 11px !important;
+  }
+  .timeframe-pills {
+    display: flex !important;
+    overflow-x: auto !important;
+    scrollbar-width: none !important;
+  }
+  /* On tablet, convert side panels into smooth overlay drawer so chart retains 100% width */
+  .jarvis-ai-terminal-panel {
+    position: absolute !important;
+    top: 0 !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    width: 360px !important;
+    max-width: 80vw !important;
+    z-index: 50 !important;
+    box-shadow: 12px 0 40px rgba(0, 0, 0, 0.85), 1px 0 0 rgba(255, 255, 255, 0.12) !important;
+    transition: transform 0.22s cubic-bezier(0.4, 0, 0.2, 1) !important;
+  }
+}
+
+/* 5. Large Mobile (431px – 767px) */
+@media (min-width: 431px) and (max-width: 767px) {
+  .terminal-brand-text {
+    display: none !important;
+  }
+  .timeframe-pills {
+    display: flex !important;
+    overflow-x: auto !important;
+    scrollbar-width: none !important;
+  }
+  .toolbar-clock-container {
+    display: none !important;
+  }
+  .jarvis-ai-terminal-panel {
+    position: absolute !important;
+    top: 0 !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    width: 100vw !important;
+    max-width: 100vw !important;
+    z-index: 50 !important;
+    border-right: none !important;
+    box-shadow: none !important;
+  }
+  .terminal-dropdown-menu {
+    position: fixed !important;
+    top: 44px !important;
+    left: 8px !important;
+    right: 8px !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: calc(100vw - 16px) !important;
+    max-height: calc(100dvh - 54px) !important;
+  }
+  .modal-content {
+    width: 95% !important;
+    max-width: calc(100vw - 16px) !important;
+    max-height: 90dvh !important;
+  }
+}
+
+/* 6. Standard Mobile (376px – 430px) */
+@media (min-width: 376px) and (max-width: 430px) {
+  .terminal-brand-text {
+    display: none !important;
+  }
+  .timeframe-pills {
+    display: flex !important;
+    overflow-x: auto !important;
+    scrollbar-width: none !important;
+  }
+  .toolbar-clock-container {
+    display: none !important;
+  }
+  .toolbar-status-pill .toolbar-status-label {
+    display: none !important;
+  }
+  .toolbar-symbol-btn {
+    max-width: 105px !important;
+    font-size: 10.5px !important;
+    padding: 0 5px !important;
+  }
+  .gex-quick-btn {
+    padding: 0 5px !important;
+    font-size: 10px !important;
+  }
+  .jarvis-ai-terminal-panel {
+    position: absolute !important;
+    top: 0 !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    width: 100vw !important;
+    max-width: 100vw !important;
+    z-index: 50 !important;
+    border-right: none !important;
+    box-shadow: none !important;
+  }
+  .terminal-dropdown-menu {
+    position: fixed !important;
+    top: 44px !important;
+    left: 6px !important;
+    right: 6px !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: calc(100vw - 12px) !important;
+    max-height: calc(100dvh - 52px) !important;
+  }
+  .modal-content {
+    width: 96% !important;
+    max-width: calc(100vw - 12px) !important;
+    max-height: 92dvh !important;
+  }
+}
+
+/* 7. Small Mobile (320px – 375px) */
+@media (max-width: 375px) {
+  .terminal-top-toolbar {
+    height: 38px !important;
+    padding: 0 4px !important;
+    gap: 3px !important;
+  }
+  .terminal-brand-text {
+    display: none !important;
+  }
+  .timeframe-pills {
+    display: flex !important;
+    overflow-x: auto !important;
+    scrollbar-width: none !important;
+  }
+  .toolbar-clock-container {
+    display: none !important;
+  }
+  .toolbar-status-pill {
+    padding: 2px 4px !important;
+    font-size: 8.5px !important;
+    gap: 2px !important;
+  }
+  .toolbar-status-pill .toolbar-status-label {
+    display: none !important;
+  }
+  .toolbar-symbol-btn {
+    max-width: 78px !important;
+    font-size: 10px !important;
+    padding: 0 4px !important;
+  }
+  .terminal-dropdown-btn {
+    font-size: 9.5px !important;
+    padding: 0 4px !important;
+  }
+  .gex-quick-btn {
+    padding: 0 3px !important;
+    font-size: 9.5px !important;
+  }
+  .jarvis-ai-terminal-panel {
+    position: absolute !important;
+    top: 0 !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    width: 100vw !important;
+    max-width: 100vw !important;
+    z-index: 50 !important;
+    border-right: none !important;
+    box-shadow: none !important;
+  }
+  .terminal-dropdown-menu {
+    position: fixed !important;
+    top: 40px !important;
+    left: 4px !important;
+    right: 4px !important;
+    width: auto !important;
+    min-width: 0 !important;
+    max-width: calc(100vw - 8px) !important;
+    max-height: calc(100dvh - 46px) !important;
+  }
+  .modal-content {
+    width: 98% !important;
+    max-width: calc(100vw - 8px) !important;
+    max-height: 94dvh !important;
+    padding: 10px !important;
+  }
+}
+
+/* Touch responsiveness: prevent accidental pull-to-refresh or tap delay */
+.jarvis-chart-container,
+.jarvis-trading-terminal,
+canvas {
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* TradingView-style smooth crosshair cursor and marker across charting surface */
+.jarvis-chart-container,
+.jarvis-chart-container canvas,
+.jarvis-chart-container .tv-lightweight-charts,
+.jarvis-chart-container .tv-lightweight-charts canvas {
+  cursor: crosshair !important;
+}
+
+/* Maintain proper vertical / horizontal resize cursors on price and time scales */
+.jarvis-chart-container .tv-lightweight-charts tr:first-child td:last-child,
+.jarvis-chart-container .tv-lightweight-charts tr:first-child td:last-child canvas {
+  cursor: ns-resize !important;
+}
+
+.jarvis-chart-container .tv-lightweight-charts tr:last-child td:first-child,
+.jarvis-chart-container .tv-lightweight-charts tr:last-child td:first-child canvas {
+  cursor: ew-resize !important;
+}
