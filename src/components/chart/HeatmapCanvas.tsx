@@ -180,7 +180,7 @@ const HeatmapCanvasComponent: React.FC<HeatmapCanvasProps> = ({
     // Reserved right margin for COB DOM profile, GEX ladder, and TradingView price scale
     const cobWidth = showDepthProfile ? Math.max(140, Math.min(320, depthProfileWidth || 210)) : 0;
     const gexWidth = showGexProfile ? Math.max(160, Math.min(320, gexProfileWidth || 260)) : 0;
-    const rightReservedPx = 65 + cobWidth + gexWidth;
+    const rightReservedPx = (width < 600 ? 50 : 65) + cobWidth + gexWidth;
     const rightBoundaryPx = Math.max(10, width - rightReservedPx);
 
     // Dynamic price aggregation so cells fit cleanly as rich, solid liquidity bands

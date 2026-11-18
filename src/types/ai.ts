@@ -228,7 +228,7 @@ export interface TradeSetup {
   direction: TradeDirection;
   setupName: string;
   marketRegime: MarketRegimeType;
-  status: 'READY_NOW' | 'WAITING_CONFIRMATION' | 'TRIGGERED' | 'INVALIDATED' | 'COMPLETED';
+  status: 'READY_NOW' | 'WAITING_CONFIRMATION' | 'TRIGGERED' | 'INVALIDATED' | 'COMPLETED' | 'NO_TRADE';
   entryType: EntryType;
   entryPrice: number;
   entryZone?: { min: number; max: number };
@@ -237,14 +237,145 @@ export interface TradeSetup {
   takeProfit2: number;
   takeProfit3: number;
   rewardToRiskRatio: number;
-  confidenceScore: number; // 0 - 100 evidence score
+  confidenceScore: number; // 0 - 100 model evidence score (NOT a win probability)
+  expectedHoldingPeriod: string;
+  analysisTimeframe: string;
+  invalidationCondition: string;
+  expirationTimeMs?: number;
+  modelUsed?: string;
+
+  // Predictive Planning & Future Key Level Triggers
+  actionType?: 'EXECUTE_NOW' | 'WAIT_FOR_LEVEL' | 'NO_TRADE';
+  triggerPrice?: number;
+  triggerConditionText?: string;
+  distanceToTrigger?: number;
+  distanceToTriggerPct?: number;
+  liveExecutionStatus?: 'MONITORING' | 'ARMED' | 'READY_NOW' | 'TRIGGERED';
+  dynamicLiveConfidence?: number;
+
+  // Single Authoritative Market Movement Forecast
+  marketMovementPrediction?: {
+    predictedDirection: 'BULLISH' | 'BEARISH';
+    expectedMoveText: string;
+    targetDestination: number;
+    probability: number;
+  };
+
+  // Dual Planned Setups (Internal reference)
+  plannedBuySetup?: {
+    level: number;
+    wallQuantity: number;
+    entryZone: { min: number; max: number };
+    stopLoss: number;
+    takeProfit: number;
+    rewardToRiskRatio: number;
+    predictedConfidence: number;
+    triggerCondition: string;
+    distance: number;
+    distancePct: number;
+    status: 'MONITORING' | 'ARMED' | 'READY_NOW' | 'TRIGGERED';
+  };
+  plannedSellSetup?: {
+    level: number;
+    wallQuantity: number;
+    entryZone: { min: number; max: number };
+    stopLoss: number;
+    takeProfit: number;
+    rewardToRiskRatio: number;
+    predictedConfidence: number;
+    triggerCondition: string;
+    distance: number;
+    distancePct: number;
+    status: 'MONITORING' | 'ARMED' | 'READY_NOW' | 'TRIGGERED';
+  };
+
+  // Phase 6: Trade Accuracy and Reliability
+  accuracyMetrics?: {
+    modelConfidence: number; // Evidence score
+    historicalWinRate: number | null; // Null if insufficient sample
+    sampleSize: number; // N completed trades
+    profitFactor: number | null;
+    averageRMultiple: number | null;
+    maxDrawdownPct: number | null;
+    dateRange: string;
+    outOfSampleEvaluated: boolean;
+    setupQualityRating: string; // e.g. "A+", "A", "B", "C", "INSUFFICIENT"
+    qualityScore: number; // 0 - 100
+    isSufficientSample: boolean; // true if N >= 20
+    accuracyReliabilityNotice: string;
+  };
+
+  // Phase 7: Why This Trade?
+  whyThisTrade?: {
+    historicalContext: string;
+    marketStructureReasoning: string;
+    higherTimeframeAlignment: string;
+    liquidityPosition: string;
+    orderBookImbalance: string;
+    aggressiveFlowEvidence: string;
+    absorptionConfirmation: string;
+    volumeDeltaConfirmation: string;
+    vwapPositioning: string;
+    keyLevelsReasoning: string;
+    volatilityRegimeReasoning: string;
+    entryJustification: string;
+    stopLossJustification: string;
+    targetJustification: string;
+    riskRewardJustification: string;
+    whatConfirms: string[];
+    whatInvalidates: string[];
+    whatCouldGoWrong: string[];
+    conditionsToAvoid: string[];
+    whatWouldChangeDecision: string[];
+  };
+
+  // Phase 8: Multi-Timeframe Analysis
+  multiTimeframeAnalysis?: {
+    higherTimeframe: {
+      timeframe: string;
+      trend: 'UPTREND' | 'DOWNTREND' | 'RANGING';
+      structure: string;
+      keyLevel: number;
+    };
+    intermediateTimeframe: {
+      timeframe: string;
+      trend: 'UPTREND' | 'DOWNTREND' | 'RANGING';
+      setupFormation: string;
+    };
+    entryTimeframe: {
+      timeframe: string;
+      orderFlowConfirmation: string;
+      trigger: string;
+    };
+    timeframeConflictNotes?: string;
+  };
+
+  // Phase 10: Real-Time Synchronization Telemetry
+  synchronizationTimestamps?: {
+    marketSnapshotTimestamp: number;
+    candleTimestamp: number;
+    orderBookTimestamp: number;
+    sourceIdentity: string;
+    indicatorTimestamp: number;
+    analysisTimestamp: number;
+    isOutdated: boolean;
+  };
+
+  // Phase 11: Advisory Risk Management
+  riskManagement?: {
+    suggestedPositionSizeLots: number;
+    accountRiskAmountDollars: number;
+    riskPerTradePercent: number;
+    stopLossDistancePoints: number;
+    estimatedSpreadCost: number;
+    estimatedSlippageCost: number;
+    riskNotes: string[];
+  };
+
   reasons: string[];
   orderBookEvidence: string;
   footprintEvidence: string;
   absorptionEvidence: string;
-  invalidationCondition: string;
-  expirationTimeMs?: number;
-  modelUsed?: string;
 }
 
 export interface ConditionalOpportunity {

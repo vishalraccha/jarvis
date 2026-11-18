@@ -1369,16 +1369,15 @@ function redisFastCandleCachePlugin(): Plugin {
               if (Array.isArray(list)) {
                 const tfSec = interval === '1d' ? 86400 : interval === '1h' ? 3600 : interval === '15m' ? 900 : interval === '5m' ? 300 : 60;
                 const mult = target.isFx ? 10000 : (target.isComex || target.isNasdaq ? 10 : 100);
-                const goldBasis = (target.isGoldSpot && !isNativeSpot) ? await getLiveGoldSpread() : 0;
 
                 const candleMap = new Map<number, any>();
                 for (const k of list) {
                   const rawSec = Math.floor(Number(k[0]) / 1000);
                   const time = Math.floor(rawSec / tfSec) * tfSec;
-                  const open = Math.round((parseFloat(k[1]) - goldBasis) * mult) / mult;
-                  const rawHigh = Math.round((parseFloat(k[2]) - goldBasis) * mult) / mult;
-                  const rawLow = Math.round((parseFloat(k[3]) - goldBasis) * mult) / mult;
-                  const close = Math.round((parseFloat(k[4]) - goldBasis) * mult) / mult;
+                  const open = Math.round(parseFloat(k[1]) * mult) / mult;
+                  const rawHigh = Math.round(parseFloat(k[2]) * mult) / mult;
+                  const rawLow = Math.round(parseFloat(k[3]) * mult) / mult;
+                  const close = Math.round(parseFloat(k[4]) * mult) / mult;
                   const high = Math.max(open, rawHigh, rawLow, close);
                   const low = Math.min(open, rawHigh, rawLow, close);
                   const volume = parseFloat(k[5]) || 0;
@@ -1397,20 +1396,13 @@ function redisFastCandleCachePlugin(): Plugin {
                 }
 
                 const sorted = Array.from(candleMap.values()).sort((a, b) => a.time - b.time);
-                if (!isNativeSpot) {
-                  for (let i = 1; i < sorted.length; i++) {
-                    sorted[i].open = sorted[i - 1].close;
-                    sorted[i].high = Math.max(sorted[i].high, sorted[i].open, sorted[i].close);
-                    sorted[i].low = Math.min(sorted[i].low, sorted[i].open, sorted[i].close);
-                  }
-                }
+                // Canonical Rule: Never overwrite authentic open prices or erase market gaps
                 const sliced = limit > 0 ? sorted.slice(-limit) : sorted;
 
                 res.setHeader('Content-Type', 'application/json');
                 res.setHeader('X-Cache-Status', 'HIT-RAM-0MS');
                 if (target.isGoldSpot) {
-                  res.setHeader('X-Gold-Basis', String(goldBasis));
-                  res.setHeader('X-Gold-Source', isNativeSpot ? 'TRADINGVIEW_VANTAGE' : 'BYBIT_INDEX');
+                  res.setHeader('X-Gold-Source', isNativeSpot ? 'TRADINGVIEW_VANTAGE' : 'BYBIT_LINEAR');
                 }
                 res.end(JSON.stringify(sliced));
                 return;

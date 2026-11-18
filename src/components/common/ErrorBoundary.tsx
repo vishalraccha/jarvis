@@ -48,7 +48,7 @@ export class ErrorBoundary extends Component<Props, State> {
             justifyContent: 'center',
             height: '100vh',
             width: '100vw',
-            background: '#090d16',
+            background: '#070709',
             color: '#f8fafc',
             fontFamily: 'Inter, sans-serif',
             padding: 24,
@@ -59,11 +59,11 @@ export class ErrorBoundary extends Component<Props, State> {
             style={{
               maxWidth: 540,
               width: '100%',
-              background: 'rgba(15, 23, 42, 0.95)',
-              border: '1px solid rgba(239, 68, 68, 0.4)',
+              background: '#111215',
+              border: '1px solid rgba(255, 255, 255, 0.12)',
               borderRadius: 12,
               padding: 28,
-              boxShadow: '0 20px 40px rgba(0,0,0,0.8), 0 0 30px rgba(239,68,68,0.15)',
+              boxShadow: '0 20px 48px rgba(0, 0, 0, 0.9)',
               textAlign: 'center',
             }}
           >
@@ -72,8 +72,8 @@ export class ErrorBoundary extends Component<Props, State> {
                 width: 52,
                 height: 52,
                 borderRadius: '50%',
-                background: 'rgba(239, 68, 68, 0.15)',
-                border: '1px solid rgba(239, 68, 68, 0.4)',
+                background: 'rgba(239, 68, 68, 0.12)',
+                border: '1px solid rgba(239, 68, 68, 0.35)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -138,16 +138,16 @@ export class ErrorBoundary extends Component<Props, State> {
                   alignItems: 'center',
                   gap: 8,
                   padding: '10px 18px',
-                  background: 'rgba(239, 68, 68, 0.15)',
-                  border: '1px solid rgba(239, 68, 68, 0.4)',
+                  background: 'rgba(255, 255, 255, 0.08)',
+                  border: '1px solid rgba(255, 255, 255, 0.16)',
                   borderRadius: 6,
-                  color: '#fca5a5',
+                  color: '#cbd5e1',
                   fontSize: 13,
                   fontWeight: 600,
                   cursor: 'pointer',
                 }}
               >
-                <Trash2 size={15} /> Reset Local Cache
+                <RefreshCw size={15} /> Restart Session
               </button>
             </div>
           </div>

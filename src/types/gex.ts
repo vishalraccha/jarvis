@@ -256,8 +256,8 @@ export interface GexSettings {
 
 export const DEFAULT_GEX_SETTINGS: GexSettings = {
   enabled: true,
-  showChartOverlay: true,
-  showProfileLadder: true,
+  showChartOverlay: false,
+  showProfileLadder: false,
   profileWidthPx: 260,
   showGammaFlipLine: true,
   showCallWallLine: true,

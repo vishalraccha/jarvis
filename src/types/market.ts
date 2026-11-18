@@ -5,7 +5,7 @@
 
 export type ExchangeId = 'binance' | 'bybit' | 'comex' | 'goldprice_dev' | 'mt5';
 
-export type MarketType = 'spot' | 'spot_otc' | 'linear_perpetual' | 'commodity_futures';
+export type MarketType = 'spot' | 'spot_otc' | 'linear_perpetual' | 'commodity_futures' | 'index_cfd' | 'spot_forex';
 
 export interface SymbolInfo {
   id: string;

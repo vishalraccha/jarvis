@@ -26,7 +26,6 @@ import { FootprintCanvas } from './FootprintCanvas';
 import { BottomVolumeDeltaPanel } from './BottomVolumeDeltaPanel';
 import { SideVolumeProfileCanvas } from './SideVolumeProfileCanvas';
 import { CrosshairOverlay } from './CrosshairOverlay';
-import { ChartHeaderOverlay } from './ChartHeaderOverlay';
 import { CandleCountdownMarker } from './CandleCountdownMarker';
 import { HeatmapEngine } from '../../services/heatmap/HeatmapEngine';
 import { OrderBookManager } from '../../services/orderbook/OrderBookManager';
@@ -233,20 +232,20 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         crosshair: {
           mode: CrosshairMode.Normal,
           vertLine: {
-            color: 'rgba(203, 213, 225, 0.45)',
+            color: 'rgba(203, 213, 225, 0.35)',
             width: 1,
             style: 2, // dashed
             visible: true,
             labelVisible: true,
-            labelBackgroundColor: '#1e222d',
+            labelBackgroundColor: '#121316',
           },
           horzLine: {
-            color: 'rgba(203, 213, 225, 0.45)',
+            color: 'rgba(203, 213, 225, 0.35)',
             width: 1,
             style: 2, // dashed
             visible: true,
             labelVisible: true,
-            labelBackgroundColor: '#1e222d',
+            labelBackgroundColor: '#121316',
           },
         },
         rightPriceScale: {
@@ -256,7 +255,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
             bottom: 0.12,
           },
           autoScale: true,
-          minimumWidth: 65,
+          minimumWidth: clientWidth < 600 ? 50 : 65,
         },
         timeScale: {
           borderColor: 'rgba(255, 255, 255, 0.07)',
@@ -390,7 +389,13 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         const w = entry.contentRect.width || containerRef.current?.clientWidth || 0;
         const h = entry.contentRect.height || containerRef.current?.clientHeight || 0;
         if (w > 0 && h > 0) {
-          tvChart.applyOptions({ width: w, height: h });
+          tvChart.applyOptions({
+            width: w,
+            height: h,
+            rightPriceScale: {
+              minimumWidth: w < 600 ? 50 : 65,
+            },
+          });
           setDimensions({ width: w, height: h });
         }
       });
@@ -402,7 +407,13 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
           const w = containerRef.current.clientWidth;
           const h = containerRef.current.clientHeight;
           if (w > 0 && h > 0) {
-            tvChart.applyOptions({ width: w, height: h });
+            tvChart.applyOptions({
+              width: w,
+              height: h,
+              rightPriceScale: {
+                minimumWidth: w < 600 ? 50 : 65,
+              },
+            });
             setDimensions({ width: w, height: h });
           }
         }
@@ -510,6 +521,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
 
     // Dynamic bar spacing & right margin: 72px for Footprint bid x ask stack, 18px for standard candlesticks
     const prevFootprintActiveRef = useRef<boolean>(isFootprintActive);
+    const prevRightOffsetRef = useRef<number>(-1);
     useEffect(() => {
       if (!chart) return;
       const targetSpacing = isFootprintActive ? 72 : 18;
@@ -532,6 +544,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
       // Only re-apply barSpacing & reset framing when footprint mode actually toggles
       if (prevFootprintActiveRef.current !== isFootprintActive) {
         prevFootprintActiveRef.current = isFootprintActive;
+        prevRightOffsetRef.current = rightOffset;
         chart.timeScale().applyOptions({
           barSpacing: targetSpacing,
           minBarSpacing: 0.5,
@@ -539,24 +552,25 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
         });
         const totalBars = allCandlesRef.current.length;
         if (totalBars > 0) {
-          if (isFootprintActive) {
-            chart.timeScale().setVisibleLogicalRange({
-              from: Math.max(0, totalBars - 16),
-              to: totalBars + 2,
-            });
-          } else {
-            chart.timeScale().setVisibleLogicalRange({
-              from: Math.max(0, totalBars - 75),
-              to: totalBars + rightOffset,
-            });
-          }
+          const isMobileW = dimensions.width > 0 && dimensions.width < 600;
+          const isTabletW = dimensions.width >= 600 && dimensions.width < 1024;
+          const visibleCount = isFootprintActive
+            ? (isMobileW ? 8 : 16)
+            : (isMobileW ? 32 : isTabletW ? 50 : 75);
+          chart.timeScale().setVisibleLogicalRange({
+            from: Math.max(0, totalBars - visibleCount),
+            to: totalBars + (isFootprintActive ? 2 : rightOffset),
+          });
         }
       } else {
-        // Mode unchanged: preserve user's zoom (barSpacing) and only adjust layout offset
-        chart.timeScale().applyOptions({
-          rightOffset,
-          minBarSpacing: 0.5,
-        });
+        // Mode unchanged: preserve user's zoom (barSpacing) and only adjust layout offset if it changed
+        if (prevRightOffsetRef.current !== rightOffset) {
+          prevRightOffsetRef.current = rightOffset;
+          chart.timeScale().applyOptions({
+            rightOffset,
+            minBarSpacing: 0.5,
+          });
+        }
       }
     }, [
       chart,
@@ -854,7 +868,11 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
                 barSpacing: targetSpacing,
                 minBarSpacing: 2.5,
               });
-              const visibleCount = isFp ? 16 : 75;
+              const isMobileW = dimensions.width > 0 && dimensions.width < 600;
+              const isTabletW = dimensions.width >= 600 && dimensions.width < 1024;
+              const visibleCount = isFp
+                ? (isMobileW ? 8 : 16)
+                : (isMobileW ? 32 : isTabletW ? 50 : 75);
               activeChart.timeScale().setVisibleLogicalRange({
                 from: Math.max(0, tvData.length - visibleCount),
                 to: tvData.length + rightOffset,
@@ -864,24 +882,23 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
                 activeChart.timeScale().scrollToRealTime();
               }
             } else {
-              // Crucial: Only update layout options (rightOffset), NEVER overwrite barSpacing!
-              // Overwriting barSpacing destroys the user's manual zoom level on tab switch or screen change.
-              activeChart.timeScale().applyOptions({ rightOffset });
+              // Crucial: Only update layout options (rightOffset) if changed, NEVER overwrite barSpacing!
+              if (prevRightOffsetRef.current !== rightOffset) {
+                prevRightOffsetRef.current = rightOffset;
+                activeChart.timeScale().applyOptions({ rightOffset });
+              }
 
-              // Preserve user's zoom & scroll position
+              // Preserve user's exact zoom & scroll position across setData updates
               const prevRange = userLogicalRangeRef.current;
               if (prevRange) {
-                const wasAtLiveEdge = prevRange.to >= (previousBarsCount - 2);
-                if (wasAtLiveEdge && preferences.autoScrollToLatest) {
-                  const deltaBars = Math.max(0, tvData.length - previousBarsCount);
-                  if (deltaBars > 0) {
-                    activeChart.timeScale().setVisibleLogicalRange({
-                      from: prevRange.from + deltaBars,
-                      to: prevRange.to + deltaBars,
-                    });
-                  }
-                } else if (Math.abs(tvData.length - previousBarsCount) <= 5) {
-                  // User is analyzing a past setup/position: keep their exact view pinned
+                const deltaBars = tvData.length - previousBarsCount;
+                if (deltaBars > 0 && preferences.autoScrollToLatest) {
+                  activeChart.timeScale().setVisibleLogicalRange({
+                    from: prevRange.from + deltaBars,
+                    to: prevRange.to + deltaBars,
+                  });
+                } else {
+                  // User zoomed in/out or panned: preserve exact visible range and bar zoom
                   activeChart.timeScale().setVisibleLogicalRange(prevRange);
                 }
               }
@@ -1566,7 +1583,7 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
           width: '100%',
           height: '100%',
           overflow: 'hidden',
-          background: '#080b11',
+          background: '#050507',
           cursor: 'crosshair',
           touchAction: 'none',
         }}
@@ -1753,17 +1770,6 @@ const JarvisChartComponent = forwardRef<JarvisChartHandles, JarvisChartProps>(
             width={dimensions.width}
           />
         )}
-
-        {/* Layer 6: Authoritative Instrument Header & Market Session Overlay */}
-        <ChartHeaderOverlay
-          symbol={preferences.symbol}
-          timeframe={preferences.timeframe}
-          connectionState={connectionState || 'LIVE'}
-          lastQuoteTime={lastQuoteTime || (candles && candles.length > 0 ? candles[candles.length - 1].time * 1000 : undefined)}
-          showHeatmap={preferences.showHeatmap}
-          showFootprint={preferences.showFootprint}
-          hoveredCandle={hoveredCandle}
-        />
 
         {/* Trade Bubble, Liquidity Zone, Footprint Debug & Absorption Precision Tooltip */}
         <CrosshairOverlay

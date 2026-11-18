@@ -197,6 +197,7 @@ export class AIToolRegistry {
     let totalVol = 0;
     let pocLevel = 0;
 
+    // When footprint engine is active, use authentic recorded executed trades
     if (this.footprintEngine) {
       const allCandles = this.footprintEngine.getAllCandles();
       if (allCandles.length > 0) {
@@ -209,24 +210,24 @@ export class AIToolRegistry {
       }
     }
 
-    // Fallback estimation from most recent candle if footprint engine not yet populated
+    // Fallback: If footprint engine has no executed trades yet, derive delta from candle bar direction
     if (totalVol === 0 && candles.length > 0) {
       const last = candles[candles.length - 1];
       totalVol = last.volume;
       const isGreen = last.close >= last.open;
-      buyVol = Math.round(totalVol * (isGreen ? 0.62 : 0.38));
+      buyVol = Math.round(totalVol * (isGreen ? 0.60 : 0.40));
       sellVol = totalVol - buyVol;
       candleDelta = buyVol - sellVol;
       pocLevel = Math.round(((last.high + last.low + last.close) / 3) * 100) / 100;
     }
 
-    // Calculate Cumulative Volume Delta (CVD) over last 20 candles
-    let cumulativeCvd = 0;
-    const windowStart = Math.max(0, candles.length - 20);
-    for (let i = windowStart; i < candles.length; i++) {
-      const c = candles[i];
-      const deltaEstimate = c.close >= c.open ? c.volume * 0.25 : -c.volume * 0.25;
-      cumulativeCvd += deltaEstimate;
+    // Cumulative Volume Delta from real active candles
+    let cumulativeCvd = candleDelta;
+    if (this.footprintEngine) {
+      const bars = this.footprintEngine.getAllCandles().slice(-20);
+      for (const b of bars) {
+        cumulativeCvd += b.delta;
+      }
     }
 
     const deltaPercent = totalVol > 0 ? Math.round((candleDelta / totalVol) * 1000) / 10 : 0;

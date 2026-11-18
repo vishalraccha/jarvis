@@ -371,13 +371,12 @@ export class MarketSyncService {
     }
 
     const mult = 100;
-    const goldBasis = isGoldSpot ? await this.getLiveGoldBasis() : 0;
-
+    // Canonical Market Data: Preserve genuine exchange OHLC without synthetic offset subtraction
     const candles: StoredCandle[] = rawData.map((k) => {
-      const open = Math.round((parseFloat(k[1]) - goldBasis) * mult) / mult;
-      const rawHigh = Math.round((parseFloat(k[2]) - goldBasis) * mult) / mult;
-      const rawLow = Math.round((parseFloat(k[3]) - goldBasis) * mult) / mult;
-      const close = Math.round((parseFloat(k[4]) - goldBasis) * mult) / mult;
+      const open = Math.round(parseFloat(k[1]) * mult) / mult;
+      const rawHigh = Math.round(parseFloat(k[2]) * mult) / mult;
+      const rawLow = Math.round(parseFloat(k[3]) * mult) / mult;
+      const close = Math.round(parseFloat(k[4]) * mult) / mult;
       const high = Math.max(open, rawHigh, rawLow, close);
       const low = Math.min(open, rawHigh, rawLow, close);
       return {

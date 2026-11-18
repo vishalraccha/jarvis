@@ -2,17 +2,17 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 :root {
-  --bg-primary: #0a0d14;
-  --bg-secondary: #10141f;
-  --bg-tertiary: #181d2c;
-  --bg-card: rgba(18, 23, 36, 0.85);
+  --bg-primary: #070709;
+  --bg-secondary: #0f1013;
+  --bg-tertiary: #16171b;
+  --bg-card: rgba(18, 19, 23, 0.95);
   
   --border-subtle: rgba(255, 255, 255, 0.08);
-  --border-highlight: rgba(0, 180, 216, 0.3);
+  --border-highlight: rgba(255, 255, 255, 0.15);
   
-  --text-primary: #f1f5f9;
-  --text-secondary: #94a3b8;
-  --text-muted: #64748b;
+  --text-primary: #f4f4f6;
+  --text-secondary: #90929a;
+  --text-muted: #5e606a;
   
   --color-cyan: #00b4d8;
   --color-blue: #0077b6;
@@ -48,14 +48,14 @@ body {
   height: 5px;
 }
 ::-webkit-scrollbar-track {
-  background: #080b11;
+  background: #070709;
 }
 ::-webkit-scrollbar-thumb {
-  background: #1e2536;
+  background: #1e2025;
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #2d374d;
+  background: #2b2e35;
 }
 
 /* Tooltip styles */
@@ -88,8 +88,8 @@ body {
 }
 
 .modal-content {
-  background: #0f141f;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: #111215;
+  border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 8px;
   box-shadow: 0 20px 48px rgba(0, 0, 0, 0.85);
   width: 90%;
@@ -125,16 +125,16 @@ body {
 }
 
 .terminal-dropdown-btn.active {
-  background: rgba(0, 180, 216, 0.14);
-  border-color: rgba(0, 180, 216, 0.45);
-  color: #38bdf8;
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.25);
+  color: #f8fafc;
 }
 
 .terminal-dropdown-btn.open {
-  background: rgba(0, 180, 216, 0.2);
-  border-color: #00b4d8;
+  background: #22252c;
+  border-color: rgba(255, 255, 255, 0.3);
   color: #ffffff;
-  box-shadow: 0 0 10px rgba(0, 180, 216, 0.25);
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
 }
 
 /* Dropdown Menu Container */
@@ -142,8 +142,8 @@ body {
   position: absolute;
   top: calc(100% + 4px);
   left: 0;
-  background: #0d121c;
-  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: #111216;
+  border: 1px solid #24262e;
   border-radius: 6px;
   box-shadow: 0 20px 48px rgba(0, 0, 0, 0.95), 0 0 1px rgba(255, 255, 255, 0.3);
   padding: 6px 0;
@@ -199,12 +199,12 @@ body {
 }
 
 .terminal-menu-item.action-btn {
-  color: #38bdf8;
+  color: #f8fafc;
   font-weight: 600;
 }
 
 .terminal-menu-item.action-btn:hover {
-  background: rgba(0, 180, 216, 0.12);
+  background: rgba(255, 255, 255, 0.08);
 }
 
 /* Sleek Toggle Switch */
@@ -216,7 +216,7 @@ body {
   height: 16px;
   flex-shrink: 0;
   border-radius: 16px;
-  background-color: #242c3d;
+  background-color: #20222a;
   border: 1px solid rgba(255, 255, 255, 0.15);
   cursor: pointer;
   padding: 0;
@@ -226,13 +226,13 @@ body {
 }
 
 .terminal-switch:hover {
-  border-color: rgba(0, 180, 216, 0.4);
+  border-color: rgba(255, 255, 255, 0.35);
 }
 
 .terminal-switch.checked {
-  background-color: #0284c7;
-  border-color: #38bdf8;
-  box-shadow: 0 0 8px rgba(0, 180, 216, 0.35);
+  background-color: #10b981;
+  border-color: #34d399;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.35);
 }
 
 .terminal-switch-knob {
@@ -264,7 +264,7 @@ body {
   position: absolute;
   cursor: pointer;
   inset: 0;
-  background-color: #242c3d;
+  background-color: #20222a;
   transition: 0.18s cubic-bezier(0.4, 0, 0.2, 1);
   border-radius: 16px;
   border: 1px solid rgba(255, 255, 255, 0.1);
@@ -283,8 +283,8 @@ body {
 }
 
 .terminal-switch input:checked + .terminal-switch-slider {
-  background-color: #0284c7;
-  border-color: #38bdf8;
+  background-color: #10b981;
+  border-color: #34d399;
 }
 
 .terminal-switch input:checked + .terminal-switch-slider:before {
@@ -317,9 +317,9 @@ body {
 }
 
 .tool-btn.active {
-  background: rgba(0, 180, 216, 0.15);
-  border-color: rgba(0, 180, 216, 0.45);
-  color: #38bdf8;
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.28);
+  color: #f8fafc;
   font-weight: 600;
 }
 
@@ -407,6 +407,13 @@ body {
   .terminal-brand-text {
     font-size: 11px !important;
   }
+  .terminal-top-toolbar {
+    overflow-x: auto !important;
+    scrollbar-width: none !important;
+  }
+  .terminal-top-toolbar::-webkit-scrollbar {
+    display: none;
+  }
   .timeframe-pills {
     display: flex !important;
     overflow-x: auto !important;
@@ -428,7 +435,8 @@ body {
 
 /* 5. Large Mobile (431px – 767px) */
 @media (min-width: 431px) and (max-width: 767px) {
-  .terminal-brand-text {
+  .terminal-brand-text,
+  .terminal-brand-badge {
     display: none !important;
   }
   .timeframe-pills {
@@ -439,14 +447,25 @@ body {
   .toolbar-clock-container {
     display: none !important;
   }
+  .toolbar-status-pill .toolbar-status-label {
+    display: none !important;
+  }
+  .terminal-top-toolbar {
+    overflow-x: auto !important;
+    scrollbar-width: none !important;
+  }
+  .terminal-top-toolbar::-webkit-scrollbar {
+    display: none;
+  }
   .jarvis-ai-terminal-panel {
-    position: absolute !important;
+    position: fixed !important;
     top: 0 !important;
     bottom: 0 !important;
     left: 0 !important;
     width: 100vw !important;
     max-width: 100vw !important;
-    z-index: 50 !important;
+    height: 100dvh !important;
+    z-index: 999999 !important;
     border-right: none !important;
     box-shadow: none !important;
   }
@@ -469,7 +488,8 @@ body {
 
 /* 6. Standard Mobile (376px – 430px) */
 @media (min-width: 376px) and (max-width: 430px) {
-  .terminal-brand-text {
+  .terminal-brand-text,
+  .terminal-brand-badge {
     display: none !important;
   }
   .timeframe-pills {
@@ -484,7 +504,7 @@ body {
     display: none !important;
   }
   .toolbar-symbol-btn {
-    max-width: 105px !important;
+    max-width: 100px !important;
     font-size: 10.5px !important;
     padding: 0 5px !important;
   }
@@ -492,14 +512,22 @@ body {
     padding: 0 5px !important;
     font-size: 10px !important;
   }
+  .terminal-top-toolbar {
+    overflow-x: auto !important;
+    scrollbar-width: none !important;
+  }
+  .terminal-top-toolbar::-webkit-scrollbar {
+    display: none;
+  }
   .jarvis-ai-terminal-panel {
-    position: absolute !important;
+    position: fixed !important;
     top: 0 !important;
     bottom: 0 !important;
     left: 0 !important;
     width: 100vw !important;
     max-width: 100vw !important;
-    z-index: 50 !important;
+    height: 100dvh !important;
+    z-index: 999999 !important;
     border-right: none !important;
     box-shadow: none !important;
   }
@@ -526,8 +554,14 @@ body {
     height: 38px !important;
     padding: 0 4px !important;
     gap: 3px !important;
+    overflow-x: auto !important;
+    scrollbar-width: none !important;
   }
-  .terminal-brand-text {
+  .terminal-top-toolbar::-webkit-scrollbar {
+    display: none;
+  }
+  .terminal-brand-text,
+  .terminal-brand-badge {
     display: none !important;
   }
   .timeframe-pills {
@@ -547,7 +581,7 @@ body {
     display: none !important;
   }
   .toolbar-symbol-btn {
-    max-width: 78px !important;
+    max-width: 82px !important;
     font-size: 10px !important;
     padding: 0 4px !important;
   }
@@ -560,13 +594,14 @@ body {
     font-size: 9.5px !important;
   }
   .jarvis-ai-terminal-panel {
-    position: absolute !important;
+    position: fixed !important;
     top: 0 !important;
     bottom: 0 !important;
     left: 0 !important;
     width: 100vw !important;
     max-width: 100vw !important;
-    z-index: 50 !important;
+    height: 100dvh !important;
+    z-index: 999999 !important;
     border-right: none !important;
     box-shadow: none !important;
   }
@@ -613,4 +648,18 @@ canvas {
 .jarvis-chart-container .tv-lightweight-charts tr:last-child td:first-child,
 .jarvis-chart-container .tv-lightweight-charts tr:last-child td:first-child canvas {
   cursor: ew-resize !important;
+}
+
+/* Ensure mobile inputs do not trigger virtual-keyboard viewport shift */
+@media (max-width: 767px) {
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+}
+
+.jarvis-trading-terminal {
+  width: 100% !important;
+  max-width: 100% !important;
+  height: 100dvh !important;
+  overflow: hidden !important;
 }

@@ -13,6 +13,8 @@ import { FootprintSettingsModal } from '../settings/FootprintSettingsModal';
 import { VwapSettingsModal } from '../settings/VwapSettingsModal';
 import { AbsorptionSettingsModal } from '../settings/AbsorptionSettingsModal';
 import { OrderBookDiagnosticsModal } from '../diagnostics/OrderBookDiagnosticsModal';
+import { MarketDataComparisonModal } from '../diagnostics/MarketDataComparisonModal';
+import { canonicalMarketDataEngine } from '../../services/market/CanonicalMarketDataEngine';
 import { CacheSettingsModal } from '../settings/CacheSettingsModal';
 import { AbsorptionEngine } from '../../services/absorption/AbsorptionEngine';
 import { DEFAULT_ABSORPTION_SETTINGS } from '../../types/absorption';
@@ -49,6 +51,8 @@ import {
   DEFAULT_BUBBLE_SETTINGS,
   DEFAULT_DEPTH_PROFILE_SETTINGS,
   DEFAULT_FOOTPRINT_SETTINGS,
+  DEFAULT_VWAP_SETTINGS,
+  DEFAULT_GEX_SETTINGS,
   TerminalPreferences,
 } from '../../types/settings';
 import { ConnectionState, LatencyMetrics } from '../../types/market';
@@ -80,6 +84,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
   const [isVwapSettingsOpen, setIsVwapSettingsOpen] = useState(false);
   const [isAbsorptionSettingsOpen, setIsAbsorptionSettingsOpen] = useState(false);
   const [isDiagnosticsOpen, setIsDiagnosticsOpen] = useState(false);
+  const [isMarketComparisonOpen, setIsMarketComparisonOpen] = useState(false);
   const [isCacheModalOpen, setIsCacheModalOpen] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isAIConfigOpen, setIsAIConfigOpen] = useState(false);
@@ -90,6 +95,20 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
     }
     return true;
   });
+
+  // Responsive: collapse AI panel when viewport transitions to mobile/tablet (<1024px)
+  useEffect(() => {
+    let prevWidth = typeof window !== 'undefined' ? window.innerWidth : 1200;
+    const handleResize = () => {
+      const currentWidth = window.innerWidth;
+      if (prevWidth >= 1024 && currentWidth < 1024) {
+        setIsAITerminalExpanded(false);
+      }
+      prevWidth = currentWidth;
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
   const [activeDrawingTool, setActiveDrawingTool] = useState<PositionType | null>(null);
 
   // GEX States
@@ -178,31 +197,27 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
 
     indexedDBCache.loadPreferences().then((stored) => {
       if (stored) {
-        const isFpMode = stored.chartMode === 'footprint' || (stored.showFootprint && !stored.showHeatmap);
-        const bubblesActive = stored.showBubbles !== undefined
-          ? stored.showBubbles
-          : (stored.bubbles?.enabled ?? true);
-        const absorptionActive = stored.showAbsorption !== undefined
-          ? stored.showAbsorption
-          : (stored.absorption?.enabled ?? true);
         const inst = stored.symbol ? InstrumentRegistry.getInstrument(stored.symbol, stored.exchange) : null;
         const safeSymbol = inst ? inst.symbol : DEFAULT_TERMINAL_PREFERENCES.symbol;
         const safeExchange = inst ? inst.providerId : DEFAULT_TERMINAL_PREFERENCES.exchange;
 
+        // Mandate: At starting, all indicators and order-flow tools start disabled; user enables manually
         const activeDefaults: TerminalPreferences = {
           ...DEFAULT_TERMINAL_PREFERENCES,
           ...stored,
           symbol: safeSymbol,
           exchange: safeExchange,
-          showBubbles: bubblesActive,
-          showAbsorption: absorptionActive,
-          showHeatmap: isFpMode ? false : (stored.showHeatmap ?? true),
-          showDepthProfile: isFpMode ? false : (stored.showDepthProfile ?? true),
-          showFootprint: isFpMode ? true : (stored.showFootprint ?? false),
-          showBestBidAskLines: stored.showBestBidAskLines ?? false,
-          showLiquidityShifts: stored.showLiquidityShifts ?? false,
-          showVwap: stored.showVwap ?? true,
-          showCandles: stored.showCandles ?? true,
+          showBubbles: false,
+          showAbsorption: false,
+          showHeatmap: false,
+          showDepthProfile: false,
+          showFootprint: false,
+          showBestBidAskLines: false,
+          showLiquidityShifts: false,
+          showVwap: false,
+          showGex: false,
+          showGexProfile: false,
+          showCandles: true,
           heatmap: {
             ...DEFAULT_HEATMAP_SETTINGS,
             ...stored.heatmap,
@@ -210,28 +225,41 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
             removeTradedLiquidity: false,
             minLiquidityQty: 0,
             lowerCutoffPercentile: 0,
+            showContinuousHeatmap: false,
           },
           depthProfile: {
             ...DEFAULT_DEPTH_PROFILE_SETTINGS,
             ...stored.depthProfile,
-            enabled: isFpMode ? false : true,
+            enabled: false,
             widthPx: 210,
           },
           bubbles: {
             ...DEFAULT_BUBBLE_SETTINGS,
             ...stored.bubbles,
-            enabled: bubblesActive,
+            enabled: false,
           },
           absorption: {
             ...DEFAULT_ABSORPTION_SETTINGS,
             ...stored.absorption,
-            enabled: absorptionActive,
+            enabled: false,
           },
           footprint: {
             ...DEFAULT_FOOTPRINT_SETTINGS,
             ...stored.footprint,
-            enabled: isFpMode ? true : (stored.footprint?.enabled ?? true),
-            showSideProfile: stored.footprint?.showSideProfile ?? true,
+            enabled: false,
+            showSideProfile: false,
+          },
+          vwap: {
+            ...DEFAULT_VWAP_SETTINGS,
+            ...stored.vwap,
+            enabled: false,
+          },
+          gex: {
+            ...DEFAULT_GEX_SETTINGS,
+            ...stored.gex,
+            enabled: false,
+            showChartOverlay: false,
+            showProfileLadder: false,
           },
         };
         setPreferences(activeDefaults);
@@ -244,6 +272,10 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
           activeDefaults.heatmap.brightness,
           activeDefaults.heatmap.opacity
         );
+      } else {
+        bubbleManagerRef.current.updateSettings(DEFAULT_TERMINAL_PREFERENCES.bubbles);
+        absorptionEngineRef.current.updateSettings(DEFAULT_TERMINAL_PREFERENCES.absorption);
+        footprintEngineRef.current.updateSettings(DEFAULT_TERMINAL_PREFERENCES.footprint);
       }
     });
   }, []);
@@ -777,29 +809,18 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         if (latestCandlesRef.current.length > 0) {
           const last = latestCandlesRef.current[latestCandlesRef.current.length - 1];
           if (last.time === barTime) {
-            // Outlier tick protection: do not let aberrant trades (> 0.8% deviation) corrupt candle wick
-            if (last.close > 0) {
-              const ratio = trade.price / last.close;
-              if (ratio > 1.008 || ratio < 0.992) {
-                return;
-              }
-            }
+            // Canonical Invariant: Expand high and low truthfully. Never shrink or discard valid price wicks.
             last.high = Math.max(last.high, trade.price);
             last.low = Math.min(last.low, trade.price);
             last.close = trade.price;
+            last.volume = (last.volume || 0) + (trade.quantity || 0);
           } else if (last.time < barTime) {
-            if (last.close > 0) {
-              const ratio = trade.price / last.close;
-              if (ratio > 1.008 || ratio < 0.992) {
-                return;
-              }
-            }
-            const openPrice = last.close > 0 ? last.close : trade.price;
+            // New bar formed: Open is the first authentic executed trade price in the interval
             latestCandlesRef.current.push({
               time: barTime,
-              open: openPrice,
-              high: Math.max(openPrice, trade.price),
-              low: Math.min(openPrice, trade.price),
+              open: trade.price,
+              high: trade.price,
+              low: trade.price,
               close: trade.price,
               volume: trade.quantity || 0,
             });
@@ -834,32 +855,19 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         if (latestCandlesRef.current.length > 0) {
           const last = latestCandlesRef.current[latestCandlesRef.current.length - 1];
           if (last.time === alignedCandle.time) {
-            // Keep established open of this bar so there is never an artificial gap,
-            // unless the established open is an aberrant outlier that deviates abnormally (> 0.1%) from exchange open.
-            const openPrice = (last.open > 0 && alignedCandle.open > 0 && Math.abs(last.open - alignedCandle.open) / alignedCandle.open <= 0.001)
-              ? last.open
-              : (alignedCandle.open > 0 ? alignedCandle.open : alignedCandle.close);
-            last.open = openPrice;
+            // Authoritative kline reconciliation: expand high and low, never truncate authentic wicks
+            last.open = last.open > 0 ? last.open : alignedCandle.open;
+            last.high = Math.max(last.high, alignedCandle.high, last.open, alignedCandle.close);
+            last.low = Math.min(last.low, alignedCandle.low, last.open, alignedCandle.close);
             last.close = alignedCandle.close;
-            // Heal any corrupted wick that was spiked by bad ticks
-            last.high = (last.high > 0 && alignedCandle.high > 0 && last.high > alignedCandle.high * 1.001)
-              ? alignedCandle.high
-              : Math.max(alignedCandle.high, openPrice, alignedCandle.close);
-            last.low = (last.low > 0 && alignedCandle.low > 0 && last.low < alignedCandle.low * 0.999)
-              ? alignedCandle.low
-              : Math.min(alignedCandle.low, openPrice, alignedCandle.close);
             if (alignedCandle.volume) last.volume = Math.max(last.volume || 0, alignedCandle.volume);
           } else if (last.time < alignedCandle.time) {
-            // Advance to new bar: open must strictly equal previous bar's close for seamless continuity,
-            // unless previous close was an aberrant outlier that deviates abnormally from new bar open.
-            const prevClose = (last.close > 0 && alignedCandle.open > 0 && Math.abs(last.close - alignedCandle.open) / alignedCandle.open <= 0.001)
-              ? last.close
-              : (alignedCandle.open > 0 ? alignedCandle.open : alignedCandle.close);
+            // Advance to new interval: preserve authentic exchange open (never erase market gaps)
             latestCandlesRef.current.push({
               time: alignedCandle.time,
-              open: prevClose,
-              high: Math.max(alignedCandle.high, prevClose, alignedCandle.close),
-              low: Math.min(alignedCandle.low, prevClose, alignedCandle.close),
+              open: alignedCandle.open,
+              high: Math.max(alignedCandle.high, alignedCandle.open, alignedCandle.close),
+              low: Math.min(alignedCandle.low, alignedCandle.open, alignedCandle.close),
               close: alignedCandle.close,
               volume: alignedCandle.volume || 0,
             });
@@ -1069,8 +1077,12 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
   const handleOpenCacheModal = useCallback(() => setIsCacheModalOpen(true), []);
   const handleOpenGexTerminal = useCallback(() => setIsGexTerminalOpen(true), []);
   const handleToggleAITerminal = useCallback(() => setIsAITerminalExpanded((prev) => !prev), []);
-  const handleOpenAIConfig = useCallback((initialProvider?: AIProvider) => {
-    setSelectedAIConfigProvider(initialProvider);
+  const handleOpenAIConfig = useCallback((initialProvider?: any) => {
+    const validProvider: AIProvider =
+      typeof initialProvider === 'string' && ['gemini', 'openai', 'grok'].includes(initialProvider)
+        ? (initialProvider as AIProvider)
+        : 'gemini';
+    setSelectedAIConfigProvider(validProvider);
     setIsAIConfigOpen(true);
   }, []);
   const handleSelectDrawingTool = useCallback((tool: PositionType | null) => {
@@ -1170,12 +1182,13 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
       style={{
         display: 'flex',
         flexDirection: 'column',
-        width: '100vw',
+        width: '100%',
+        maxWidth: '100%',
         height: '100dvh',
         position: 'fixed',
         inset: 0,
         overflow: 'hidden',
-        background: '#090d16',
+        background: '#070709',
       }}
     >
       {/* Top Professional Toolbar */}
@@ -1198,6 +1211,7 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
         onOpenFootprintSettings={handleOpenFootprintSettings}
         onOpenAbsorptionSettings={handleOpenAbsorptionSettings}
         onOpenDiagnostics={handleOpenDiagnostics}
+        onOpenMarketComparison={() => setIsMarketComparisonOpen(true)}
         onOpenCacheModal={handleOpenCacheModal}
         onOpenGexTerminal={handleOpenGexTerminal}
         gexMetrics={gexMetrics}
@@ -1301,6 +1315,13 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
           orderBook.reset();
           orderBook.synchronize(getAdapter(preferences.exchange), preferences.symbol);
         }}
+      />
+
+      <MarketDataComparisonModal
+        isOpen={isMarketComparisonOpen}
+        onClose={() => setIsMarketComparisonOpen(false)}
+        pipeline={canonicalMarketDataEngine.getPipeline(preferences.symbol, preferences.timeframe)}
+        currentSymbol={preferences.symbol}
       />
 
       <CacheSettingsModal

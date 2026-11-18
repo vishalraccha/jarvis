@@ -451,7 +451,9 @@ export class AIOrchestrator {
   }
 
   /**
-   * Core Analysis Trigger: Captures live snapshot, evaluates setup, and prompts AI
+   * Core Analysis Trigger: Captures live snapshot, evaluates setup, and prompts AI.
+   * When isExplicitTradeAnalysis is true (from "ANALYZE TRADE" button), generates structured setup.
+   * When false (normal chat query), answers conversationally without forcing a trade recommendation.
    */
   public async requestMarketAnalysis(
     symbol: string,
@@ -459,7 +461,8 @@ export class AIOrchestrator {
     candles: CandleLike[],
     customUserPrompt?: string,
     forceImmediate: boolean = false,
-    livePrice?: number
+    livePrice?: number,
+    isExplicitTradeAnalysis: boolean = false
   ): Promise<void> {
     if (this.isAnalyzing) return;
     this.isAnalyzing = true;
@@ -470,21 +473,28 @@ export class AIOrchestrator {
       const snapshot = aiToolRegistry.generateSnapshot(symbol, timeframe, candles, livePrice);
       this.currentSnapshot = snapshot;
 
-      // 2. Derive deterministic Trade Setup anchored to actual order book levels
-      const deterministicSetup = marketIntelligenceEngine.generateTradeSetup(
-        snapshot,
-        forceImmediate ? null : this.currentSetup,
-        forceImmediate
-      );
-      this.currentSetup = deterministicSetup;
+      let deterministicSetup: TradeSetup | undefined = undefined;
 
-      // Record in journal
-      tradeJournalEngine.recordSetup(deterministicSetup, snapshot);
+      if (isExplicitTradeAnalysis) {
+        // Derive authoritative Trade Setup (respects NO_TRADE when conditions are ambiguous)
+        deterministicSetup = marketIntelligenceEngine.generateTradeSetup(
+          snapshot,
+          forceImmediate ? null : this.currentSetup,
+          forceImmediate
+        );
+        this.currentSetup = deterministicSetup;
+        tradeJournalEngine.recordSetup(deterministicSetup, snapshot);
+      }
 
-      const systemPrompt = marketIntelligenceEngine.buildSystemPrompt(snapshot);
+      const systemPrompt = isExplicitTradeAnalysis
+        ? marketIntelligenceEngine.buildSystemPrompt(snapshot)
+        : `You are JARVIS — the conversational trading AI. Answer the user's market or trading questions directly and concisely using live order-flow context. Do not force an unsolicited trade plan unless explicitly asked to ANALYZE TRADE.\n\nContext:\n- Symbol: ${symbol} (${timeframe})\n- Price: ${snapshot.currentPrice}\n- Regime: ${snapshot.regime} (${snapshot.bias})\n- VWAP: ${snapshot.structure.vwap}\n- Order Book Imbalance: ${snapshot.orderBook.depthImbalancePercent}%`;
+
       const userText = customUserPrompt
-        ? `${customUserPrompt}\n(Note: Explain concisely in 2-3 short, human-friendly bullet points without markdown clutter or asterisks)`
-        : `Provide an immediate order-flow trade plan for ${symbol} (${timeframe}) at current live price ${snapshot.currentPrice}. Focus on the immediate upcoming trade setup, resting order-book walls, and the exact imminent execution trigger.`;
+        ? customUserPrompt
+        : isExplicitTradeAnalysis
+        ? `Execute full order-flow trade analysis for ${symbol} (${timeframe}) at live price ${snapshot.currentPrice}. Anchor to resting order-book walls and provide structured rationale.`
+        : `What is the current market condition for ${symbol}?`;
 
       // Append user message
       const userMsg: AIMessage = {
@@ -648,7 +658,10 @@ export class AIOrchestrator {
           } else {
             // Consensus Synthesis
             const successful = results.filter((r) => r.success);
-            const synthesized = `### JARVIS Multi-AI Consensus Synthesis\n\n**Market Bias Consensus**: **${snapshot.bias}** (${snapshot.regime.replace(/_/g, ' ').toUpperCase()})\n**Confidence Score**: **${deterministicSetup.confidenceScore}/100**\n\n${successful.map((s) => `**${s.provider.toUpperCase()} Key Takeaway:**\n${s.text.slice(0, 320)}...`).join('\n\n')}\n\n**Synthesized Trade Conclusion:**\n${deterministicSetup.direction === 'NO_TRADE' ? 'Both order flow and model evaluations suggest sitting on hands.' : `Actionable ${deterministicSetup.direction} opportunity verified at ${deterministicSetup.entryPrice} anchored to order book wall.`}`;
+            const confScore = deterministicSetup?.confidenceScore ?? 75;
+            const tradeDir = deterministicSetup?.direction ?? 'NO_TRADE';
+            const entryPr = deterministicSetup?.entryPrice ?? snapshot.currentPrice;
+            const synthesized = `### JARVIS Multi-AI Consensus Synthesis\n\n**Market Bias Consensus**: **${snapshot.bias}** (${snapshot.regime.replace(/_/g, ' ').toUpperCase()})\n**Confidence Score**: **${confScore}/100**\n\n${successful.map((s) => `**${s.provider.toUpperCase()} Key Takeaway:**\n${s.text.slice(0, 320)}...`).join('\n\n')}\n\n**Synthesized Trade Conclusion:**\n${tradeDir === 'NO_TRADE' ? 'Both order flow and model evaluations suggest sitting on hands.' : `Actionable ${tradeDir} opportunity verified at ${entryPr} anchored to order book wall.`}`;
 
             this.messages.push({
               id: `msg_a_${Date.now()}`,

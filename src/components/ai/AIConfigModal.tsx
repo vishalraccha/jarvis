@@ -45,7 +45,14 @@ const PROVIDER_TIERS_CLIENT: Record<AIProvider, Array<{ id: string; label: strin
 };
 
 export const AIConfigModal: React.FC<AIConfigModalProps> = ({ isOpen, initialProvider, onClose }) => {
-  const [activeTab, setActiveTab] = useState<AIProvider | 'orchestration'>(initialProvider || 'gemini');
+  const sanitizeTab = (tab?: any): AIProvider | 'orchestration' => {
+    if (typeof tab === 'string' && ['gemini', 'openai', 'grok', 'orchestration'].includes(tab)) {
+      return tab as AIProvider | 'orchestration';
+    }
+    return 'gemini';
+  };
+
+  const [activeTab, setActiveTab] = useState<AIProvider | 'orchestration'>(() => sanitizeTab(initialProvider));
   const [configs, setConfigs] = useState(aiOrchestrator.getProviderConfigs());
   const [settings, setSettings] = useState(aiOrchestrator.getSettings());
   const [inputKeys, setInputKeys] = useState<Record<AIProvider, string>>({
@@ -71,7 +78,7 @@ export const AIConfigModal: React.FC<AIConfigModalProps> = ({ isOpen, initialPro
 
   useEffect(() => {
     if (initialProvider) {
-      setActiveTab(initialProvider);
+      setActiveTab(sanitizeTab(initialProvider));
     }
   }, [initialProvider]);
 
@@ -140,9 +147,18 @@ export const AIConfigModal: React.FC<AIConfigModalProps> = ({ isOpen, initialPro
   };
 
   const renderProviderTab = (provider: AIProvider) => {
-    const conf = configs[provider];
-    const models = PROVIDER_SUPPORTED_MODELS[provider];
-    const test = testResults[provider];
+    const validProvider: AIProvider = (typeof provider === 'string' && ['gemini', 'openai', 'grok'].includes(provider))
+      ? provider
+      : 'gemini';
+    const conf = configs[validProvider] || {
+      provider: validProvider,
+      enabled: validProvider === 'gemini',
+      model: validProvider === 'gemini' ? 'gemini-3.5-flash' : validProvider === 'openai' ? 'gpt-4o-mini' : 'qwen/qwen3.8-27b',
+      hasKey: false,
+      status: 'disconnected',
+    };
+    const models = PROVIDER_SUPPORTED_MODELS[validProvider] || PROVIDER_SUPPORTED_MODELS.gemini;
+    const test = testResults[validProvider] || { testing: false };
 
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -880,7 +896,7 @@ export const AIConfigModal: React.FC<AIConfigModalProps> = ({ isOpen, initialPro
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ width: 480 }}>
+      <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 480 }}>
         {/* Modal Header */}
         <div
           style={{

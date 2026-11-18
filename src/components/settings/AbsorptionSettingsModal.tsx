@@ -43,7 +43,7 @@ export const AbsorptionSettingsModal: React.FC<AbsorptionSettingsModalProps> = (
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ width: 420 }}>
+      <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 420 }}>
         {/* Header */}
         <div
           style={{

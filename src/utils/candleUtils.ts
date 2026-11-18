@@ -77,13 +77,13 @@ export function mergeAndDeduplicateCandles(
     if (candleMap.has(c.time)) {
       const existing = candleMap.get(c.time)!;
       const isLiveFormingBar = c.time >= latestNewTime;
-      const open = (existing.open > 0 && c.open > 0 && Math.abs(existing.open - c.open) / c.open <= 0.001)
-        ? existing.open
+      const open = (!isLiveFormingBar && c.open > 0 && existing.open > 0 && Math.abs(existing.open - c.open) / c.open > 0.001)
+        ? c.open
         : (c.open > 0 ? c.open : existing.open);
       const close = c.close > 0 ? c.close : existing.close;
 
-      // For confirmed closed historical bars, authoritative exchange kline heals any outlier wicks
-      // For the active forming bar, live ticks can expand the high/low until the bar closes
+      // Invariant: For closed historical bars, heal corrupted outlier wicks to authoritative exchange kline.
+      // For active live forming bar, true high and low never disappear or shrink during live ticks.
       const high = (!isLiveFormingBar && existing.high > 0 && c.high > 0 && existing.high > c.high * 1.001)
         ? c.high
         : Math.max(existing.high, c.high, open, close);

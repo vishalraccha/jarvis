@@ -71,8 +71,8 @@ const GexProfileCanvasComponent: React.FC<GexProfileCanvasProps> = ({
   const baseWidth = isMobile ? Math.min(settings.profileWidthPx || 260, maxAllowedWidth) : (settings.profileWidthPx || 260);
   const profileWidth = Math.max(minAllowedWidth, Math.min(maxAllowedWidth, baseWidth));
 
-  // Determine horizontal offset: adjacent to price axis (65px) or next to COB if visible
-  const rightOffset = 65 + (isCobActive ? cobWidth : 0);
+  // Determine horizontal offset: adjacent to price axis (responsive 50px mobile, 65px desktop) or next to COB if visible
+  const rightOffset = (width < 600 ? 50 : 65) + (isCobActive ? cobWidth : 0);
 
   const render = useCallback(() => {
     const canvas = canvasRef.current;

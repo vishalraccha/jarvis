@@ -260,7 +260,7 @@ const BottomVolumeDeltaPanelComponent: React.FC<BottomVolumeDeltaPanelProps> = (
         left: 0,
         width: `${width}px`,
         height: `${panelHeight}px`,
-        background: 'rgba(9, 13, 22, 0.95)',
+        background: '#0a0b0e',
         borderTop: '1px solid rgba(255, 255, 255, 0.1)',
         zIndex: 15,
         display: 'flex',
@@ -277,12 +277,12 @@ const BottomVolumeDeltaPanelComponent: React.FC<BottomVolumeDeltaPanelProps> = (
           alignItems: 'center',
           justifyContent: 'space-between',
           padding: '0 10px',
-          background: 'rgba(15, 23, 42, 0.7)',
+          background: '#121316',
           borderBottom: isMinimized ? 'none' : '1px solid rgba(255, 255, 255, 0.05)',
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, overflow: 'hidden' }}>
-          <Activity size={13} color="#00b4d8" style={{ flexShrink: 0 }} />
+          <Activity size={13} color="#94a3b8" style={{ flexShrink: 0 }} />
           <span className="bottom-panel-title" style={{ fontSize: 11, fontWeight: 700, color: '#f8fafc', letterSpacing: '0.02em', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
             ORDER FLOW DELTA & VOLUME
           </span>
@@ -292,8 +292,8 @@ const BottomVolumeDeltaPanelComponent: React.FC<BottomVolumeDeltaPanelProps> = (
               fontSize: 10,
               padding: '1px 6px',
               borderRadius: 3,
-              background: 'rgba(0, 180, 216, 0.15)',
-              color: '#38bdf8',
+              background: 'rgba(255, 255, 255, 0.08)',
+              color: '#cbd5e1',
               fontWeight: 600,
               flexShrink: 0,
             }}

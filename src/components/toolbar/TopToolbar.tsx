@@ -33,6 +33,7 @@ import {
   BarChart2,
   Clock,
   MoreHorizontal,
+  ShieldCheck,
 } from 'lucide-react';
 import { CandleTimeframe, ConnectionState, ExchangeId, LatencyMetrics } from '../../types/market';
 import { TerminalPreferences } from '../../types/settings';
@@ -63,6 +64,7 @@ interface TopToolbarProps {
   onOpenAbsorptionSettings?: () => void;
   onOpenDiagnostics: () => void;
   onOpenCacheModal: () => void;
+  onOpenMarketComparison?: () => void;
   onLockTerminal?: () => void;
   onOpenAIConfig?: () => void;
   onToggleAITerminal?: () => void;
@@ -205,6 +207,7 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
   onOpenAbsorptionSettings,
   onOpenDiagnostics,
   onOpenCacheModal,
+  onOpenMarketComparison,
   onLockTerminal,
   onOpenAIConfig,
   onToggleAITerminal,
@@ -220,10 +223,14 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
   const [isMobileScreen, setIsMobileScreen] = useState<boolean>(
     () => typeof window !== 'undefined' && window.innerWidth < 768
   );
+  const [isCompactScreen, setIsCompactScreen] = useState<boolean>(
+    () => typeof window !== 'undefined' && window.innerWidth < 960
+  );
 
   useEffect(() => {
     const handleResize = () => {
       setIsMobileScreen(window.innerWidth < 768);
+      setIsCompactScreen(window.innerWidth < 960);
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
@@ -399,8 +406,8 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
       className="terminal-top-toolbar"
       style={{
         height: '42px',
-        background: '#0c1017',
-        borderBottom: '1px solid rgba(255, 255, 255, 0.07)',
+        background: '#0f1013',
+        borderBottom: '1px solid #1a1b20',
         display: 'flex',
         alignItems: 'center',
         padding: '0 8px 0 10px',
@@ -420,7 +427,10 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
       <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
         {/* Terminal Logo with AI Configuration Modal Trigger */}
         <div
-          onClick={onOpenAIConfig}
+          onClick={(e) => {
+            e.stopPropagation();
+            onOpenAIConfig?.();
+          }}
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -438,7 +448,8 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
             style={{
               width: 20,
               height: 20,
-              background: 'linear-gradient(135deg, #00b4d8 0%, #0077b6 100%)',
+              background: 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)',
+              border: '1px solid rgba(56, 189, 248, 0.4)',
               borderRadius: 4,
               display: 'flex',
               alignItems: 'center',
@@ -446,7 +457,7 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
               fontWeight: 800,
               fontSize: 11,
               color: '#ffffff',
-              boxShadow: '0 0 8px rgba(0, 180, 216, 0.35)',
+              boxShadow: '0 0 8px rgba(2, 132, 199, 0.4)',
               flexShrink: 0,
             }}
           >
@@ -456,14 +467,15 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
             J.A.R.V.I.S
           </span>
           <span
+            className="terminal-brand-badge"
             style={{
               fontSize: 8.5,
               fontWeight: 800,
               padding: '1px 4px',
               borderRadius: 3,
-              background: 'rgba(0, 242, 254, 0.12)',
-              border: '1px solid rgba(0, 242, 254, 0.3)',
-              color: '#00f2fe',
+              background: 'rgba(56, 189, 248, 0.15)',
+              border: '1px solid rgba(56, 189, 248, 0.35)',
+              color: '#38bdf8',
               letterSpacing: '0.05em',
             }}
           >
@@ -657,8 +669,8 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
           )}
         </div>
 
-        {/* Timeframe Selector (Responsive Dropdown on Mobile <768px, Pills on Desktop) */}
-        {isMobileScreen ? (
+        {/* Timeframe Selector (Responsive Dropdown on Compact & Mobile <960px, Pills on Desktop) */}
+        {isCompactScreen ? (
           <div style={{ position: 'relative' }}>
             <button
               className={`terminal-dropdown-btn ${openMenu === 'timeframe' ? 'open' : ''}`}
@@ -726,8 +738,8 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
                     fontSize: 10.5,
                     fontWeight: preferences.timeframe === tf ? 700 : 500,
                     border: 'none',
-                    background: preferences.timeframe === tf ? 'rgba(0, 180, 216, 0.22)' : 'transparent',
-                    color: preferences.timeframe === tf ? '#38bdf8' : isSupported ? '#788497' : '#334155',
+                    background: preferences.timeframe === tf ? '#22252c' : 'transparent',
+                    color: preferences.timeframe === tf ? '#f4f4f6' : isSupported ? '#888b94' : '#33363f',
                     borderRadius: 3,
                     cursor: isSupported ? 'pointer' : 'not-allowed',
                     opacity: isSupported ? 1 : 0.35,
@@ -763,7 +775,7 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
             title="Trading Tools, Overlays & Indicators"
             style={{ height: 26, padding: '0 8px', fontSize: 11, gap: 5 }}
           >
-            <Sliders size={12} style={{ color: activeToolsCount > 0 ? '#38bdf8' : 'inherit' }} />
+            <Sliders size={12} style={{ color: activeToolsCount > 0 ? '#f8fafc' : 'inherit' }} />
             <span style={{ fontWeight: 700 }}>Tools</span>
             <span
               style={{
@@ -771,8 +783,8 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
                 fontWeight: 700,
                 padding: '0 5px',
                 borderRadius: 10,
-                background: activeToolsCount > 0 ? 'rgba(0, 180, 216, 0.28)' : 'rgba(255, 255, 255, 0.08)',
-                color: activeToolsCount > 0 ? '#38bdf8' : '#94a3b8',
+                background: activeToolsCount > 0 ? 'rgba(255, 255, 255, 0.15)' : 'rgba(255, 255, 255, 0.08)',
+                color: activeToolsCount > 0 ? '#f8fafc' : '#94a3b8',
               }}
             >
               {activeToolsCount}
@@ -784,7 +796,7 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
             <div className="terminal-dropdown-menu" style={{ width: 320, left: 0, maxHeight: '80vh', overflowY: 'auto' }}>
               <div className="terminal-menu-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                 <span>Trading Tools & Intelligence</span>
-                <span style={{ fontSize: 9, color: '#38bdf8' }}>{activeToolsCount} Active</span>
+                <span style={{ fontSize: 9, color: '#94a3b8' }}>{activeToolsCount} Active</span>
               </div>
 
               {/* GROUP 1: Options Intelligence */}
@@ -1184,6 +1196,18 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
                   <span>Cache & Storage</span>
                   <Database size={12} />
                 </div>
+                {onOpenMarketComparison && (
+                  <div
+                    className="terminal-menu-item action-btn"
+                    onClick={() => {
+                      setOpenMenu(null);
+                      onOpenMarketComparison();
+                    }}
+                  >
+                    <span>Data Quality & TV/MT5 Parity</span>
+                    <ShieldCheck size={12} color="#0ecb81" />
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1298,6 +1322,18 @@ const TopToolbarComponent: React.FC<TopToolbarProps> = ({
                     <span>Cache & Storage</span>
                     <Database size={12} />
                   </div>
+                  {onOpenMarketComparison && (
+                    <div
+                      className="terminal-menu-item action-btn"
+                      onClick={() => {
+                        setOpenMenu(null);
+                        onOpenMarketComparison();
+                      }}
+                    >
+                      <span>Data Quality & TV/MT5 Parity</span>
+                      <ShieldCheck size={12} color="#0ecb81" />
+                    </div>
+                  )}
                 </div>
               )}
             </div>

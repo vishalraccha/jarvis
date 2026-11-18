@@ -246,6 +246,8 @@ describe('JARVIS Multi-AI Trading Intelligence Engine', () => {
           footprintEvidence: 'Positive delta',
           absorptionEvidence: 'Buyers defending',
           invalidationCondition: 'Break below 2740.0',
+          expectedHoldingPeriod: 'intraday_2_4h',
+          analysisTimeframe: '15m',
         },
         snapshot
       );

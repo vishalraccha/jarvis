@@ -1,8 +1,14 @@
 /**
- * JARVIS AI Terminal Side Panel
- * Positioned on the LEFT side of the trading terminal opposite the COB.
- * Features automated market context, live regime/bias status, confidence meter,
- * active trade setup card, conversational history, and quick-prompt pills.
+ * JARVIS 2.0 AI Trading Intelligence Terminal
+ * 
+ * Implements Phases 5, 6, 7, 8, 10, 11:
+ * - Phase 5.1: Top status section (Provider, Instrument, Timeframe, Feed status, Order-book status, Timestamp).
+ * - Phase 5.2: Prominent dedicated "ANALYZE TRADE" button separate from conversational chat input.
+ * - Phase 6: Structured AI Trade Report with NO TRADE support, Model Confidence vs Historical Strategy Accuracy.
+ * - Phase 7: "WHY THIS TRADE?" section with Confirmations, Invalidations, Risks, and Decision-change triggers.
+ * - Phase 8: Multi-Timeframe (MTF) confluence evaluation.
+ * - Phase 10: Real-time analysis synchronization & staleness detection.
+ * - Phase 11: Advisory risk management & position sizing.
  */
 
 import React, { useState, useEffect, useRef } from 'react';
@@ -18,10 +24,23 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Bot,
+  ShieldCheck,
+  AlertTriangle,
+  Clock,
+  Layers,
+  TrendingUp,
+  TrendingDown,
+  Percent,
+  CheckCircle2,
+  XCircle,
+  X,
+  HelpCircle,
 } from 'lucide-react';
 import { aiOrchestrator } from '../../services/ai/AIOrchestrator';
+import { calculateDynamicLiveStatus } from '../../services/ai/MarketIntelligenceEngine';
 import { CandleLike } from '../../services/ai/AIToolRegistry';
 import { TradeSetup, AIEvidenceSnapshot, AIProvider, AITokenStats } from '../../types/ai';
+import { formatPrice } from '../../utils/formatters';
 
 export const formatTokenCount = (num?: number): string => {
   if (num === undefined || num === null) return '0';
@@ -53,8 +72,8 @@ export const ChatMessageItem = React.memo(({ msg, onOpenConfig }: { msg: any; on
         maxWidth: '92%',
         padding: '8px 12px',
         borderRadius: msg.role === 'user' ? '10px 10px 0 10px' : '10px 10px 10px 0',
-        background: msg.role === 'user' ? 'rgba(56, 189, 248, 0.15)' : 'rgba(255, 255, 255, 0.04)',
-        border: msg.role === 'user' ? '1px solid rgba(56, 189, 248, 0.3)' : '1px solid rgba(255, 255, 255, 0.08)',
+        background: msg.role === 'user' ? '#1c1e24' : '#121316',
+        border: msg.role === 'user' ? '1px solid #2b2e38' : '1px solid #1c1d23',
         fontSize: 11,
         lineHeight: 1.45,
         color: '#f8fafc',
@@ -62,9 +81,9 @@ export const ChatMessageItem = React.memo(({ msg, onOpenConfig }: { msg: any; on
       }}
     >
       {msg.role === 'assistant' && (
-        <div style={{ fontSize: 9, color: '#38bdf8', fontWeight: 700, marginBottom: 5, display: 'flex', alignItems: 'center', gap: 4 }}>
-          <Sparkles size={10} />
-          {msg.provider?.toUpperCase() || 'JARVIS AI'} ({msg.model || 'Engine'})
+        <div style={{ fontSize: 9, color: '#94a3b8', fontWeight: 700, marginBottom: 5, display: 'flex', alignItems: 'center', gap: 4 }}>
+          <Sparkles size={10} color="#e2e8f0" />
+          {msg.provider?.toUpperCase() || 'JARVIS AI'} ({msg.model || 'Intelligence'})
         </div>
       )}
       {msg.role === 'assistant' ? (
@@ -114,51 +133,6 @@ export const ChatMessageItem = React.memo(({ msg, onOpenConfig }: { msg: any; on
               </div>
             );
           })}
-
-          {/* Assistant Token Usage & Remaining Balance Footer */}
-          {(msg.tokensUsed !== undefined || msg.remainingTokens !== undefined) && (
-            <div
-              style={{
-                marginTop: 8,
-                paddingTop: 6,
-                borderTop: '1px solid rgba(255, 255, 255, 0.08)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                fontSize: 9.5,
-                color: '#94a3b8',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <span style={{ color: '#38bdf8' }}>⚡</span>
-                <span>
-                  {msg.tokensUsed !== undefined ? `${msg.tokensUsed.toLocaleString()} tokens` : 'Tokens'} •{' '}
-                  <strong style={{ color: '#38bdf8', fontFamily: '"JetBrains Mono", monospace' }}>
-                    {formatTokenCount(msg.remainingTokens)}
-                  </strong>
-                  {msg.totalTokens ? ` / ${formatTokenCount(msg.totalTokens)} left` : ' remaining'}
-                </span>
-              </div>
-              {onOpenConfig && (
-                <button
-                  type="button"
-                  onClick={() => onOpenConfig(msg.provider)}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: '#38bdf8',
-                    fontSize: 9,
-                    cursor: 'pointer',
-                    padding: '1px 4px',
-                    textDecoration: 'underline',
-                  }}
-                  title="Change API key or quota before tokens exhaust"
-                >
-                  Change API
-                </button>
-              )}
-            </div>
-          )}
         </div>
       ) : (
         <span style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</span>
@@ -179,628 +153,726 @@ const JarvisAITerminalComponent: React.FC<JarvisAITerminalProps> = ({
   const [isAnalyzing, setIsAnalyzing] = useState(aiOrchestrator.getIsAnalyzing());
   const [activeSetup, setActiveSetup] = useState<TradeSetup | null>(aiOrchestrator.getCurrentSetup());
   const [snapshot, setSnapshot] = useState<AIEvidenceSnapshot | null>(aiOrchestrator.getCurrentSnapshot());
+  const [settings, setSettings] = useState(aiOrchestrator.getSettings());
+  const [providerConfigs, setProviderConfigs] = useState(aiOrchestrator.getProviderConfigs());
   const [inputQuery, setInputQuery] = useState('');
   const [copiedSetup, setCopiedSetup] = useState(false);
-  const [providerConfigs, setProviderConfigs] = useState(aiOrchestrator.getProviderConfigs());
-  const [settings, setSettings] = useState(aiOrchestrator.getSettings());
-  const chatScrollRef = useRef<HTMLDivElement | null>(null);
+  const [expandedSection, setExpandedSection] = useState<'why' | 'mtf' | 'risk' | null>(null);
+  const [isMobile, setIsMobile] = useState<boolean>(() => typeof window !== 'undefined' && window.innerWidth < 768);
 
-  // Store candles in ref so streaming market ticks do NOT trigger chat re-renders
-  const candlesRef = useRef(candles);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
-    candlesRef.current = candles;
-  }, [candles]);
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
 
-  // Sync state with orchestrator
   useEffect(() => {
     const unsub = aiOrchestrator.subscribe(() => {
       setMessages([...aiOrchestrator.getMessages()]);
       setIsAnalyzing(aiOrchestrator.getIsAnalyzing());
       setActiveSetup(aiOrchestrator.getCurrentSetup());
       setSnapshot(aiOrchestrator.getCurrentSnapshot());
-      setProviderConfigs({ ...aiOrchestrator.getProviderConfigs() });
       setSettings({ ...aiOrchestrator.getSettings() });
+      setProviderConfigs({ ...aiOrchestrator.getProviderConfigs() });
     });
     return unsub;
   }, []);
 
-  // Auto-scroll chat stream to bottom
   useEffect(() => {
     if (chatScrollRef.current) {
       chatScrollRef.current.scrollTop = chatScrollRef.current.scrollHeight;
     }
   }, [messages, isAnalyzing]);
 
-  const ensureActiveCandles = async (): Promise<CandleLike[]> => {
-    let current = candlesRef.current;
-    if (!current || current.length === 0) {
-      try {
-        const res = await fetch(`/api/candles?symbol=${symbol}&timeframe=${timeframe}&limit=100`);
-        if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data) && data.length > 0) {
-            current = data;
-            candlesRef.current = data;
-          }
-        }
-      } catch {}
-    }
-    return current || [];
+  // Dynamically update proximity, status, and dynamic confidence as price ticks live
+  const livePrice = candles.length > 0 ? candles[candles.length - 1].close : (snapshot?.currentPrice || 0);
+
+  const dynamicSetup = React.useMemo(() => {
+    if (!activeSetup || livePrice <= 0) return activeSetup;
+    return calculateDynamicLiveStatus(activeSetup, livePrice);
+  }, [activeSetup, livePrice]);
+
+  // Phase 5.2: Dedicated Analyze Trade Action
+  const handleAnalyzeTrade = () => {
+    aiOrchestrator.requestMarketAnalysis(
+      symbol,
+      timeframe,
+      candles,
+      undefined,
+      true, // force fresh immediate analysis
+      undefined,
+      true // isExplicitTradeAnalysis: true
+    ).catch(() => {});
   };
 
-  const handleSend = async (queryText?: string) => {
-    const text = queryText || inputQuery;
-    if (!text.trim() || isAnalyzing) return;
+  // Conversational Chat Send (does NOT overwrite trade recommendation)
+  const handleSendMessage = (customPrompt?: string) => {
+    const query = customPrompt || inputQuery;
+    if (!query.trim() || isAnalyzing) return;
     setInputQuery('');
-    const activeCandles = await ensureActiveCandles();
-    await aiOrchestrator.requestMarketAnalysis(symbol, timeframe, activeCandles, text);
-  };
-
-  const handleRunFullAnalysis = async () => {
-    if (isAnalyzing) return;
-    const activeCandles = await ensureActiveCandles();
-    await aiOrchestrator.requestMarketAnalysis(symbol, timeframe, activeCandles, undefined, true);
+    aiOrchestrator.requestMarketAnalysis(
+      symbol,
+      timeframe,
+      candles,
+      query,
+      false,
+      undefined,
+      false // isExplicitTradeAnalysis: false
+    ).catch(() => {});
   };
 
   const handleCopySetup = () => {
     if (!activeSetup) return;
-    const text = `JARVIS AI Trade Setup (${activeSetup.instrument} - ${timeframe})\nDirection: ${activeSetup.direction}\nEntry: ${activeSetup.entryPrice}\nStop Loss: ${activeSetup.stopLoss}\nTP1: ${activeSetup.takeProfit1} | TP2: ${activeSetup.takeProfit2} | TP3: ${activeSetup.takeProfit3}\nRisk/Reward: 1:${activeSetup.rewardToRiskRatio}\nConfidence: ${activeSetup.confidenceScore}%\nInvalidation: ${activeSetup.invalidationCondition}`;
-    navigator.clipboard?.writeText(text).catch(() => {});
+    const text = `JARVIS 2.0 Trade Plan [${activeSetup.instrument} - ${activeSetup.analysisTimeframe}]
+Direction: ${activeSetup.direction} (${activeSetup.setupName})
+Entry: ${activeSetup.entryPrice}
+Stop Loss: ${activeSetup.stopLoss}
+TP1: ${activeSetup.takeProfit1} | TP2: ${activeSetup.takeProfit2} | TP3: ${activeSetup.takeProfit3}
+R:R: 1:${activeSetup.rewardToRiskRatio}
+Model Confidence: ${activeSetup.confidenceScore}% (Evidence Strength)
+Historical Accuracy: ${activeSetup.accuracyMetrics?.historicalWinRate !== null ? `${activeSetup.accuracyMetrics?.historicalWinRate}% (N=${activeSetup.accuracyMetrics?.sampleSize})` : 'Insufficient historical evidence'}`;
+    navigator.clipboard.writeText(text);
     setCopiedSetup(true);
     setTimeout(() => setCopiedSetup(false), 2000);
   };
 
+  const currentProvider = settings.primaryProvider;
+
   const quickPrompts = [
-    'Analyze current market',
-    'Where are buyers absorbing?',
-    'Where are sellers absorbing?',
-    'What is the strongest liquidity zone?',
-    'Is there an opportunity to enter long?',
-    'Is this a sweep or genuine breakout?',
-    'Explain the footprint delta',
+    'Analyze Order Book Imbalance',
+    'Evaluate VWAP & Key Levels',
+    'Check Footprint Cumulative CVD',
+    'Review Market Regime & Volatility',
   ];
 
-  const primaryConfig = providerConfigs[settings.primaryProvider];
-
-  // Collapsed Sidebar View
   if (!isExpanded) {
+    if (isMobile) {
+      return (
+        <button
+          type="button"
+          onClick={onToggleExpand}
+          className="jarvis-ai-floating-btn"
+          title="Open JARVIS AI Intelligence"
+          style={{
+            position: 'fixed',
+            bottom: 40,
+            left: 12,
+            zIndex: 100,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '7px 13px',
+            borderRadius: 20,
+            background: '#121316',
+            border: '1px solid rgba(56, 189, 248, 0.45)',
+            color: '#38bdf8',
+            fontSize: 11,
+            fontWeight: 700,
+            boxShadow: '0 4px 16px rgba(0, 0, 0, 0.7), 0 0 10px rgba(56, 189, 248, 0.25)',
+            cursor: 'pointer',
+            backdropFilter: 'blur(8px)',
+          }}
+        >
+          <Sparkles size={13} color="#38bdf8" />
+          <span>AI Intelligence</span>
+        </button>
+      );
+    }
+
     return (
-      <div
+      <aside
         style={{
           width: 38,
-          background: 'rgba(10, 15, 29, 0.96)',
-          borderRight: '1px solid rgba(255, 255, 255, 0.08)',
+          background: '#0c0d10',
+          borderRight: '1px solid #1a1b20',
           display: 'flex',
           flexDirection: 'column',
           alignItems: 'center',
-          padding: '10px 0',
+          padding: '12px 0',
           gap: 12,
-          zIndex: 8,
-          flexShrink: 0,
+          zIndex: 40,
         }}
       >
         <button
           type="button"
           onClick={onToggleExpand}
-          title="Expand JARVIS AI Terminal"
-          style={{
-            width: 28,
-            height: 28,
-            borderRadius: 6,
-            background: 'rgba(56, 189, 248, 0.15)',
-            border: '1px solid rgba(56, 189, 248, 0.35)',
-            color: '#38bdf8',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-          }}
-        >
-          <Sparkles size={14} />
-        </button>
-
-        <button
-          type="button"
-          onClick={onToggleExpand}
+          title="Open JARVIS AI Intelligence"
           style={{
             background: 'none',
             border: 'none',
-            color: '#94a3b8',
+            color: '#cbd5e1',
+            cursor: 'pointer',
+            padding: 6,
+            borderRadius: 4,
+          }}
+        >
+          <Sparkles size={16} />
+        </button>
+        <button
+          type="button"
+          onClick={onToggleExpand}
+          title="Expand Panel"
+          style={{
+            background: 'none',
+            border: 'none',
+            color: '#64748b',
             cursor: 'pointer',
             padding: 4,
           }}
         >
-          <ChevronRight size={16} />
+          <ChevronRight size={14} />
         </button>
-
-        {/* Vertical Text Label */}
-        <div
-          onClick={onToggleExpand}
-          style={{
-            writingMode: 'vertical-rl',
-            transform: 'rotate(180deg)',
-            fontSize: 10.5,
-            fontWeight: 800,
-            letterSpacing: '0.12em',
-            color: '#94a3b8',
-            cursor: 'pointer',
-            marginTop: 8,
-          }}
-        >
-          JARVIS AI
-        </div>
-
-        {/* Live Bias Dot Indicator */}
-        <div
-          title={`Market Bias: ${snapshot?.bias || 'NEUTRAL'}`}
-          style={{
-            marginTop: 'auto',
-            width: 8,
-            height: 8,
-            borderRadius: '50%',
-            background: snapshot?.bias === 'BULLISH' ? '#0ecb81' : snapshot?.bias === 'BEARISH' ? '#f6465d' : '#facc15',
-            boxShadow: '0 0 6px rgba(56, 189, 248, 0.5)',
-          }}
-        />
-      </div>
+      </aside>
     );
   }
 
-  // Expanded AI Terminal Panel View
   return (
     <aside
       className="jarvis-ai-terminal-panel"
       style={{
-        width: 360,
-        minWidth: 320,
-        maxWidth: 420,
-        background: 'rgba(10, 15, 29, 0.98)',
-        borderRight: '1px solid rgba(255, 255, 255, 0.08)',
+        width: isMobile ? '100%' : 360,
+        maxWidth: isMobile ? '100%' : 360,
+        position: isMobile ? 'fixed' : 'relative',
+        top: 0,
+        bottom: 0,
+        left: 0,
+        right: isMobile ? 0 : 'auto',
+        height: isMobile ? '100dvh' : '100%',
+        background: '#0c0d10',
+        borderRight: isMobile ? 'none' : '1px solid #1a1b20',
         display: 'flex',
         flexDirection: 'column',
-        height: '100%',
-        zIndex: 8,
-        flexShrink: 0,
-        boxSizing: 'border-box',
+        zIndex: isMobile ? 999999 : 40,
         overflow: 'hidden',
       }}
     >
-      {/* 1. Header with Model Info & Collapse */}
+      {/* 1. Top Section: Header & Status Bar (Phase 5.1) */}
       <div
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
           padding: '10px 14px',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
-          background: 'rgba(0, 0, 0, 0.25)',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <div
-            style={{
-              width: 22,
-              height: 22,
-              borderRadius: 4,
-              background: 'linear-gradient(135deg, #00b4d8 0%, #0077b6 100%)',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              color: '#fff',
-              fontWeight: 800,
-              fontSize: 12,
-            }}
-          >
-            J
-          </div>
-          <div>
-            <div style={{ fontSize: 12.5, fontWeight: 800, color: '#f8fafc', letterSpacing: '0.04em', display: 'flex', alignItems: 'center', gap: 6 }}>
-              JARVIS AI
-              <span
-                onClick={() => onOpenConfig()}
-                style={{
-                  fontSize: 9,
-                  padding: '1px 5px',
-                  borderRadius: 3,
-                  background: 'rgba(56, 189, 248, 0.15)',
-                  color: '#38bdf8',
-                  cursor: 'pointer',
-                  fontWeight: 700,
-                  textTransform: 'uppercase',
-                  maxWidth: 130,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  display: 'inline-block',
-                  verticalAlign: 'middle',
-                }}
-                title={`Active Model: ${primaryConfig?.model || settings.primaryProvider}. Click to configure.`}
-              >
-                {primaryConfig?.model || settings.primaryProvider}
-              </span>
-            </div>
-            <div style={{ fontSize: 9.5, color: '#64748b' }}>
-              {symbol} • {timeframe} • Live Order Flow
-            </div>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <button
-            type="button"
-            onClick={handleRunFullAnalysis}
-            disabled={isAnalyzing}
-            title="Re-analyze current market state"
-            style={{
-              background: 'none',
-              border: 'none',
-              color: isAnalyzing ? '#64748b' : '#38bdf8',
-              cursor: isAnalyzing ? 'default' : 'pointer',
-              padding: 4,
-            }}
-          >
-            <RefreshCw size={13} className={isAnalyzing ? 'animate-spin' : ''} />
-          </button>
-
-          <button
-            type="button"
-            onClick={onToggleExpand}
-            title="Collapse AI Panel"
-            style={{
-              background: 'none',
-              border: 'none',
-              color: '#94a3b8',
-              cursor: 'pointer',
-              padding: 4,
-            }}
-          >
-            <ChevronLeft size={16} />
-          </button>
-        </div>
-      </div>
-
-      {/* AI Token Balance & Quota Bar (Remaining vs Total) */}
-      <div
-        style={{
-          padding: '8px 12px',
-          background: 'rgba(15, 23, 42, 0.75)',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
+          background: '#121316',
+          borderBottom: '1px solid #1c1d22',
           display: 'flex',
           flexDirection: 'column',
-          gap: 6,
+          gap: 8,
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontSize: 9.5, fontWeight: 700, color: '#94a3b8', letterSpacing: '0.04em', textTransform: 'uppercase' }}>
-            Tokens Remaining
-          </span>
-          <button
-            type="button"
-            onClick={() => onOpenConfig()}
-            style={{
-              background: 'none',
-              border: 'none',
-              color: '#38bdf8',
-              fontSize: 9.5,
-              fontWeight: 600,
-              cursor: 'pointer',
-              padding: 0,
-              display: 'flex',
-              alignItems: 'center',
-              gap: 3,
-            }}
-          >
-            API Limits & Plan →
-          </button>
-        </div>
-
-        {/* 3 Provider Token Cards in Grid */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6 }}>
-          {(['gemini', 'grok', 'openai'] as AIProvider[]).map((prov) => {
-            const conf = providerConfigs[prov];
-            const defQuota = prov === 'gemini' ? 1000000 : prov === 'openai' ? 200000 : 100000;
-            const tokens: AITokenStats = conf?.tokens || {
-              usedTokens: 0,
-              totalTokens: defQuota,
-              remainingTokens: defQuota,
-              promptTokens: 0,
-              completionTokens: 0,
-              lastCallTokens: 0,
-              percentRemaining: 100,
-              lastUpdated: Date.now(),
-            };
-            const isConnected = Boolean(conf?.hasKey && conf?.status !== 'disconnected');
-            const isExhausted = isConnected && (conf?.status === 'exhausted' || conf?.status === 'quota_exceeded' || tokens.remainingTokens <= 0);
-            const isLow = isConnected && tokens.percentRemaining < 20 && !isExhausted;
-            const isPrimary = settings.primaryProvider === prov && isConnected;
-
-            // Bar color
-            const barColor = !isConnected
-              ? '#334155'
-              : isExhausted
-              ? '#ef4444'
-              : isLow
-              ? '#f59e0b'
-              : tokens.percentRemaining < 40
-              ? '#facc15'
-              : '#0ecb81';
-
-            const provLabel = prov === 'gemini' ? 'Gemini' : prov === 'grok' ? 'Groq/xAI' : 'OpenAI';
-
-            return (
-              <div
-                key={prov}
-                onClick={() => onOpenConfig(prov)}
-                title={
-                  !isConnected
-                    ? `${provLabel}: Not connected. Click to add API key.`
-                    : `${provLabel}: ${tokens.remainingTokens.toLocaleString()} remaining / ${tokens.totalTokens.toLocaleString()} total tokens (${tokens.usedTokens.toLocaleString()} used). Click to configure.`
-                }
-                style={{
-                  background: isExhausted
-                    ? 'rgba(239, 68, 68, 0.08)'
-                    : isPrimary
-                    ? 'rgba(56, 189, 248, 0.08)'
-                    : 'rgba(255, 255, 255, 0.03)',
-                  border: isExhausted
-                    ? '1px solid rgba(239, 68, 68, 0.35)'
-                    : isPrimary
-                    ? '1px solid rgba(56, 189, 248, 0.35)'
-                    : '1px solid rgba(255, 255, 255, 0.06)',
-                  borderRadius: 5,
-                  padding: '6px 7px',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: 3,
-                  transition: 'background 0.15s ease',
-                }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <span style={{ fontSize: 9.5, fontWeight: 700, color: isPrimary ? '#38bdf8' : isConnected ? '#e2e8f0' : '#94a3b8' }}>
-                    {provLabel}
-                  </span>
-                  <span
-                    style={{
-                      fontSize: 8.5,
-                      fontWeight: 700,
-                      color: !isConnected ? '#64748b' : isExhausted ? '#ef4444' : isLow ? '#f59e0b' : '#64748b',
-                    }}
-                  >
-                    {!isConnected ? 'OFF' : isExhausted ? '0%' : `${tokens.percentRemaining}%`}
-                  </span>
-                </div>
-
-                {/* Remaining / Total token count */}
-                <div style={{ fontSize: 10, fontWeight: 700, color: isConnected ? '#f8fafc' : '#64748b', fontFamily: '"JetBrains Mono", monospace' }}>
-                  {!isConnected ? (
-                    <span style={{ fontSize: 9, color: '#64748b', fontWeight: 500 }}>Not Configured</span>
-                  ) : (
-                    <>
-                      {formatTokenCount(tokens.remainingTokens)}
-                      <span style={{ fontSize: 8.5, color: '#64748b', fontWeight: 500 }}>
-                        /{formatTokenCount(tokens.totalTokens)}
-                      </span>
-                    </>
-                  )}
-                </div>
-
-                {/* Progress bar */}
-                <div style={{ width: '100%', height: 3, background: 'rgba(255, 255, 255, 0.08)', borderRadius: 2, overflow: 'hidden' }}>
-                  <div
-                    style={{
-                      width: isConnected ? `${Math.max(0, Math.min(100, tokens.percentRemaining))}%` : '0%',
-                      height: '100%',
-                      background: barColor,
-                      transition: 'width 0.3s ease',
-                    }}
-                  />
-                </div>
-              </div>
-            );
-          })}
-        </div>
-
-        {/* Low Quota or Exhaustion Alert Banner */}
-        {(() => {
-          const criticalProvider = (['gemini', 'grok', 'openai'] as AIProvider[]).find((p) => {
-            const conf = providerConfigs[p];
-            if (!conf?.hasKey || conf?.status === 'disconnected') return false;
-            return conf.status === 'exhausted' || conf.status === 'quota_exceeded' || (conf.tokens && conf.tokens.percentRemaining < 20);
-          });
-
-          if (!criticalProvider) return null;
-          const conf = providerConfigs[criticalProvider];
-          const tokens = conf?.tokens;
-          const isExhausted = conf?.status === 'exhausted' || conf?.status === 'quota_exceeded' || (tokens && tokens.remainingTokens <= 0);
-          const pName = criticalProvider === 'gemini' ? 'Gemini' : criticalProvider === 'grok' ? 'Groq/xAI' : 'OpenAI';
-
-          return (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
             <div
               style={{
-                marginTop: 2,
-                padding: '6px 8px',
-                borderRadius: 4,
-                background: isExhausted ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
-                border: `1px solid ${isExhausted ? 'rgba(239, 68, 68, 0.4)' : 'rgba(245, 158, 11, 0.4)'}`,
+                width: 22,
+                height: 22,
+                borderRadius: 5,
+                background: 'linear-gradient(135deg, #1f2229, #2d313b)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
                 display: 'flex',
                 alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 6,
+                justifyContent: 'center',
               }}
             >
-              <div style={{ fontSize: 9.5, color: isExhausted ? '#fca5a5' : '#fde68a', lineHeight: 1.3 }}>
-                ⚠️ <strong>{pName}</strong> {isExhausted ? 'exhausted!' : `low: ${tokens?.percentRemaining}% left (${formatTokenCount(tokens?.remainingTokens)} / ${formatTokenCount(tokens?.totalTokens)})`}.
-              </div>
-              <button
-                type="button"
-                onClick={() => onOpenConfig(criticalProvider)}
-                style={{
-                  background: isExhausted ? '#ef4444' : '#f59e0b',
-                  color: '#fff',
-                  border: 'none',
-                  borderRadius: 3,
-                  padding: '3px 7px',
-                  fontSize: 9,
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                  flexShrink: 0,
-                }}
-              >
-                Change API
-              </button>
+              <Sparkles size={12} color="#facc15" />
             </div>
-          );
-        })()}
-      </div>
+            <div>
+              <span style={{ fontSize: 11.5, fontWeight: 800, color: '#f8fafc', letterSpacing: '0.03em' }}>
+                JARVIS AI INTELLIGENCE
+              </span>
+              <div style={{ fontSize: 9.5, color: '#64748b' }}>
+                {symbol} • {timeframe} • Order-Flow Synced
+              </div>
+            </div>
+          </div>
 
-      {/* 2. Live Market Condition & Bias Banner */}
-      <div
-        style={{
-          padding: '10px 14px',
-          background: 'rgba(15, 23, 42, 0.65)',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 6,
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontSize: 10.5, color: '#94a3b8', fontWeight: 600 }}>Market Condition:</span>
-          <span
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {/* Provider Selector Switch */}
+            <select
+              value={currentProvider}
+              onChange={(e) => aiOrchestrator.updateSettings({ primaryProvider: e.target.value as AIProvider })}
+              style={{
+                background: '#17181d',
+                border: '1px solid #282a32',
+                borderRadius: 4,
+                color: '#e2e8f0',
+                fontSize: 9.5,
+                fontWeight: 700,
+                padding: '3px 6px',
+                outline: 'none',
+                cursor: 'pointer',
+              }}
+            >
+              <option value="gemini" style={{ background: '#17181d' }}>Gemini</option>
+              <option value="grok" style={{ background: '#17181d' }}>Groq/xAI</option>
+              <option value="openai" style={{ background: '#17181d' }}>OpenAI</option>
+            </select>
+
+            <button
+              type="button"
+              onClick={onToggleExpand}
+              title={isMobile ? 'Close AI Intelligence' : 'Collapse Panel'}
+              style={{
+                background: isMobile ? 'rgba(255, 255, 255, 0.08)' : 'none',
+                border: isMobile ? '1px solid rgba(255, 255, 255, 0.15)' : 'none',
+                color: isMobile ? '#f8fafc' : '#94a3b8',
+                cursor: 'pointer',
+                padding: isMobile ? '3px 8px' : 4,
+                borderRadius: isMobile ? 4 : 0,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                fontSize: 11,
+                fontWeight: 600,
+              }}
+            >
+              {isMobile ? (
+                <>
+                  <X size={13} />
+                  <span>Close</span>
+                </>
+              ) : (
+                <ChevronLeft size={16} />
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Live Status Indicators (Phase 5.1) */}
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, fontSize: 9.5 }}>
+          <div
             style={{
-              fontSize: 10.5,
-              fontWeight: 800,
-              padding: '2px 7px',
+              padding: '4px 6px',
               borderRadius: 4,
-              textTransform: 'uppercase',
-              background:
-                snapshot?.bias === 'BULLISH'
-                  ? 'rgba(14, 203, 129, 0.15)'
-                  : snapshot?.bias === 'BEARISH'
-                  ? 'rgba(246, 70, 93, 0.15)'
-                  : 'rgba(250, 204, 21, 0.15)',
-              color:
-                snapshot?.bias === 'BULLISH'
-                  ? '#0ecb81'
-                  : snapshot?.bias === 'BEARISH'
-                  ? '#f6465d'
-                  : '#facc15',
+              background: '#15161b',
+              border: '1px solid #22242c',
               display: 'flex',
               alignItems: 'center',
-              gap: 4,
+              gap: 5,
             }}
           >
-            {snapshot?.bias === 'BULLISH' ? <ArrowUpRight size={12} /> : snapshot?.bias === 'BEARISH' ? <ArrowDownRight size={12} /> : <Minus size={12} />}
-            {snapshot?.bias || 'NEUTRAL'} ({snapshot?.regime.replace(/_/g, ' ') || 'ANALYZING'})
-          </span>
-        </div>
-
-        {/* Confidence Meter */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10 }}>
-            <span style={{ color: '#64748b' }}>Order Flow Confidence</span>
-            <span style={{ color: '#38bdf8', fontWeight: 700 }}>{activeSetup?.confidenceScore || 50}%</span>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#0ecb81' }} />
+            <span style={{ color: '#94a3b8' }}>Data:</span>
+            <span style={{ color: '#f8fafc', fontWeight: 700 }}>Canonical 1:1</span>
           </div>
-          <div style={{ width: '100%', height: 4, background: 'rgba(255, 255, 255, 0.08)', borderRadius: 2, overflow: 'hidden' }}>
-            <div
+
+          <div
+            style={{
+              padding: '4px 6px',
+              borderRadius: 4,
+              background: '#15161b',
+              border: '1px solid #22242c',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 5,
+            }}
+          >
+            <Layers size={10} color="#94a3b8" />
+            <span style={{ color: '#94a3b8' }}>OB Skew:</span>
+            <span
               style={{
-                width: `${activeSetup?.confidenceScore || 50}%`,
-                height: '100%',
-                background: 'linear-gradient(90deg, #38bdf8, #0ecb81)',
-                transition: 'width 0.3s ease',
+                fontWeight: 700,
+                color: (snapshot?.orderBook.depthImbalancePercent || 0) >= 0 ? '#0ecb81' : '#f6465d',
               }}
-            />
+            >
+              {snapshot?.orderBook.depthImbalancePercent || 0}%
+            </span>
           </div>
         </div>
       </div>
 
-      {/* 3. Active Trade Setup Card */}
-      {activeSetup && activeSetup.direction !== 'NO_TRADE' && (
-        <div
+      {/* 2. DEDICATED ACTION: ANALYZE TRADE BUTTON (Phase 5.1 & 5.2) */}
+      <div style={{ padding: '10px 14px', background: '#0e0f12', borderBottom: '1px solid #1c1d22' }}>
+        <button
+          type="button"
+          onClick={handleAnalyzeTrade}
+          disabled={isAnalyzing}
           style={{
-            margin: '10px 14px',
-            padding: 10,
+            width: '100%',
+            padding: '9px 12px',
             borderRadius: 6,
-            background:
-              activeSetup.direction === 'LONG'
-                ? 'rgba(14, 203, 129, 0.06)'
-                : 'rgba(246, 70, 93, 0.06)',
-            border: `1px solid ${
-              activeSetup.direction === 'LONG'
-                ? 'rgba(14, 203, 129, 0.25)'
-                : 'rgba(246, 70, 93, 0.25)'
-            }`,
+            background: isAnalyzing ? '#1a1b20' : 'linear-gradient(135deg, #1e2026 0%, #292c34 100%)',
+            color: '#f8fafc',
+            border: '1px solid rgba(255, 255, 255, 0.14)',
+            fontWeight: 800,
+            fontSize: 11.5,
+            letterSpacing: '0.05em',
+            cursor: isAnalyzing ? 'default' : 'pointer',
             display: 'flex',
-            flexDirection: 'column',
-            gap: 6,
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 8,
+            boxShadow: isAnalyzing ? 'none' : '0 2px 8px rgba(0, 0, 0, 0.4)',
+            transition: 'all 0.2s ease',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 11, fontWeight: 800, color: activeSetup.direction === 'LONG' ? '#0ecb81' : '#f6465d' }}>
-                {activeSetup.direction} ({activeSetup.entryType})
-              </span>
-              <span
-                style={{
-                  fontSize: 8,
-                  fontWeight: 800,
-                  padding: '1px 5px',
-                  borderRadius: 3,
-                  background: 'rgba(56, 189, 248, 0.15)',
-                  color: '#38bdf8',
-                  border: '1px solid rgba(56, 189, 248, 0.3)',
-                  letterSpacing: '0.04em',
-                }}
-              >
-                {activeSetup.status === 'READY_NOW' ? '⚡ IMMINENT (READY NOW)' : '⏳ WAITING CONFIRMATION'}
-              </span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: 9.5, color: '#94a3b8' }}>R:R 1:{activeSetup.rewardToRiskRatio}</span>
+          <RefreshCw size={13} className={isAnalyzing ? 'animate-spin' : ''} color={isAnalyzing ? '#94a3b8' : '#facc15'} />
+          {isAnalyzing ? 'EVALUATING MULTI-TIMEFRAME CONFLUENCE...' : '⚡ ANALYZE TRADE'}
+        </button>
+      </div>
+
+      {/* 3. STRUCTURED AI TRADE REPORT CARD (Phase 6, 7, 8, 11) */}
+      {(dynamicSetup || activeSetup) && (() => {
+        const s = dynamicSetup || activeSetup!;
+        const isReady = s.liveExecutionStatus === 'READY_NOW';
+        const isArmed = s.liveExecutionStatus === 'ARMED';
+        const isWaitForLevel = s.actionType === 'WAIT_FOR_LEVEL';
+
+        return (
+          <div
+            style={{
+              margin: '8px 12px',
+              borderRadius: 6,
+              background:
+                isReady
+                  ? 'rgba(14, 203, 129, 0.08)'
+                  : s.direction === 'LONG'
+                  ? 'rgba(14, 203, 129, 0.04)'
+                  : s.direction === 'SHORT'
+                  ? 'rgba(246, 70, 93, 0.04)'
+                  : 'rgba(250, 204, 21, 0.04)',
+              border: `1px solid ${
+                isReady
+                  ? 'rgba(14, 203, 129, 0.6)'
+                  : isArmed
+                  ? 'rgba(56, 189, 248, 0.5)'
+                  : s.direction === 'LONG'
+                  ? 'rgba(14, 203, 129, 0.3)'
+                  : s.direction === 'SHORT'
+                  ? 'rgba(246, 70, 93, 0.3)'
+                  : 'rgba(250, 204, 21, 0.3)'
+              }`,
+              padding: 10,
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+              maxHeight: 320,
+              overflowY: 'auto',
+              boxShadow: isReady ? '0 0 15px rgba(14, 203, 129, 0.2)' : 'none',
+            }}
+          >
+            {/* Header: Action / Direction Badge & Status */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                <span
+                  style={{
+                    fontSize: 10.5,
+                    fontWeight: 900,
+                    padding: '2px 8px',
+                    borderRadius: 4,
+                    background:
+                      isReady
+                        ? 'rgba(14, 203, 129, 0.3)'
+                        : s.direction === 'LONG'
+                        ? 'rgba(14, 203, 129, 0.2)'
+                        : s.direction === 'SHORT'
+                        ? 'rgba(246, 70, 93, 0.2)'
+                        : 'rgba(250, 204, 21, 0.2)',
+                    color:
+                      isReady
+                        ? '#00e676'
+                        : s.direction === 'LONG'
+                        ? '#0ecb81'
+                        : s.direction === 'SHORT'
+                        ? '#f6465d'
+                        : '#facc15',
+                    letterSpacing: '0.04em',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                  }}
+                >
+                  {isReady ? '🔥 READY NOW' : isWaitForLevel ? '⏳ WAIT FOR LEVEL' : s.direction}
+                </span>
+
+                <span
+                  style={{
+                    fontSize: 9,
+                    fontWeight: 700,
+                    padding: '2px 6px',
+                    borderRadius: 3,
+                    background: isReady ? 'rgba(14, 203, 129, 0.15)' : isArmed ? 'rgba(245, 158, 11, 0.15)' : 'rgba(255, 255, 255, 0.05)',
+                    color: isReady ? '#00e676' : isArmed ? '#facc15' : '#94a3b8',
+                  }}
+                >
+                  {s.distanceToTrigger !== undefined ? `${s.distanceToTrigger} away` : 'Live'}
+                </span>
+
+                <span style={{ fontSize: 9.5, fontWeight: 700, color: '#e2e8f0' }}>
+                  {s.direction} @ {s.entryPrice}
+                </span>
+              </div>
+
               <button
                 type="button"
                 onClick={handleCopySetup}
-                title="Copy trade plan"
+                title="Copy Trade Plan"
                 style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: 2 }}
               >
-                <Copy size={12} style={{ color: copiedSetup ? '#0ecb81' : '#94a3b8' }} />
+                <Copy size={12} color={copiedSetup ? '#0ecb81' : '#94a3b8'} />
               </button>
             </div>
-          </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, fontSize: 10.5 }}>
-            <div>
-              <span style={{ color: '#64748b' }}>Entry: </span>
-              <span style={{ color: '#fff', fontWeight: 700 }}>
-                {activeSetup.entryPrice}
-                <span style={{ fontSize: 8.5, color: '#0ecb81', marginLeft: 4 }}>
-                  {activeSetup.entryType === 'MARKET' ? '[LIVE]' : '[LIMIT]'}
+            {/* 1. Definitive Market Movement Forecast (Single Authoritative Direction) */}
+            <div
+              style={{
+                padding: '7px 9px',
+                borderRadius: 5,
+                background: s.direction === 'SHORT' ? 'rgba(246, 70, 93, 0.08)' : s.direction === 'LONG' ? 'rgba(14, 203, 129, 0.08)' : 'rgba(250, 204, 21, 0.08)',
+                border: `1px solid ${
+                  s.direction === 'SHORT'
+                    ? 'rgba(246, 70, 93, 0.3)'
+                    : s.direction === 'LONG'
+                    ? 'rgba(14, 203, 129, 0.3)'
+                    : 'rgba(250, 204, 21, 0.3)'
+                }`,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 4,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                  {s.direction === 'SHORT' ? (
+                    <TrendingDown size={14} color="#f6465d" />
+                  ) : s.direction === 'LONG' ? (
+                    <TrendingUp size={14} color="#0ecb81" />
+                  ) : (
+                    <Minus size={14} color="#facc15" />
+                  )}
+                  <span
+                    style={{
+                      fontSize: 10,
+                      fontWeight: 900,
+                      letterSpacing: '0.04em',
+                      color: s.direction === 'SHORT' ? '#f6465d' : s.direction === 'LONG' ? '#0ecb81' : '#facc15',
+                    }}
+                  >
+                    PREDICTED MOVE: {s.direction === 'SHORT' ? 'BEARISH (DOWNWARD)' : s.direction === 'LONG' ? 'BULLISH (UPWARD)' : 'EQUILIBRIUM / RANGE'}
+                  </span>
+                </div>
+                <span
+                  style={{
+                    fontSize: 9,
+                    fontWeight: 800,
+                    padding: '2px 5px',
+                    borderRadius: 3,
+                    background: 'rgba(255, 255, 255, 0.08)',
+                    color: '#f8fafc',
+                  }}
+                >
+                  Accuracy: {s.marketMovementPrediction?.probability || s.dynamicLiveConfidence || s.confidenceScore}%
                 </span>
-              </span>
+              </div>
+              <div style={{ fontSize: 9.5, color: '#cbd5e1', lineHeight: 1.35 }}>
+                {s.marketMovementPrediction?.expectedMoveText ||
+                  (s.direction === 'SHORT'
+                    ? `Order book is sell-skewed. Expecting downward continuation toward ${s.takeProfit1}.`
+                    : s.direction === 'LONG'
+                    ? `Order book is bid-supported. Expecting upward move toward ${s.takeProfit1}.`
+                    : 'Market is compressing without decisive order flow asymmetry.')}
+              </div>
             </div>
-            <div>
-              <span style={{ color: '#64748b' }}>Stop: </span>
-              <span style={{ color: '#f87171', fontWeight: 700 }}>{activeSetup.stopLoss}</span>
-            </div>
-            <div>
-              <span style={{ color: '#64748b' }}>TP1: </span>
-              <span style={{ color: '#38bdf8', fontWeight: 700 }}>{activeSetup.takeProfit1}</span>
-            </div>
-            <div>
-              <span style={{ color: '#64748b' }}>TP2: </span>
-              <span style={{ color: '#38bdf8', fontWeight: 700 }}>{activeSetup.takeProfit2}</span>
-            </div>
-          </div>
 
-          <div style={{ fontSize: 9.5, color: '#94a3b8', lineHeight: 1.3, marginTop: 2 }}>
-            <span style={{ color: '#64748b' }}>Order Book: </span>
-            {activeSetup.orderBookEvidence}
-          </div>
-        </div>
-      )}
+            {/* Execution Rule / Guidance Callout */}
+            <div
+              style={{
+                fontSize: 9.5,
+                lineHeight: 1.4,
+                padding: '6px 8px',
+                borderRadius: 4,
+                background: isReady ? 'rgba(14, 203, 129, 0.12)' : 'rgba(255, 255, 255, 0.04)',
+                border: `1px solid ${isReady ? 'rgba(14, 203, 129, 0.35)' : 'rgba(255, 255, 255, 0.08)'}`,
+                color: '#f8fafc',
+              }}
+            >
+              {isReady ? (
+                <div>
+                  <strong style={{ color: '#00e676' }}>🔥 PRICE IN EXECUTION ZONE: </strong>
+                  Market price is testing ${s.entryPrice}. Execute <strong>{s.direction}</strong> now with SL at ${s.stopLoss} and TP at ${s.takeProfit1}. Dynamic Accuracy: <strong style={{ color: '#00e676' }}>{s.dynamicLiveConfidence || s.confidenceScore}%</strong>.
+                </div>
+              ) : (
+                <div>
+                  <strong style={{ color: '#facc15' }}>⏳ EXECUTION RULE: </strong>
+                  Do NOT enter at floating price in mid-air. Wait for price to reach <strong>${s.entryPrice}</strong> ({s.distanceToTrigger !== undefined ? `${s.distanceToTrigger} away` : 'approaching'}). Take <strong>{s.direction}</strong> upon resting wall test with SL at ${s.stopLoss} and TP at ${s.takeProfit1}. Predicted Accuracy: <strong style={{ color: '#facc15' }}>{s.dynamicLiveConfidence || s.confidenceScore}%</strong>.
+                </div>
+              )}
+            </div>
 
-      {/* 4. Chat Messages Scroll Area */}
+            {/* Trade Execution Metrics */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, fontSize: 10.5 }}>
+              <div>
+                <span style={{ color: '#94a3b8' }}>Target Entry: </span>
+                <span style={{ color: '#fff', fontWeight: 700, fontFamily: '"JetBrains Mono", monospace' }}>
+                  {s.entryPrice}
+                </span>
+              </div>
+              <div>
+                <span style={{ color: '#94a3b8' }}>Stop Loss: </span>
+                <span style={{ color: '#f87171', fontWeight: 700, fontFamily: '"JetBrains Mono", monospace' }}>
+                  {s.stopLoss}
+                </span>
+              </div>
+              <div>
+                <span style={{ color: '#94a3b8' }}>TP1: </span>
+                <span style={{ color: '#38bdf8', fontWeight: 700, fontFamily: '"JetBrains Mono", monospace' }}>
+                  {s.takeProfit1}
+                </span>
+              </div>
+              <div>
+                <span style={{ color: '#94a3b8' }}>R:R: </span>
+                <span style={{ color: '#0ecb81', fontWeight: 700 }}>1:{s.rewardToRiskRatio}</span>
+              </div>
+            </div>
+
+            {/* Single Decisive Planned Level (Matching Chosen Direction - NEVER conflicting two-way signals) */}
+            {(() => {
+              const activePlan = s.direction === 'SHORT' ? s.plannedSellSetup : s.plannedBuySetup;
+              if (!activePlan) return null;
+              const isShort = s.direction === 'SHORT';
+              return (
+                <div
+                  style={{
+                    padding: '6px 8px',
+                    borderRadius: 4,
+                    background: isShort ? 'rgba(246, 70, 93, 0.06)' : 'rgba(14, 203, 129, 0.06)',
+                    border: `1px solid ${isShort ? 'rgba(246, 70, 93, 0.25)' : 'rgba(14, 203, 129, 0.25)'}`,
+                    fontSize: 9.5,
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', color: isShort ? '#f6465d' : '#0ecb81', fontWeight: 800 }}>
+                    <span>{isShort ? 'SELL LIMIT' : 'BUY LIMIT'} @ {activePlan.level}</span>
+                    <span style={{ fontSize: 9, padding: '1px 5px', borderRadius: 3, background: 'rgba(255,255,255,0.06)' }}>
+                      {activePlan.status}
+                    </span>
+                  </div>
+                  <div style={{ color: '#94a3b8', marginTop: 2, display: 'flex', justifyContent: 'space-between' }}>
+                    <span>Resting Wall: <strong style={{ color: '#e2e8f0' }}>{activePlan.wallQuantity} lots</strong></span>
+                    <span>Distance: <strong style={{ color: '#e2e8f0' }}>{activePlan.distance} away</strong></span>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Section B: Trade Accuracy & Reliability */}
+            <div
+              style={{
+                padding: '6px 8px',
+                borderRadius: 4,
+                background: 'rgba(255, 255, 255, 0.03)',
+                border: '1px solid rgba(255, 255, 255, 0.06)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 4,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5 }}>
+                <span style={{ color: '#94a3b8' }}>1. Live Dynamic Confidence:</span>
+                <span style={{ color: '#38bdf8', fontWeight: 800 }}>
+                  {s.dynamicLiveConfidence || s.confidenceScore}% (Real-time Live Tick Synced)
+                </span>
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 9.5 }}>
+                <span style={{ color: '#94a3b8' }}>2. Historical Strategy Win Rate:</span>
+                <span style={{ color: s.accuracyMetrics?.historicalWinRate !== null ? '#0ecb81' : '#f59e0b', fontWeight: 700 }}>
+                  {s.accuracyMetrics?.historicalWinRate !== null
+                    ? `${s.accuracyMetrics?.historicalWinRate}% (N=${s.accuracyMetrics?.sampleSize})`
+                    : 'N/A (N < 20)'}
+                </span>
+              </div>
+
+              <div style={{ fontSize: 8.5, color: '#64748b', fontStyle: 'italic' }}>
+                {s.accuracyMetrics?.accuracyReliabilityNotice}
+              </div>
+            </div>
+
+            {/* Collapsible Sections (Phase 7, 8, 11) */}
+            <div style={{ display: 'flex', gap: 4, marginTop: 2 }}>
+              <button
+                type="button"
+                onClick={() => setExpandedSection(expandedSection === 'why' ? null : 'why')}
+                style={{
+                  flex: 1,
+                  padding: '4px 6px',
+                  borderRadius: 4,
+                  background: expandedSection === 'why' ? 'rgba(255, 255, 255, 0.12)' : 'rgba(255, 255, 255, 0.03)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  color: expandedSection === 'why' ? '#f8fafc' : '#94a3b8',
+                  fontSize: 9,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Why This Trade?
+              </button>
+              <button
+                type="button"
+                onClick={() => setExpandedSection(expandedSection === 'mtf' ? null : 'mtf')}
+                style={{
+                  flex: 1,
+                  padding: '4px 6px',
+                  borderRadius: 4,
+                  background: expandedSection === 'mtf' ? 'rgba(255, 255, 255, 0.12)' : 'rgba(255, 255, 255, 0.03)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  color: expandedSection === 'mtf' ? '#f8fafc' : '#94a3b8',
+                  fontSize: 9,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Multi-Timeframe
+              </button>
+              <button
+                type="button"
+                onClick={() => setExpandedSection(expandedSection === 'risk' ? null : 'risk')}
+                style={{
+                  flex: 1,
+                  padding: '4px 6px',
+                  borderRadius: 4,
+                  background: expandedSection === 'risk' ? 'rgba(255, 255, 255, 0.12)' : 'rgba(255, 255, 255, 0.03)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  color: expandedSection === 'risk' ? '#f8fafc' : '#94a3b8',
+                  fontSize: 9,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Risk Check
+              </button>
+            </div>
+
+            {/* Phase 7: Why This Trade Content */}
+            {expandedSection === 'why' && s.whyThisTrade && (
+              <div style={{ fontSize: 9.5, color: '#cbd5e1', lineHeight: 1.45, background: 'rgba(0, 0, 0, 0.3)', padding: 8, borderRadius: 4, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div>• <strong>Liquidity:</strong> {s.whyThisTrade.liquidityPosition}</div>
+                <div>• <strong>Structure:</strong> {s.whyThisTrade.marketStructureReasoning}</div>
+                <div>• <strong>Confirmation:</strong> {s.whyThisTrade.whatConfirms.join(', ')}</div>
+                <div>• <strong>Invalidation:</strong> {s.whyThisTrade.whatInvalidates.join(', ')}</div>
+                <div>• <strong>What Could Go Wrong:</strong> {s.whyThisTrade.whatCouldGoWrong.join(', ')}</div>
+              </div>
+            )}
+
+            {expandedSection === 'mtf' && s.multiTimeframeAnalysis && (
+              <div style={{ fontSize: 9.5, color: '#cbd5e1', lineHeight: 1.45, background: 'rgba(0, 0, 0, 0.3)', padding: 8, borderRadius: 4, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div>• <strong>HTF (1h):</strong> {s.multiTimeframeAnalysis.higherTimeframe.trend} (Key: {s.multiTimeframeAnalysis.higherTimeframe.keyLevel})</div>
+                <div>• <strong>Intermediate ({s.multiTimeframeAnalysis.intermediateTimeframe.timeframe}):</strong> {s.multiTimeframeAnalysis.intermediateTimeframe.setupFormation}</div>
+                <div>• <strong>Trigger (1m):</strong> {s.multiTimeframeAnalysis.entryTimeframe.trigger}</div>
+              </div>
+            )}
+
+            {expandedSection === 'risk' && s.riskManagement && (
+              <div style={{ fontSize: 9.5, color: '#cbd5e1', lineHeight: 1.45, background: 'rgba(0, 0, 0, 0.3)', padding: 8, borderRadius: 4, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div>• <strong>Max Equity Risk:</strong> ${s.riskManagement.accountRiskAmountDollars} (1.0% limit)</div>
+                <div>• <strong>Suggested Lot Size:</strong> {s.riskManagement.suggestedPositionSizeLots} lots</div>
+                <div>• <strong>Stop Distance:</strong> {s.riskManagement.stopLossDistancePoints} points</div>
+                <div style={{ fontSize: 8.5, color: '#64748b', fontStyle: 'italic' }}>Advisory calculation. Live orders must be entered manually by trader.</div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* 4. Chat Messages Scroll Area (Phase 5.1 Conversational AI) */}
       <div
         ref={chatScrollRef}
         style={{
@@ -815,7 +887,7 @@ const JarvisAITerminalComponent: React.FC<JarvisAITerminalProps> = ({
         {messages.length === 0 && (
           <div
             style={{
-              padding: '20px 10px',
+              padding: '24px 10px',
               textAlign: 'center',
               color: '#64748b',
               fontSize: 11,
@@ -825,10 +897,10 @@ const JarvisAITerminalComponent: React.FC<JarvisAITerminalProps> = ({
               gap: 8,
             }}
           >
-            <Bot size={28} style={{ color: '#38bdf8', opacity: 0.8 }} />
+            <Bot size={26} color="#38bdf8" style={{ opacity: 0.8 }} />
             <div>
-              <div style={{ fontWeight: 700, color: '#f8fafc', marginBottom: 2 }}>JARVIS Intelligence Active</div>
-              Analyzing live order-book depth, resting walls, and absorption. Ask any question or click a quick prompt below.
+              <div style={{ fontWeight: 800, color: '#f8fafc', marginBottom: 2 }}>JARVIS Intelligence Ready</div>
+              Click <strong>ANALYZE TRADE</strong> above for institutional trade setups, or ask any order-flow question below.
             </div>
           </div>
         )}
@@ -853,7 +925,7 @@ const JarvisAITerminalComponent: React.FC<JarvisAITerminalProps> = ({
             }}
           >
             <div className="animate-spin" style={{ width: 12, height: 12, border: '2px solid #38bdf8', borderTopColor: 'transparent', borderRadius: '50%' }} />
-            Analyzing order-book depth and absorption...
+            Evaluating order-book depth and absorption...
           </div>
         )}
       </div>
@@ -861,12 +933,12 @@ const JarvisAITerminalComponent: React.FC<JarvisAITerminalProps> = ({
       {/* 5. Quick Prompt Pills */}
       <div
         style={{
-          padding: '6px 14px',
+          padding: '5px 12px',
           display: 'flex',
-          gap: 6,
+          gap: 5,
           overflowX: 'auto',
-          background: 'rgba(0, 0, 0, 0.2)',
-          borderTop: '1px solid rgba(255, 255, 255, 0.04)',
+          background: '#0c0d10',
+          borderTop: '1px solid #1a1b20',
           whiteSpace: 'nowrap',
           scrollbarWidth: 'none',
         }}
@@ -875,15 +947,15 @@ const JarvisAITerminalComponent: React.FC<JarvisAITerminalProps> = ({
           <button
             key={i}
             type="button"
-            onClick={() => handleSend(p)}
+            onClick={() => handleSendMessage(p)}
             disabled={isAnalyzing}
             style={{
               padding: '3px 8px',
-              borderRadius: 12,
-              background: 'rgba(255, 255, 255, 0.05)',
-              border: '1px solid rgba(255, 255, 255, 0.1)',
+              borderRadius: 10,
+              background: '#15161b',
+              border: '1px solid #23252d',
               color: '#94a3b8',
-              fontSize: 10,
+              fontSize: 9.5,
               cursor: isAnalyzing ? 'default' : 'pointer',
               flexShrink: 0,
             }}
@@ -893,15 +965,15 @@ const JarvisAITerminalComponent: React.FC<JarvisAITerminalProps> = ({
         ))}
       </div>
 
-      {/* 6. Chat Input Form */}
+      {/* 6. Conversational Chat Input Form */}
       <div
         style={{
-          padding: '10px 14px',
-          borderTop: '1px solid rgba(255, 255, 255, 0.08)',
-          background: 'rgba(10, 15, 29, 0.98)',
+          padding: '8px 12px',
+          borderTop: '1px solid #1a1b20',
+          background: '#101115',
           display: 'flex',
           alignItems: 'center',
-          gap: 8,
+          gap: 6,
         }}
       >
         <button
@@ -910,38 +982,38 @@ const JarvisAITerminalComponent: React.FC<JarvisAITerminalProps> = ({
           title="Clear chat history"
           style={{ background: 'none', border: 'none', color: '#64748b', cursor: 'pointer', padding: 4 }}
         >
-          <Trash2 size={14} />
+          <Trash2 size={13} />
         </button>
 
         <input
           type="text"
-          placeholder="Ask JARVIS AI about order flow..."
+          placeholder="Ask a question about market flow..."
           value={inputQuery}
           onChange={(e) => setInputQuery(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') handleSend();
+            if (e.key === 'Enter') handleSendMessage();
           }}
           style={{
             flex: 1,
-            padding: '7px 10px',
-            background: 'rgba(15, 23, 42, 0.8)',
-            border: '1px solid rgba(255, 255, 255, 0.12)',
+            padding: '6px 10px',
+            background: '#17181d',
+            border: '1px solid #282a32',
             borderRadius: 5,
-            color: '#fff',
-            fontSize: 11.5,
+            color: '#f4f4f6',
+            fontSize: 11,
             outline: 'none',
           }}
         />
 
         <button
           type="button"
-          onClick={() => handleSend()}
+          onClick={() => handleSendMessage()}
           disabled={!inputQuery.trim() || isAnalyzing}
           style={{
-            padding: '7px 10px',
-            background: inputQuery.trim() && !isAnalyzing ? '#38bdf8' : 'rgba(255, 255, 255, 0.05)',
-            color: inputQuery.trim() && !isAnalyzing ? '#0f172a' : '#64748b',
-            border: 'none',
+            padding: '6px 10px',
+            background: inputQuery.trim() && !isAnalyzing ? '#262933' : '#17181d',
+            color: inputQuery.trim() && !isAnalyzing ? '#f4f4f6' : '#64748b',
+            border: '1px solid rgba(255, 255, 255, 0.12)',
             borderRadius: 5,
             cursor: inputQuery.trim() && !isAnalyzing ? 'pointer' : 'default',
             display: 'flex',
@@ -949,7 +1021,7 @@ const JarvisAITerminalComponent: React.FC<JarvisAITerminalProps> = ({
             justifyContent: 'center',
           }}
         >
-          <Send size={13} />
+          <Send size={12} />
         </button>
       </div>
     </aside>

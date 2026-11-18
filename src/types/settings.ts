@@ -142,7 +142,7 @@ export const DEFAULT_FOOTPRINT_SETTINGS: FootprintSettings = {
   showPocHighlight: true,
   showCandleDelta: true, // Display overall delta below each candle by default
   showBottomPanel: false,
-  showSideProfile: true, // Solid blue profile on the left matching Image 2
+  showSideProfile: false, // Start disabled, manually toggleable
   showWickAndBody: true,
   showDebugInspection: false,
   imbalanceRatio: 3.0,
@@ -169,24 +169,24 @@ export const DEFAULT_TERMINAL_PREFERENCES: TerminalPreferences = {
   symbol: 'XAUUSD',
   timeframe: '1m',
   chartMode: 'candles',
-  showHeatmap: true,
+  showHeatmap: false,
   showCandles: true,
-  showBubbles: true,
-  showDepthProfile: true, // Bookmap COB / DOM profile active by default
+  showBubbles: false,
+  showDepthProfile: false,
   showFootprint: false,
   showBestBidAskLines: false,
   showCurrentPriceLine: true,
   showLiquidityShifts: false,
-  showVwap: true, // VWAP active by default
-  showAbsorption: true, // Absorption order-flow tool active by default
-  showGex: true, // GEX (Gamma Exposure) level lines active by default
-  showGexProfile: false, // MenthorQ-style on-chart GEX profile ladder toggleable from Tools menu
+  showVwap: false,
+  showAbsorption: false,
+  showGex: false,
+  showGexProfile: false,
   autoScrollToLatest: true,
   heatmap: DEFAULT_HEATMAP_SETTINGS,
-  bubbles: DEFAULT_BUBBLE_SETTINGS,
-  depthProfile: DEFAULT_DEPTH_PROFILE_SETTINGS,
-  footprint: DEFAULT_FOOTPRINT_SETTINGS,
-  vwap: DEFAULT_VWAP_SETTINGS,
-  absorption: DEFAULT_ABSORPTION_SETTINGS,
-  gex: DEFAULT_GEX_SETTINGS,
+  bubbles: { ...DEFAULT_BUBBLE_SETTINGS, enabled: false },
+  depthProfile: { ...DEFAULT_DEPTH_PROFILE_SETTINGS, enabled: false },
+  footprint: { ...DEFAULT_FOOTPRINT_SETTINGS, enabled: false, showSideProfile: false },
+  vwap: { ...DEFAULT_VWAP_SETTINGS, enabled: false },
+  absorption: { ...DEFAULT_ABSORPTION_SETTINGS, enabled: false },
+  gex: { ...DEFAULT_GEX_SETTINGS, enabled: false, showChartOverlay: false, showProfileLadder: false },
 };

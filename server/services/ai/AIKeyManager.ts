@@ -422,6 +422,9 @@ class AIKeyManager {
     }
     c.totalTokens = Math.max(1000, totalTokens);
     c.remainingTokens = Math.max(0, c.totalTokens - (c.tokensUsed || 0));
+    if (c.remainingTokens > 0 && c.status === 'quota_exceeded') {
+      c.status = 'connected';
+    }
     c.lastUpdated = Date.now();
     this.saveToStorage();
     return this.getTokenStats(provider);
