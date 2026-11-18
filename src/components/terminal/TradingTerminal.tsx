@@ -184,6 +184,14 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
 
   // 1. Load preferences from IndexedDB on startup
   useEffect(() => {
+    // Purge any stale synthetic basis offsets from local storage to guarantee 1:1 authentic market data
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.removeItem('jarvis_spot_basis_offset');
+        window.localStorage.removeItem('jarvis_spot_spread_offset');
+      }
+    } catch {}
+
     footprintEngineRef.current.setOrderBook(orderBookRef.current);
     absorptionEngineRef.current.setOrderBook(orderBookRef.current);
     absorptionEngineRef.current.setHeatmapEngine(heatmapEngineRef.current);

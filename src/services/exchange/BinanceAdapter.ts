@@ -67,22 +67,29 @@ export class BinanceAdapter implements IExchangeAdapter {
       const saved = localStorage.getItem('jarvis_spot_basis_offset');
       if (saved) {
         const parsed = parseFloat(saved);
-        if (Number.isFinite(parsed) && parsed >= 6.5 && parsed <= 12.5) {
+        if (Number.isFinite(parsed) && parsed > 0 && parsed <= 50) {
           this.spotBasisOffset = parsed;
         } else {
-          this.spotBasisOffset = 8.50;
+          this.spotBasisOffset = 0;
         }
+      } else {
+        this.spotBasisOffset = 0;
       }
       const savedSpread = localStorage.getItem('jarvis_spot_spread_offset');
       if (savedSpread) {
         const parsed = parseFloat(savedSpread);
-        if (Number.isFinite(parsed) && parsed >= 2.0 && parsed <= 10.0) {
+        if (Number.isFinite(parsed) && parsed > 0 && parsed <= 20) {
           this.spotSpreadOffset = parsed;
         } else {
-          this.spotSpreadOffset = 5.00;
+          this.spotSpreadOffset = 0;
         }
+      } else {
+        this.spotSpreadOffset = 0;
       }
-    } catch {}
+    } catch {
+      this.spotBasisOffset = 0;
+      this.spotSpreadOffset = 0;
+    }
   }
 
   // Metrics
@@ -296,14 +303,8 @@ export class BinanceAdapter implements IExchangeAdapter {
         const rawBasis = bybitPrice - spotPrice;
         if (rawBasis >= 0 && rawBasis <= 40) {
           const freshBasis = Math.round(rawBasis * 100) / 100;
-          this.spotBasisOffset = this.spotBasisOffset > 0
-            ? Math.round((this.spotBasisOffset * 0.8 + freshBasis * 0.2) * 100) / 100
-            : freshBasis;
           this.lastBasisFetch = now;
-          try {
-            localStorage.setItem('jarvis_spot_basis_offset', String(this.spotBasisOffset));
-          } catch {}
-          return this.spotBasisOffset;
+          return freshBasis;
         }
       }
     } catch {}
@@ -1449,11 +1450,12 @@ export class BinanceAdapter implements IExchangeAdapter {
             const candles: Candle[] = [];
             for (let i = 0; i < sorted.length; i++) {
               const k = sorted[i];
+              const open = adjust(parseFloat(k[1]));
+              const rawHigh = adjust(parseFloat(k[2]));
+              const rawLow = adjust(parseFloat(k[3]));
               const close = adjust(parseFloat(k[4]));
-              const prevClose = candles.length > 0 ? candles[candles.length - 1].close : adjust(parseFloat(k[1]));
-              const open = prevClose;
-              const high = Math.max(open, adjust(parseFloat(k[2])), close);
-              const low = Math.min(open, adjust(parseFloat(k[3])), close);
+              const high = Math.max(open, rawHigh, rawLow, close);
+              const low = Math.min(open, rawHigh, rawLow, close);
               candles.push({
                 time: Math.floor(Number(k[0]) / 1000),
                 open,
