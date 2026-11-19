@@ -37,6 +37,16 @@ let lastCheckTime = 0;
  */
 export async function checkBackendHealth(): Promise<boolean> {
   const now = Date.now();
+  // If running on static deployment (e.g. GitHub Pages or Cloudflare Pages), there is no local backend server
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname;
+    if (host.includes('github.io') || host.includes('pages.dev') || host.includes('netlify.app') || host.includes('vercel.app')) {
+      isBackendAvailable = false;
+      lastCheckTime = now;
+      return false;
+    }
+  }
+
   // Cache health check result for 10 seconds
   if (isBackendAvailable !== null && now - lastCheckTime < 10000) {
     return isBackendAvailable;
@@ -47,10 +57,13 @@ export async function checkBackendHealth(): Promise<boolean> {
       signal: AbortSignal.timeout(1500),
     });
     if (res.ok) {
-      const data = await res.json();
-      isBackendAvailable = data.status === 'ok';
-      lastCheckTime = now;
-      return isBackendAvailable;
+      const ct = res.headers.get('content-type') || '';
+      if (ct.includes('application/json')) {
+        const data = await res.json();
+        isBackendAvailable = data.status === 'ok';
+        lastCheckTime = now;
+        return isBackendAvailable;
+      }
     }
   } catch {
     // Backend unreachable

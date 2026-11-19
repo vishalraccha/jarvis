@@ -447,6 +447,38 @@ export class ComexAdapter implements IExchangeAdapter {
       // Fall through
     }
 
+    // 2.5 Direct public browser fallback for Gold Futures (CORS enabled): Bybit Linear XAUUSDT
+    try {
+      const byInterval = interval === '1d' ? 'D' : interval === '1h' ? '60' : interval === '15m' ? '15' : interval === '5m' ? '5' : '1';
+      const bbRes = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=XAUUSDT&interval=${byInterval}&limit=${Math.min(_limit || 300, 1000)}`, {
+        signal: AbortSignal.timeout(3000),
+      });
+      if (bbRes.ok) {
+        const json: any = await bbRes.json();
+        const bbList = json?.result?.list;
+        if (Array.isArray(bbList) && bbList.length > 0) {
+          const sorted = [...bbList].sort((a: any, b: any) => Number(a[0]) - Number(b[0]));
+          const candles: Candle[] = sorted.map((k: any) => ({
+            time: Math.floor(Number(k[0]) / 1000),
+            open: parseFloat(k[1]),
+            high: parseFloat(k[2]),
+            low: parseFloat(k[3]),
+            close: parseFloat(k[4]),
+            volume: parseFloat(k[5] || 1),
+          }));
+          const validCandles = candles.filter(
+            (c) => !MarketSessionService.isCandleInClosedSession('cme_futures', c.time)
+          );
+          if (validCandles.length > 0) {
+            const latest = validCandles[validCandles.length - 1];
+            this.lastQuotePrice = latest.close;
+            this.activeCandle = { ...latest };
+            return validCandles;
+          }
+        }
+      }
+    } catch {}
+
     // 3. Fallback for test runner or offline environments: Return authentic Friday CME settlement baseline
     const fallbackCandles = this.getFridaySettlementCandles(interval, Math.min(_limit, 200));
     if (fallbackCandles.length > 0) {

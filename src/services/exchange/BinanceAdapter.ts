@@ -120,7 +120,7 @@ export class BinanceAdapter implements IExchangeAdapter {
       const sym = this.getEffectiveSymbol(this.currentSymbol || 'BTCUSDT');
       const isFut = this.isFutures(sym);
       const proxyBase = isFut ? '/api/fapi/fapi/v1/time' : '/api/binance/api/v3/time';
-      const directBase = isFut ? 'https://fapi.binance.me/fapi/v1/time' : 'https://data-api.binance.vision/api/v3/time';
+      const directBase = isFut ? 'https://fapi.binance.com/fapi/v1/time' : 'https://data-api.binance.vision/api/v3/time';
       const t0 = Date.now();
       const res = await this.fastFetch(proxyBase, directBase, 2500);
       if (res && res.ok) {
@@ -182,14 +182,9 @@ export class BinanceAdapter implements IExchangeAdapter {
   }
 
   /**
-   * Adjusts Bybit Index Price to exact authentic MT5/TradingView spot gold.
+   * Raw index price pass-through (never apply synthetic offsets that cause production candle gaps).
    */
-  adjustIndexPrice(price: number, symbol?: string): number {
-    const sym = symbol || this.requestedSymbol || this.currentSymbol;
-    const offset = this.spotSpreadOffset > 0 ? this.spotSpreadOffset : (this.spotBasisOffset > 2 ? this.spotBasisOffset - 2.2 : 5.0);
-    if (this.isGoldSpot(sym) && offset > 0) {
-      return Math.round((price - offset) * 100) / 100;
-    }
+  adjustIndexPrice(price: number, _symbol?: string): number {
     return price;
   }
 
@@ -312,10 +307,17 @@ export class BinanceAdapter implements IExchangeAdapter {
   }
 
   private async fastFetch(proxyUrl: string, directUrl: string, timeoutMs: number = 3500): Promise<Response> {
-    try {
-      const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(timeoutMs) });
-      if (res.ok) return res;
-    } catch {}
+    const isLocalhost = typeof window !== 'undefined' &&
+      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
+    if (isLocalhost) {
+      try {
+        const res = await fetch(proxyUrl, { signal: AbortSignal.timeout(Math.min(timeoutMs, 1500)) });
+        const ct = res.headers.get('content-type') || '';
+        if (res.ok && !ct.includes('text/html')) return res;
+      } catch {}
+    }
+
     return fetch(directUrl, { signal: AbortSignal.timeout(timeoutMs) });
   }
 
@@ -475,7 +477,7 @@ export class BinanceAdapter implements IExchangeAdapter {
           ? `/api/fapi/fapi/v1/ticker/price?symbol=${effSym}`
           : `/api/binance/api/v3/ticker/price?symbol=${effSym}`;
         const directUrl = isFut
-          ? `https://fapi.binance.me/fapi/v1/ticker/price?symbol=${effSym}`
+          ? `https://fapi.binance.com/fapi/v1/ticker/price?symbol=${effSym}`
           : `https://data-api.binance.vision/api/v3/ticker/price?symbol=${effSym}`;
         const res = await this.fastFetch(proxyUrl, directUrl, 1500);
         if (res.ok) {
@@ -579,7 +581,7 @@ export class BinanceAdapter implements IExchangeAdapter {
         } catch {}
       } else {
         const proxyBase = isFut ? '/api/fapi/fapi/v1/klines' : '/api/binance/api/v3/klines';
-        const directBase = isFut ? 'https://fapi.binance.me/fapi/v1/klines' : 'https://data-api.binance.vision/api/v3/klines';
+        const directBase = isFut ? 'https://fapi.binance.com/fapi/v1/klines' : 'https://data-api.binance.vision/api/v3/klines';
         const res = await this.fastFetch(
           `${proxyBase}?symbol=${effSym}&interval=${tf}&limit=2`,
           `${directBase}?symbol=${effSym}&interval=${tf}&limit=2`,
@@ -1210,7 +1212,7 @@ export class BinanceAdapter implements IExchangeAdapter {
 
     // 2. Direct/proxy Binance depth fallback
     const proxyBase = isFut ? '/api/fapi/fapi/v1/depth' : '/api/binance/api/v3/depth';
-    const directBase = isFut ? 'https://fapi.binance.me/fapi/v1/depth' : 'https://data-api.binance.vision/api/v3/depth';
+    const directBase = isFut ? 'https://fapi.binance.com/fapi/v1/depth' : 'https://data-api.binance.vision/api/v3/depth';
     const qs = `symbol=${sym}&limit=${Math.min(limit, 1000)}`;
 
     const res = await this.fastFetch(`${proxyBase}?${qs}`, `${directBase}?${qs}`, 2000);
@@ -1271,7 +1273,7 @@ export class BinanceAdapter implements IExchangeAdapter {
 
     // 2. Direct/proxy Binance trades fallback
     const proxyBase = isFut ? '/api/fapi/fapi/v1/trades' : '/api/binance/api/v3/trades';
-    const directBase = isFut ? 'https://fapi.binance.me/fapi/v1/trades' : 'https://data-api.binance.vision/api/v3/trades';
+    const directBase = isFut ? 'https://fapi.binance.com/fapi/v1/trades' : 'https://data-api.binance.vision/api/v3/trades';
     const qs = `symbol=${sym}&limit=${Math.min(limit, 1000)}`;
 
     const res = await this.fastFetch(`${proxyBase}?${qs}`, `${directBase}?${qs}`, 2500);
@@ -1307,7 +1309,7 @@ export class BinanceAdapter implements IExchangeAdapter {
     const sym = this.getEffectiveSymbol(symbol);
     const isFut = this.isFutures(sym);
     const proxyBase = isFut ? '/api/fapi/fapi/v1/aggTrades' : '/api/binance/api/v3/aggTrades';
-    const directBase = isFut ? 'https://fapi.binance.me/fapi/v1/aggTrades' : 'https://data-api.binance.vision/api/v3/aggTrades';
+    const directBase = isFut ? 'https://fapi.binance.com/fapi/v1/aggTrades' : 'https://data-api.binance.vision/api/v3/aggTrades';
     const params = new URLSearchParams({
       symbol: sym,
       limit: String(Math.min(limit, 1000)),
@@ -1357,13 +1359,14 @@ export class BinanceAdapter implements IExchangeAdapter {
     const sym = this.getEffectiveSymbol(symbol);
     const isFut = this.isFutures(sym);
 
-    // 1. Authoritative fast path: /api/candles endpoint (pre-aligned to MT5 & TradingView)
+    // 1. Authoritative fast path: /api/candles endpoint (pre-aligned to MT5 & TradingView on server)
     try {
       let candleUrl = `/api/candles?symbol=${encodeURIComponent(this.requestedSymbol || sym)}&timeframe=${encodeURIComponent(interval)}&limit=${Math.min(limit, 1000)}`;
       if (startTime && Number.isFinite(startTime) && startTime > 0) candleUrl += `&startTime=${startTime}`;
       if (endTime && Number.isFinite(endTime) && endTime > 0) candleUrl += `&endTime=${endTime}`;
-      const cacheRes = await fetch(candleUrl, { signal: AbortSignal.timeout(3500) });
-      if (cacheRes.ok) {
+      const cacheRes = await fetch(candleUrl, { signal: AbortSignal.timeout(2000) });
+      const ct = cacheRes.headers.get('content-type') || '';
+      if (cacheRes.ok && ct.includes('application/json')) {
         const list: any[] = await cacheRes.json();
         if (Array.isArray(list) && list.length > 0) {
           return list.map((item) => ({
@@ -1378,24 +1381,58 @@ export class BinanceAdapter implements IExchangeAdapter {
       }
     } catch {}
 
-    // 2. Direct browser fallback: Coinbase USD Spot (CORS enabled for all origins, authentic MT5 USD spot)
-    const baseCrypto = (this.requestedSymbol || sym).toUpperCase().replace(/[-_/]/g, '').replace(/USDT$/, '').replace(/USD$/, '');
-    if ((baseCrypto === 'BTC' || baseCrypto === 'ETH' || baseCrypto === 'SOL') && !startTime && !endTime) {
+    // 2. Direct browser authoritative feed for Gold: Bybit Linear XAUUSDT (exact matching feed for live WebSocket)
+    if (this.isGoldSpot(this.requestedSymbol || sym)) {
       try {
-        const gran = interval === '1d' ? 86400 : interval === '1h' ? 3600 : interval === '15m' ? 900 : interval === '5m' ? 300 : 60;
-        const cbRes = await fetch(`https://api.exchange.coinbase.com/products/${baseCrypto}-USD/candles?granularity=${gran}`, {
-          signal: AbortSignal.timeout(4000),
-        });
-        if (cbRes.ok) {
-          const cbList: any = await cbRes.json();
-          if (Array.isArray(cbList) && cbList.length > 0) {
-            const sorted = [...cbList].sort((a: any, b: any) => a[0] - b[0]);
-            return sorted.map((k: any) => ({
-              time: k[0],
-              open: parseFloat(k[3]),
-              high: parseFloat(k[2]),
-              low: parseFloat(k[1]),
-              close: parseFloat(k[4]),
+        const byInterval = BYBIT_INTERVAL_MAP[interval] || (interval === '1d' ? 'D' : interval === '1h' ? '60' : interval === '15m' ? '15' : interval === '5m' ? '5' : '1');
+        let byUrl = `https://api.bybit.com/v5/market/kline?category=linear&symbol=XAUUSDT&interval=${byInterval}&limit=${Math.min(limit, 1000)}`;
+        if (startTime && Number.isFinite(startTime) && startTime > 0) byUrl += `&start=${Math.floor(startTime * 1000)}`;
+        if (endTime && Number.isFinite(endTime) && endTime > 0) byUrl += `&end=${Math.floor(endTime * 1000)}`;
+
+        const bbRes = await fetch(byUrl, { signal: AbortSignal.timeout(4000) });
+        if (bbRes.ok) {
+          const json: any = await bbRes.json();
+          const bbList = json?.result?.list;
+          if (Array.isArray(bbList) && bbList.length > 0) {
+            const sorted = [...bbList].sort((a: any, b: any) => Number(a[0]) - Number(b[0]));
+            const candles: Candle[] = [];
+            for (let i = 0; i < sorted.length; i++) {
+              const k = sorted[i];
+              const open = this.adjustPrice(parseFloat(k[1]), this.requestedSymbol);
+              const rawHigh = this.adjustPrice(parseFloat(k[2]), this.requestedSymbol);
+              const rawLow = this.adjustPrice(parseFloat(k[3]), this.requestedSymbol);
+              const close = this.adjustPrice(parseFloat(k[4]), this.requestedSymbol);
+              const high = Math.max(open, rawHigh, rawLow, close);
+              const low = Math.min(open, rawHigh, rawLow, close);
+              candles.push({
+                time: Math.floor(Number(k[0]) / 1000),
+                open,
+                high,
+                low,
+                close,
+                volume: parseFloat(k[5] || 0),
+              });
+            }
+            return candles;
+          }
+        }
+      } catch {}
+
+      // Fallback for gold: Binance Futures XAUUSDT (fapi.binance.com with CORS enabled)
+      try {
+        let fapiUrl = `https://fapi.binance.com/fapi/v1/klines?symbol=XAUUSDT&interval=${interval}&limit=${Math.min(limit, 1000)}`;
+        if (startTime && Number.isFinite(startTime) && startTime > 0) fapiUrl += `&startTime=${Math.floor(startTime * 1000)}`;
+        if (endTime && Number.isFinite(endTime) && endTime > 0) fapiUrl += `&endTime=${Math.floor(endTime * 1000)}`;
+        const fbRes = await fetch(fapiUrl, { signal: AbortSignal.timeout(4000) });
+        if (fbRes.ok) {
+          const data: any[][] = await fbRes.json();
+          if (Array.isArray(data) && data.length > 0) {
+            return data.map((k) => ({
+              time: Math.floor(Number(k[0]) / 1000),
+              open: this.adjustPrice(parseFloat(k[1]), this.requestedSymbol),
+              high: this.adjustPrice(parseFloat(k[2]), this.requestedSymbol),
+              low: this.adjustPrice(parseFloat(k[3]), this.requestedSymbol),
+              close: this.adjustPrice(parseFloat(k[4]), this.requestedSymbol),
               volume: parseFloat(k[5] || 0),
             }));
           }
@@ -1403,13 +1440,38 @@ export class BinanceAdapter implements IExchangeAdapter {
       } catch {}
     }
 
-    // 3. Direct browser fallback: Bybit Spot (BNB)
-    if (baseCrypto === 'BNB' && !startTime && !endTime) {
+    // 3. Direct browser authoritative feed for Crypto (BTC, ETH, SOL, BNB, etc.): Binance Vision API (CORS enabled worldwide)
+    const baseCrypto = (this.requestedSymbol || sym).toUpperCase().replace(/[-_/]/g, '');
+    if (!this.isNasdaq(this.requestedSymbol || sym) && !this.isGoldSpot(this.requestedSymbol || sym)) {
       try {
-        const byInterval = interval === '1d' ? 'D' : interval === '1h' ? '60' : interval === '15m' ? '15' : interval === '5m' ? '5' : '1';
-        const bbRes = await fetch(`https://api.bybit.com/v5/market/kline?category=spot&symbol=BNBUSDT&interval=${byInterval}&limit=300`, {
-          signal: AbortSignal.timeout(4000),
-        });
+        let visionUrl = `https://data-api.binance.vision/api/v3/klines?symbol=${sym}&interval=${interval}&limit=${Math.min(limit, 1000)}`;
+        if (startTime && Number.isFinite(startTime) && startTime > 0) visionUrl += `&startTime=${Math.floor(startTime * 1000)}`;
+        if (endTime && Number.isFinite(endTime) && endTime > 0) visionUrl += `&endTime=${Math.floor(endTime * 1000)}`;
+        const bvRes = await fetch(visionUrl, { signal: AbortSignal.timeout(4000) });
+        if (bvRes.ok) {
+          const data: any[][] = await bvRes.json();
+          if (Array.isArray(data) && data.length > 0) {
+            return data.map((item) => ({
+              time: Math.floor(Number(item[0]) / 1000),
+              open: parseFloat(item[1]),
+              high: parseFloat(item[2]),
+              low: parseFloat(item[3]),
+              close: parseFloat(item[4]),
+              volume: parseFloat(item[5] || 0),
+              tradeCount: Number(item[8]) || undefined,
+              buyVolume: parseFloat(item[9]) || undefined,
+            }));
+          }
+        }
+      } catch {}
+
+      // Fallback for Crypto: Bybit Spot API
+      try {
+        const byInterval = BYBIT_INTERVAL_MAP[interval] || (interval === '1d' ? 'D' : interval === '1h' ? '60' : interval === '15m' ? '15' : interval === '5m' ? '5' : '1');
+        let byUrl = `https://api.bybit.com/v5/market/kline?category=spot&symbol=${sym}&interval=${byInterval}&limit=${Math.min(limit, 1000)}`;
+        if (startTime && Number.isFinite(startTime) && startTime > 0) byUrl += `&start=${Math.floor(startTime * 1000)}`;
+        if (endTime && Number.isFinite(endTime) && endTime > 0) byUrl += `&end=${Math.floor(endTime * 1000)}`;
+        const bbRes = await fetch(byUrl, { signal: AbortSignal.timeout(4000) });
         if (bbRes.ok) {
           const json: any = await bbRes.json();
           const bbList = json?.result?.list;
@@ -1421,51 +1483,8 @@ export class BinanceAdapter implements IExchangeAdapter {
               high: parseFloat(k[2]),
               low: parseFloat(k[3]),
               close: parseFloat(k[4]),
-              volume: parseFloat(k[5]),
+              volume: parseFloat(k[5] || 0),
             }));
-          }
-        }
-      } catch {}
-    }
-
-    // 4. Direct browser fallback: Bybit Linear XAUUSDT (continuous, high-liquidity gold spot)
-    if (this.isGoldSpot(this.requestedSymbol || sym) && !startTime && !endTime) {
-      try {
-        const byInterval = interval === '1d' ? 'D' : interval === '1h' ? '60' : interval === '15m' ? '15' : interval === '5m' ? '5' : '1';
-        let bbRes = await fetch(`https://api.bybit.com/v5/market/index-price-kline?category=linear&symbol=XAUUSDT&interval=${byInterval}&limit=${Math.min(limit, 1000)}`, {
-          signal: AbortSignal.timeout(4000),
-        });
-        if (!bbRes.ok) {
-          bbRes = await fetch(`https://api.bybit.com/v5/market/kline?category=linear&symbol=XAUUSDT&interval=${byInterval}&limit=${Math.min(limit, 1000)}`, {
-            signal: AbortSignal.timeout(4000),
-          });
-        }
-        if (bbRes.ok) {
-          const json: any = await bbRes.json();
-          const bbList = json?.result?.list;
-          if (Array.isArray(bbList) && bbList.length > 0) {
-            const sorted = [...bbList].sort((a: any, b: any) => Number(a[0]) - Number(b[0]));
-            const isIndex = bbRes.url?.includes('index-price-kline');
-            const adjust = isIndex ? (p: number) => this.adjustIndexPrice(p, this.requestedSymbol) : (p: number) => this.adjustPrice(p, this.requestedSymbol);
-            const candles: Candle[] = [];
-            for (let i = 0; i < sorted.length; i++) {
-              const k = sorted[i];
-              const open = adjust(parseFloat(k[1]));
-              const rawHigh = adjust(parseFloat(k[2]));
-              const rawLow = adjust(parseFloat(k[3]));
-              const close = adjust(parseFloat(k[4]));
-              const high = Math.max(open, rawHigh, rawLow, close);
-              const low = Math.min(open, rawHigh, rawLow, close);
-              candles.push({
-                time: Math.floor(Number(k[0]) / 1000),
-                open,
-                high,
-                low,
-                close,
-                volume: parseFloat(k[5] || 10),
-              });
-            }
-            return candles;
           }
         }
       } catch {}
@@ -1522,7 +1541,7 @@ export class BinanceAdapter implements IExchangeAdapter {
 
     try {
       const proxyBase = isFut ? '/api/fapi/fapi/v1/klines' : '/api/binance/api/v3/klines';
-      const directBase = isFut ? 'https://fapi.binance.me/fapi/v1/klines' : 'https://data-api.binance.vision/api/v3/klines';
+      const directBase = isFut ? 'https://fapi.binance.com/fapi/v1/klines' : 'https://data-api.binance.vision/api/v3/klines';
       const params = new URLSearchParams({
         symbol: sym,
         interval,

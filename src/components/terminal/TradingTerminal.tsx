@@ -426,7 +426,8 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
           `/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&limit=${limit}`,
           { signal: AbortSignal.timeout(3000) }
         );
-        if (res.ok) {
+        const ct = res.headers.get('content-type') || '';
+        if (res.ok && ct.includes('application/json')) {
           const backendCandles: Candle[] = await res.json();
           if (
             Array.isArray(backendCandles) &&
@@ -623,20 +624,33 @@ export const TradingTerminal: React.FC<TradingTerminalProps> = ({ onLockTerminal
 
     isLoadingMoreHistoryRef.current = true;
     try {
-      const res = await fetch(
-        `/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&endTime=${endTime}&limit=200`,
-        { signal: AbortSignal.timeout(4000) }
-      );
-      if (res.ok) {
-        const olderCandles: Candle[] = await res.json();
-        if (Array.isArray(olderCandles) && olderCandles.length > 0) {
-          const merged = mergeAndDeduplicateCandles(olderCandles, latestCandlesRef.current, timeframe);
-          latestCandlesRef.current = merged;
-          setRenderedCandles(merged);
-          chartRef.current?.prependOlderCandles(olderCandles);
-        } else {
-          hasReachedEarliestHistoryRef.current = true;
-        }
+      let olderCandles: Candle[] = [];
+      const useBackend = await shouldUseBackendStorage();
+      if (useBackend) {
+        try {
+          const res = await fetch(
+            `/api/candles?symbol=${encodeURIComponent(symbol)}&timeframe=${encodeURIComponent(timeframe)}&endTime=${endTime}&limit=200`,
+            { signal: AbortSignal.timeout(3000) }
+          );
+          const ct = res.headers.get('content-type') || '';
+          if (res.ok && ct.includes('application/json')) {
+            olderCandles = await res.json();
+          }
+        } catch {}
+      }
+
+      if (!olderCandles || olderCandles.length === 0) {
+        const adapter = getAdapter(preferencesRef.current.exchange);
+        olderCandles = await adapter.fetchHistoricalCandles(symbol, timeframe, undefined, endTime, 200);
+      }
+
+      if (Array.isArray(olderCandles) && olderCandles.length > 0) {
+        const merged = mergeAndDeduplicateCandles(olderCandles, latestCandlesRef.current, timeframe);
+        latestCandlesRef.current = merged;
+        setRenderedCandles(merged);
+        chartRef.current?.prependOlderCandles(olderCandles);
+      } else {
+        hasReachedEarliestHistoryRef.current = true;
       }
     } catch (err) {
       console.warn('[TradingTerminal] Failed to fetch older candles:', err);
