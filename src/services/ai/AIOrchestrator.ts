@@ -484,7 +484,7 @@ export class AIOrchestrator {
     livePrice?: number,
     isExplicitTradeAnalysis: boolean = false
   ): Promise<void> {
-    if (this.isAnalyzing) return;
+    if (this.isAnalyzing && !forceImmediate) return;
     this.isAnalyzing = true;
     this.notify();
 
@@ -610,10 +610,14 @@ export class AIOrchestrator {
 
         if (hasAnyKey) {
           try {
-            const res = await this.callChatEndpoint(primary, modelUsed, [
+            const chatPromise = this.callChatEndpoint(primary, modelUsed, [
               { role: 'system', content: systemPrompt },
               ...this.messages.slice(-5).map((m) => ({ role: m.role, content: m.content })),
             ]);
+            const timeoutPromise = new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('AI request timed out, switching to immediate institutional fallback')), 4500)
+            );
+            const res = await Promise.race([chatPromise, timeoutPromise]);
             textResult = res.text;
             modelUsed = res.model;
             lastTokensUsed = res.tokensUsed;
